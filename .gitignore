@@ -1,0 +1,61 @@
+# Python
+__pycache__/
+*.py[cod]
+*.so
+*.egg
+*.egg-info/
+dist/
+build/
+.eggs/
+*.pyo
+*.pyd
+
+# Virtual environments
+venv/
+ENV/
+env/
+.venv/
+
+# IDE
+.idea/
+*.iml
+.junie/
+
+# Jupyter Notebook
+.ipynb_checkpoints
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Environment & secrets
+.env
+
+# Chainlit
+.chainlit
+.files
+
+# Project specific
+TODO.md
+attempts/
+agent_tools.md
+oracle_response.pkl
+
+# Data server specific
+data-server/src/notebooks/pickle_data/*
+data-server/src/notebook_flat_graph/pickle_data/*
+data-server/test-input/*
+data-server/src/inspector_git/examples/gitlog_full.json
+data-server/src/inspector_git/guidelines.txt
+
+# Web interface specific
+web-interface/.env
+web-interface/.files
+web-interface/.chainlit
+web-interface/attempts
+web-interface/agent_tools.md
+web-interface/oracle_response.pkl
+
+.claude
+CLAUDE.md
+**/CLAUDE.md
