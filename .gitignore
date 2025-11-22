@@ -48,14 +48,18 @@ data-server/test-input/*
 data-server/src/inspector_git/examples/gitlog_full.json
 data-server/src/inspector_git/guidelines.txt
 
-# Web interface specific
-web-interface/.env
-web-interface/.files
-web-interface/.chainlit
-web-interface/attempts
-web-interface/agent_tools.md
-web-interface/oracle_response.pkl
+# Chat UI specific
+chat-ui/.env
+chat-ui/.files
+chat-ui/.chainlit
+chat-ui/attempts
+chat-ui/agent_tools.md
+chat-ui/oracle_response.pkl
 
 .claude
 CLAUDE.md
 **/CLAUDE.md
+commands.md
+README.md
+TODO
+/chat-ui/src/test
