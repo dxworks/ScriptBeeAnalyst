@@ -5,7 +5,12 @@ create extension if not exists "uuid-ossp";
 create table public.projects (
   id uuid primary key default uuid_generate_v4(),
   name text not null,
+  description text,
   user_id uuid not null references auth.users(id) on delete cascade,
+  status text not null default 'pending' check (status in ('pending', 'processing', 'ready', 'error')),
+  has_git boolean not null default false,
+  has_github boolean not null default false,
+  has_jira boolean not null default false,
   created_at timestamp with time zone default now() not null,
   updated_at timestamp with time zone default now() not null
 );

@@ -24,10 +24,27 @@ export const routes: Routes = [
     ],
   },
   {
-    path: 'dashboard',
+    path: '',
     canActivate: [authGuard],
     loadComponent: () =>
-      import('./pages/dashboard/dashboard.component').then(m => m.DashboardComponent),
+      import('./layout/main-layout/main-layout.component').then(m => m.MainLayoutComponent),
+    children: [
+      {
+        path: 'dashboard',
+        loadComponent: () =>
+          import('./pages/dashboard/dashboard.component').then(m => m.DashboardComponent),
+      },
+      {
+        path: 'projects',
+        loadComponent: () =>
+          import('./pages/project-detail/project-detail.component').then(m => m.ProjectDetailComponent),
+      },
+      {
+        path: 'projects/:id',
+        loadComponent: () =>
+          import('./pages/project-detail/project-detail.component').then(m => m.ProjectDetailComponent),
+      },
+    ],
   },
   {
     path: '**',

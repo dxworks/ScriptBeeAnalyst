@@ -35,10 +35,21 @@ export class AuthService {
   }
 
   private async initializeAuth(): Promise<void> {
-    // Get initial session
-    const { data: { session } } = await this.supabase.client.auth.getSession();
-    this.sessionSignal.set(session);
-    this.userSignal.set(session?.user ?? null);
+    // Get and validate session with the server
+    const { data: { user }, error } = await this.supabase.client.auth.getUser();
+
+    if (error || !user) {
+      // Session is invalid or expired - clear it
+      await this.supabase.client.auth.signOut();
+      this.sessionSignal.set(null);
+      this.userSignal.set(null);
+    } else {
+      // Session is valid
+      const { data: { session } } = await this.supabase.client.auth.getSession();
+      this.sessionSignal.set(session);
+      this.userSignal.set(user);
+    }
+
     this.loadingSignal.set(false);
 
     // Listen for auth changes
