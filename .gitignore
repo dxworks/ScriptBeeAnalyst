@@ -67,12 +67,12 @@ TODO
 # Supabase - ignore Docker files, keep migrations and functions
 supabase/**
 
-# Keep only the functions folder
-!supabase/volumes/
-!supabase/volumes/functions/
-!supabase/volumes/functions/**
 
-# Keep only the db init folder
-!supabase/volumes/db/
-!supabase/volumes/db/init/
-!supabase/volumes/db/init/**
+# Web ui
+
+
+# Keep migrations and functions folders
+!supabase/migrations/
+!supabase/migrations/**
+!supabase/functions/
+!supabase/functions/**

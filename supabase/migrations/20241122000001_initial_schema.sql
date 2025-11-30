@@ -27,19 +27,19 @@ alter table public.serialized_files enable row level security;
 -- Projects policies: users can only CRUD their own projects
 create policy "Users can view own projects"
   on public.projects for select
-  using (auth.uid() = user_id);
+  using ((select auth.uid()) = user_id);
 
 create policy "Users can create own projects"
   on public.projects for insert
-  with check (auth.uid() = user_id);
+  with check ((select auth.uid()) = user_id);
 
 create policy "Users can update own projects"
   on public.projects for update
-  using (auth.uid() = user_id);
+  using ((select auth.uid()) = user_id);
 
 create policy "Users can delete own projects"
   on public.projects for delete
-  using (auth.uid() = user_id);
+  using ((select auth.uid()) = user_id);
 
 -- Serialized files policies: users can only CRUD files in their projects
 create policy "Users can view own files"
@@ -48,7 +48,7 @@ create policy "Users can view own files"
     exists (
       select 1 from public.projects
       where projects.id = serialized_files.project_id
-      and projects.user_id = auth.uid()
+      and projects.user_id = (select auth.uid())
     )
   );
 
@@ -58,7 +58,7 @@ create policy "Users can create files in own projects"
     exists (
       select 1 from public.projects
       where projects.id = serialized_files.project_id
-      and projects.user_id = auth.uid()
+      and projects.user_id = (select auth.uid())
     )
   );
 
@@ -68,7 +68,7 @@ create policy "Users can update own files"
     exists (
       select 1 from public.projects
       where projects.id = serialized_files.project_id
-      and projects.user_id = auth.uid()
+      and projects.user_id = (select auth.uid())
     )
   );
 
@@ -78,7 +78,7 @@ create policy "Users can delete own files"
     exists (
       select 1 from public.projects
       where projects.id = serialized_files.project_id
-      and projects.user_id = auth.uid()
+      and projects.user_id = (select auth.uid())
     )
   );
 
@@ -88,12 +88,16 @@ create index serialized_files_project_id_idx on public.serialized_files(project_
 
 -- Updated_at trigger function
 create or replace function public.handle_updated_at()
-returns trigger as $$
+returns trigger
+language plpgsql
+security invoker
+set search_path = ''
+as $$
 begin
   new.updated_at = now();
   return new;
 end;
-$$ language plpgsql;
+$$;
 
 -- Apply updated_at triggers
 create trigger projects_updated_at
