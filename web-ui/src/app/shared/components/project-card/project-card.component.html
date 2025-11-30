@@ -29,26 +29,15 @@
       <p class="project-description">{{ project().description }}</p>
     }
 
-    <!-- Data source tags -->
+    <!-- View button -->
     <div class="project-tags">
-      @if (project().has_git) {
-        <span class="tag active">Git</span>
-      }
-      @if (project().has_github) {
-        <span class="tag active">GitHub</span>
-      }
-      @if (project().has_jira) {
-        <span class="tag active">JIRA</span>
-      }
-      @if (!hasDataSources()) {
-        <button class="btn btn-ghost btn-sm" (click)="onView()">
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/>
-            <circle cx="12" cy="12" r="3"/>
-          </svg>
-          View
-        </button>
-      }
+      <button class="btn btn-ghost btn-sm" (click)="onView()">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/>
+          <circle cx="12" cy="12" r="3"/>
+        </svg>
+        View
+      </button>
     </div>
 
     <!-- Footer -->

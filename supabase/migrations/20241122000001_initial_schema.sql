@@ -8,21 +8,23 @@ create table public.projects (
   description text,
   user_id uuid not null references auth.users(id) on delete cascade,
   status text not null default 'draft' check (status in ('draft', 'processing', 'ready', 'idle', 'resuming', 'error')),
-  has_git boolean not null default false,
-  has_github boolean not null default false,
-  has_jira boolean not null default false,
   created_at timestamp with time zone default now() not null,
   updated_at timestamp with time zone default now() not null
 );
 
 -- Serialized files table
+-- file_type derived from filename: git.iglog -> git, github.json -> github, jira.json -> jira
 create table public.serialized_files (
   id uuid primary key default uuid_generate_v4(),
   name text not null,
-  path text not null,
+  file_type text not null check (file_type in ('git', 'github', 'jira')),
+  storage_path text not null,
+  size_bytes bigint not null,
   project_id uuid not null references public.projects(id) on delete cascade,
   created_at timestamp with time zone default now() not null,
-  updated_at timestamp with time zone default now() not null
+  updated_at timestamp with time zone default now() not null,
+  -- One file per type per project
+  unique (project_id, file_type)
 );
 
 -- Enable RLS
@@ -90,6 +92,7 @@ create policy "Users can delete own files"
 -- Indexes for better query performance
 create index projects_user_id_idx on public.projects(user_id);
 create index serialized_files_project_id_idx on public.serialized_files(project_id);
+create index serialized_files_file_type_idx on public.serialized_files(file_type);
 
 -- Updated_at trigger function
 create or replace function public.handle_updated_at()

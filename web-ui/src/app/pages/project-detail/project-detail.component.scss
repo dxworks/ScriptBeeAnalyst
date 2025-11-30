@@ -410,13 +410,138 @@
   }
 }
 
-.file-list-empty {
+.file-list-empty,
+.file-list-loading {
   padding: var(--spacing-lg);
   text-align: center;
+  display: flex;
+  align-items: center;
+  justify-content: center;
 
   p {
     margin: 0;
   }
+}
+
+// Staged files section
+.staged-files {
+  background-color: rgba(99, 102, 241, 0.05);
+  border: 1px dashed var(--color-accent);
+  border-radius: var(--radius-lg);
+  padding: var(--spacing-lg);
+}
+
+.staged-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: var(--spacing-md);
+
+  h3 {
+    margin: 0;
+    font-size: 0.875rem;
+    font-weight: 600;
+    color: var(--color-accent);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+  }
+}
+
+.staged-actions {
+  display: flex;
+  gap: var(--spacing-sm);
+}
+
+// File cards grid
+.file-cards {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-sm);
+}
+
+.file-card {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-md);
+  padding: var(--spacing-md);
+  background-color: var(--color-surface-card);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  transition: border-color var(--transition-fast), background-color var(--transition-fast);
+
+  &:hover {
+    border-color: var(--color-accent);
+  }
+
+  &.uploading {
+    background-color: rgba(245, 158, 11, 0.05);
+    border-color: var(--color-warning);
+  }
+
+  &.error {
+    background-color: rgba(239, 68, 68, 0.05);
+    border-color: var(--color-error);
+  }
+}
+
+.file-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  background-color: var(--color-surface);
+  border-radius: var(--radius-md);
+  flex-shrink: 0;
+
+  svg {
+    color: var(--color-text-muted);
+  }
+}
+
+.file-info {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.file-name {
+  font-weight: 500;
+  color: var(--color-text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.file-meta {
+  font-size: 0.75rem;
+  color: var(--color-text-muted);
+}
+
+.file-actions {
+  display: flex;
+  gap: var(--spacing-xs);
+  flex-shrink: 0;
+}
+
+.text-warning {
+  color: var(--color-warning);
+}
+
+.text-error {
+  color: var(--color-error);
+}
+
+// Tiny spinner for buttons
+.spinner-tiny {
+  width: 14px;
+  height: 14px;
+  border: 2px solid rgba(255, 255, 255, 0.3);
+  border-top-color: white;
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
 }
 
 // Chat section

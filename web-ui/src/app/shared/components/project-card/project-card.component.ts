@@ -79,9 +79,4 @@ export class ProjectCardComponent {
       year: 'numeric',
     });
   }
-
-  hasDataSources(): boolean {
-    const p = this.project();
-    return p.has_git || p.has_github || p.has_jira;
-  }
 }

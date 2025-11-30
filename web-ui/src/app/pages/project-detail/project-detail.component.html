@@ -182,17 +182,21 @@
                 <div class="meta-item">
                   <dt>Data Sources</dt>
                   <dd class="data-sources">
-                    @if (selectedProject()?.has_git) {
-                      <span class="tag active">Git</span>
-                    }
-                    @if (selectedProject()?.has_github) {
-                      <span class="tag active">GitHub</span>
-                    }
-                    @if (selectedProject()?.has_jira) {
-                      <span class="tag active">JIRA</span>
-                    }
-                    @if (!selectedProject()?.has_git && !selectedProject()?.has_github && !selectedProject()?.has_jira) {
-                      <span class="text-muted">None uploaded</span>
+                    @if (filesLoading()) {
+                      <span class="text-muted">Loading...</span>
+                    } @else {
+                      @if (hasGit()) {
+                        <span class="tag active">Git</span>
+                      }
+                      @if (hasGithub()) {
+                        <span class="tag active">GitHub</span>
+                      }
+                      @if (hasJira()) {
+                        <span class="tag active">JIRA</span>
+                      }
+                      @if (!hasDataSources()) {
+                        <span class="text-muted">None uploaded</span>
+                      }
                     }
                   </dd>
                 </div>
@@ -208,11 +212,11 @@
           <div class="content-header">
             <h1>Files</h1>
             @if (selectedProject()?.status === 'draft' && hasDataSources()) {
-              <button class="btn btn-primary" (click)="onBuildGraph()">
+              <button class="btn btn-primary" (click)="onProcessData()">
                 <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                   <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/>
                 </svg>
-                Build Graph
+                Process Data
               </button>
             }
           </div>
@@ -220,6 +224,7 @@
             <!-- Upload Zone -->
             <div
               class="upload-zone"
+              [class.drag-active]="false"
               (drop)="onFileDrop($event)"
               (dragover)="onDragOver($event)"
             >
@@ -235,20 +240,132 @@
                 <input
                   type="file"
                   multiple
-                  accept=".json,.xml,.iglog"
+                  accept=".json,.iglog"
                   (change)="onFileSelect($event)"
                   hidden
                 />
               </label>
-              <p class="upload-hint">Supported formats: JSON, XML, .iglog</p>
+              <p class="upload-hint">Expected files: git.iglog, github.json, jira.json (max {{ fileService.getMaxFileSizeMB() }}MB)</p>
             </div>
 
-            <!-- File List (placeholder) -->
+            <!-- Staged Files (ready to upload) -->
+            @if (stagedFiles().length > 0) {
+              <div class="staged-files">
+                <div class="staged-header">
+                  <h3>Ready to Upload</h3>
+                  <div class="staged-actions">
+                    <button class="btn btn-ghost btn-sm" (click)="clearStagedFiles()" [disabled]="uploadingFiles()">
+                      Cancel All
+                    </button>
+                    <button class="btn btn-primary btn-sm" (click)="uploadStagedFiles()" [disabled]="uploadingFiles()">
+                      @if (uploadingFiles()) {
+                        <div class="spinner-tiny"></div>
+                        Uploading...
+                      } @else {
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                          <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+                          <polyline points="17 8 12 3 7 8"/>
+                          <line x1="12" y1="3" x2="12" y2="15"/>
+                        </svg>
+                        Upload All
+                      }
+                    </button>
+                  </div>
+                </div>
+                <div class="file-cards">
+                  @for (staged of stagedFiles(); track staged.fileType) {
+                    <div class="file-card" [class.uploading]="staged.status === 'uploading'" [class.error]="staged.status === 'error'">
+                      <div class="file-icon">
+                        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                          <path d="M13 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/>
+                          <polyline points="13 2 13 9 20 9"/>
+                        </svg>
+                      </div>
+                      <div class="file-info">
+                        <span class="file-name">{{ staged.file.name }}</span>
+                        <span class="file-meta">
+                          {{ fileService.formatFileSize(staged.file.size) }}
+                          @if (staged.status === 'uploading') {
+                            <span class="text-warning"> · Uploading...</span>
+                          }
+                          @if (staged.status === 'error') {
+                            <span class="text-error"> · {{ staged.error }}</span>
+                          }
+                        </span>
+                      </div>
+                      <button
+                        class="btn-icon btn-icon-danger"
+                        title="Remove"
+                        (click)="removeStagedFile(staged.fileType)"
+                        [disabled]="staged.status === 'uploading'"
+                      >
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                          <line x1="18" y1="6" x2="6" y2="18"/>
+                          <line x1="6" y1="6" x2="18" y2="18"/>
+                        </svg>
+                      </button>
+                    </div>
+                  }
+                </div>
+              </div>
+            }
+
+            <!-- Uploaded Files List -->
             <div class="file-list">
               <h3>Uploaded Files</h3>
-              <div class="file-list-empty">
-                <p class="text-muted">No files uploaded yet</p>
-              </div>
+              @if (filesLoading()) {
+                <div class="file-list-loading">
+                  <div class="spinner-small"></div>
+                </div>
+              } @else if (projectFiles().length === 0) {
+                <div class="file-list-empty">
+                  <p class="text-muted">No files uploaded yet</p>
+                </div>
+              } @else {
+                <div class="file-cards">
+                  @for (file of projectFiles(); track file.id) {
+                    <div class="file-card">
+                      <div class="file-icon">
+                        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                          <path d="M13 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/>
+                          <polyline points="13 2 13 9 20 9"/>
+                        </svg>
+                      </div>
+                      <div class="file-info">
+                        <span class="file-name">{{ file.name }}</span>
+                        <span class="file-meta">
+                          {{ fileService.formatFileSize(file.size_bytes) }} · Uploaded {{ formatDate(file.created_at) }}
+                        </span>
+                      </div>
+                      <div class="file-actions">
+                        <button
+                          class="btn-icon"
+                          title="Download"
+                          (click)="downloadFile(file)"
+                        >
+                          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+                            <polyline points="7 10 12 15 17 10"/>
+                            <line x1="12" y1="15" x2="12" y2="3"/>
+                          </svg>
+                        </button>
+                        <button
+                          class="btn-icon btn-icon-danger"
+                          title="Delete"
+                          (click)="confirmDeleteFile(file)"
+                        >
+                          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <polyline points="3 6 5 6 21 6"/>
+                            <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>
+                            <line x1="10" y1="11" x2="10" y2="17"/>
+                            <line x1="14" y1="11" x2="14" y2="17"/>
+                          </svg>
+                        </button>
+                      </div>
+                    </div>
+                  }
+                </div>
+              }
             </div>
           </div>
         </div>
@@ -330,5 +447,31 @@
     [loading]="modalLoading()"
     (saved)="onSaveProject($event)"
     (cancelled)="onCancelCreate()"
+  />
+}
+
+<!-- Replace File Confirmation Modal -->
+@if (showReplaceModal()) {
+  <app-confirmation-modal
+    title="Replace File?"
+    [message]="'A ' + getFileTypeLabel(fileToReplace()!.existing.file_type) + ' file already exists. Uploading this file will replace the existing one and require reprocessing of the project.'"
+    confirmText="Replace"
+    cancelText="Cancel"
+    variant="warning"
+    (confirmed)="confirmReplaceFile()"
+    (cancelled)="cancelReplaceFile()"
+  />
+}
+
+<!-- Delete File Confirmation Modal -->
+@if (showDeleteModal()) {
+  <app-confirmation-modal
+    title="Delete File?"
+    [message]="'Are you sure you want to delete ' + fileToDelete()!.name + '? This action cannot be undone and will require reprocessing of the project.'"
+    confirmText="Delete"
+    cancelText="Cancel"
+    variant="danger"
+    (confirmed)="deleteFile()"
+    (cancelled)="cancelDeleteFile()"
   />
 }

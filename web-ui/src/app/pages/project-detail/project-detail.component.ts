@@ -1,15 +1,34 @@
-import { Component, OnInit, computed, signal } from '@angular/core';
+import { Component, OnInit, computed, signal, effect } from '@angular/core';
 import { ActivatedRoute, Router } from '@angular/router';
 import { ProjectService } from '../../core/services/project.service';
-import { Project, ProjectStatus, CreateProjectDto, UpdateProjectDto } from '../../core/models/project.model';
+import { FileService } from '../../core/services/file.service';
+import { ToastService } from '../../core/services/toast.service';
+import {
+  Project,
+  ProjectStatus,
+  CreateProjectDto,
+  UpdateProjectDto,
+  SerializedFile,
+  FileType,
+  getFileTypeFromName,
+  isValidSerializedFileName,
+} from '../../core/models/project.model';
 import { CreateProjectModalComponent } from '../../shared/components/create-project-modal/create-project-modal.component';
+import { ConfirmationModalComponent } from '../../shared/components/confirmation-modal/confirmation-modal.component';
 
 type Section = 'description' | 'files' | 'chat';
+
+interface StagedFile {
+  file: File;
+  fileType: FileType;
+  status: 'pending' | 'uploading' | 'error';
+  error?: string;
+}
 
 @Component({
   selector: 'app-project-detail',
   standalone: true,
-  imports: [CreateProjectModalComponent],
+  imports: [CreateProjectModalComponent, ConfirmationModalComponent],
   templateUrl: './project-detail.component.html',
   styleUrl: './project-detail.component.scss',
 })
@@ -18,6 +37,20 @@ export class ProjectDetailComponent implements OnInit {
   selectedSection = signal<Section>('description');
   showCreateModal = signal(false);
   modalLoading = signal(false);
+
+  // Files state
+  projectFiles = signal<SerializedFile[]>([]);
+  filesLoading = signal(false);
+  stagedFiles = signal<StagedFile[]>([]);
+  uploadingFiles = signal(false);
+
+  // Replace file confirmation modal
+  showReplaceModal = signal(false);
+  fileToReplace = signal<{ existing: SerializedFile; newFile: File } | null>(null);
+
+  // Delete file confirmation modal
+  showDeleteModal = signal(false);
+  fileToDelete = signal<SerializedFile | null>(null);
 
   // Sorted projects alphabetically
   sortedProjects = computed(() => {
@@ -33,11 +66,29 @@ export class ProjectDetailComponent implements OnInit {
     return this.projectService.projects().find(p => p.id === id) || null;
   });
 
+  // Derive data sources from files
+  hasGit = computed(() => this.projectFiles().some(f => f.file_type === 'git'));
+  hasGithub = computed(() => this.projectFiles().some(f => f.file_type === 'github'));
+  hasJira = computed(() => this.projectFiles().some(f => f.file_type === 'jira'));
+  hasDataSources = computed(() => this.projectFiles().length > 0);
+
   constructor(
     private route: ActivatedRoute,
     private router: Router,
-    public projectService: ProjectService
-  ) {}
+    public projectService: ProjectService,
+    public fileService: FileService,
+    private toastService: ToastService
+  ) {
+    // Load files when project changes
+    effect(() => {
+      const projectId = this.selectedProjectId();
+      if (projectId) {
+        this.loadFiles(projectId);
+      } else {
+        this.projectFiles.set([]);
+      }
+    });
+  }
 
   ngOnInit(): void {
     // Load projects if not already loaded
@@ -62,8 +113,16 @@ export class ProjectDetailComponent implements OnInit {
     });
   }
 
+  private async loadFiles(projectId: string): Promise<void> {
+    this.filesLoading.set(true);
+    const files = await this.fileService.loadProjectFiles(projectId);
+    this.projectFiles.set(files);
+    this.filesLoading.set(false);
+  }
+
   selectProject(project: Project): void {
     this.selectedProjectId.set(project.id);
+    this.stagedFiles.set([]); // Clear staged files when switching projects
     this.router.navigate(['/projects', project.id], { replaceUrl: true });
   }
 
@@ -87,11 +146,14 @@ export class ProjectDetailComponent implements OnInit {
     });
   }
 
+  // File handling
   onFileDrop(event: DragEvent): void {
     event.preventDefault();
     event.stopPropagation();
-    // TODO: Handle file drop
-    console.log('Files dropped:', event.dataTransfer?.files);
+    const files = event.dataTransfer?.files;
+    if (files) {
+      this.processSelectedFiles(files);
+    }
   }
 
   onDragOver(event: DragEvent): void {
@@ -102,9 +164,184 @@ export class ProjectDetailComponent implements OnInit {
   onFileSelect(event: Event): void {
     const input = event.target as HTMLInputElement;
     if (input.files) {
-      // TODO: Handle file selection
-      console.log('Files selected:', input.files);
+      this.processSelectedFiles(input.files);
+      // Reset input so the same file can be selected again
+      input.value = '';
     }
+  }
+
+  private async processSelectedFiles(fileList: FileList): Promise<void> {
+    const projectId = this.selectedProjectId();
+    if (!projectId) return;
+
+    const invalidFiles: string[] = [];
+    const oversizedFiles: string[] = [];
+
+    for (let i = 0; i < fileList.length; i++) {
+      const file = fileList[i];
+
+      // Validate filename
+      if (!isValidSerializedFileName(file.name)) {
+        invalidFiles.push(file.name);
+        continue;
+      }
+
+      const validation = this.fileService.validateFile(file);
+      if (!validation.valid) {
+        if (validation.error?.includes('too large')) {
+          oversizedFiles.push(file.name);
+        } else {
+          invalidFiles.push(file.name);
+        }
+        continue;
+      }
+
+      const fileType = validation.fileType!;
+
+      // Check if file of this type already exists (in DB)
+      const existingFile = await this.fileService.checkFileExists(projectId, fileType);
+
+      // Also check if already staged
+      const alreadyStaged = this.stagedFiles().some(sf => sf.fileType === fileType);
+
+      if (existingFile) {
+        // Show confirmation modal to replace
+        this.fileToReplace.set({ existing: existingFile, newFile: file });
+        this.showReplaceModal.set(true);
+      } else if (alreadyStaged) {
+        // Replace in staged files
+        this.stagedFiles.update(files =>
+          files.map(sf => sf.fileType === fileType ? { file, fileType, status: 'pending' as const } : sf)
+        );
+      } else {
+        // Add to staged files
+        this.stagedFiles.update(files => [...files, { file, fileType, status: 'pending' as const }]);
+      }
+    }
+
+    // Show toast notifications for invalid files
+    if (invalidFiles.length > 0) {
+      const fileNames = invalidFiles.length <= 3
+        ? invalidFiles.join(', ')
+        : `${invalidFiles.slice(0, 2).join(', ')} and ${invalidFiles.length - 2} more`;
+      this.toastService.warning(
+        `Invalid file${invalidFiles.length > 1 ? 's' : ''}: ${fileNames}. Expected: git.iglog, github.json, or jira.json`
+      );
+    }
+
+    if (oversizedFiles.length > 0) {
+      const maxSize = this.fileService.getMaxFileSizeMB();
+      this.toastService.error(
+        `File${oversizedFiles.length > 1 ? 's' : ''} too large (max ${maxSize}MB): ${oversizedFiles.join(', ')}`
+      );
+    }
+  }
+
+  removeStagedFile(fileType: FileType): void {
+    this.stagedFiles.update(files => files.filter(sf => sf.fileType !== fileType));
+  }
+
+  async confirmReplaceFile(): Promise<void> {
+    const replaceData = this.fileToReplace();
+    if (!replaceData) return;
+
+    const projectId = this.selectedProjectId();
+    if (!projectId) return;
+
+    this.showReplaceModal.set(false);
+
+    // Upload replacing the existing file
+    this.uploadingFiles.set(true);
+    const result = await this.fileService.replaceFile(
+      projectId,
+      replaceData.existing,
+      replaceData.newFile
+    );
+    this.uploadingFiles.set(false);
+
+    if (result) {
+      // Reload files
+      await this.loadFiles(projectId);
+    }
+
+    this.fileToReplace.set(null);
+  }
+
+  cancelReplaceFile(): void {
+    this.showReplaceModal.set(false);
+    this.fileToReplace.set(null);
+  }
+
+  async uploadStagedFiles(): Promise<void> {
+    const projectId = this.selectedProjectId();
+    if (!projectId || this.stagedFiles().length === 0) return;
+
+    this.uploadingFiles.set(true);
+
+    for (const staged of this.stagedFiles()) {
+      // Update status to uploading
+      this.stagedFiles.update(files =>
+        files.map(sf => sf.fileType === staged.fileType ? { ...sf, status: 'uploading' as const } : sf)
+      );
+
+      const result = await this.fileService.uploadFile(projectId, staged.file);
+
+      if (!result) {
+        // Mark as error
+        this.stagedFiles.update(files =>
+          files.map(sf => sf.fileType === staged.fileType
+            ? { ...sf, status: 'error' as const, error: this.fileService.error() ?? 'Upload failed' }
+            : sf
+          )
+        );
+      } else {
+        // Remove from staged
+        this.stagedFiles.update(files => files.filter(sf => sf.fileType !== staged.fileType));
+      }
+    }
+
+    // Reload files
+    await this.loadFiles(projectId);
+    this.uploadingFiles.set(false);
+  }
+
+  clearStagedFiles(): void {
+    this.stagedFiles.set([]);
+  }
+
+  async downloadFile(file: SerializedFile): Promise<void> {
+    await this.fileService.downloadFile(file);
+  }
+
+  // Delete file
+  confirmDeleteFile(file: SerializedFile): void {
+    this.fileToDelete.set(file);
+    this.showDeleteModal.set(true);
+  }
+
+  async deleteFile(): Promise<void> {
+    const file = this.fileToDelete();
+    if (!file) return;
+
+    const projectId = this.selectedProjectId();
+    if (!projectId) return;
+
+    this.showDeleteModal.set(false);
+
+    const success = await this.fileService.deleteFile(file);
+    if (success) {
+      this.toastService.success(`${file.name} deleted successfully`);
+      await this.loadFiles(projectId);
+    } else {
+      this.toastService.error(`Failed to delete ${file.name}`);
+    }
+
+    this.fileToDelete.set(null);
+  }
+
+  cancelDeleteFile(): void {
+    this.showDeleteModal.set(false);
+    this.fileToDelete.set(null);
   }
 
   // Create project modal
@@ -163,24 +400,40 @@ export class ProjectDetailComponent implements OnInit {
     }
   }
 
-  hasDataSources(): boolean {
-    const p = this.selectedProject();
-    if (!p) return false;
-    return p.has_git || p.has_github || p.has_jira;
-  }
-
-  // Placeholder methods for backend integration
-  onBuildGraph(): void {
+  // Process data - change status to processing
+  async onProcessData(): Promise<void> {
     const project = this.selectedProject();
     if (!project) return;
-    // TODO: Call backend to start graph building
-    console.log('Build graph for project:', project.id);
+
+    const result = await this.projectService.updateProjectStatus(project.id, 'processing');
+    if (result) {
+      this.toastService.success('Processing started');
+    } else {
+      this.toastService.error('Failed to start processing');
+    }
   }
 
-  onRetryProcessing(): void {
+  async onRetryProcessing(): Promise<void> {
     const project = this.selectedProject();
     if (!project) return;
-    // TODO: Call backend to retry processing
-    console.log('Retry processing for project:', project.id);
+
+    const result = await this.projectService.updateProjectStatus(project.id, 'processing');
+    if (result) {
+      this.toastService.success('Retrying processing');
+    } else {
+      this.toastService.error('Failed to retry processing');
+    }
+  }
+
+  // File type label helper
+  getFileTypeLabel(fileType: FileType): string {
+    switch (fileType) {
+      case 'git':
+        return 'Git';
+      case 'github':
+        return 'GitHub';
+      case 'jira':
+        return 'JIRA';
+    }
   }
 }

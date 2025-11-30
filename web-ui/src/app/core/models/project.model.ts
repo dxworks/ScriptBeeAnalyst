@@ -6,9 +6,7 @@ export interface Project {
   updated_at: string;
   user_id: string;
   status: ProjectStatus;
-  has_git: boolean;
-  has_github: boolean;
-  has_jira: boolean;
+  // Files are fetched separately via SerializedFile[]
 }
 
 export type ProjectStatus = 'draft' | 'processing' | 'ready' | 'idle' | 'resuming' | 'error';
@@ -21,4 +19,34 @@ export interface CreateProjectDto {
 export interface UpdateProjectDto {
   name?: string;
   description?: string;
+}
+
+// Serialized file types
+export type FileType = 'git' | 'github' | 'jira';
+
+export interface SerializedFile {
+  id: string;
+  name: string;
+  file_type: FileType;
+  storage_path: string;
+  size_bytes: number;
+  project_id: string;
+  created_at: string;
+  updated_at: string;
+}
+
+// File type detection from filename (case-insensitive)
+export const FILE_TYPE_MAP: Record<string, FileType> = {
+  'git.iglog': 'git',
+  'github.json': 'github',
+  'jira.json': 'jira',
+};
+
+export function getFileTypeFromName(filename: string): FileType | null {
+  const lowerName = filename.toLowerCase();
+  return FILE_TYPE_MAP[lowerName] ?? null;
+}
+
+export function isValidSerializedFileName(filename: string): boolean {
+  return getFileTypeFromName(filename) !== null;
 }

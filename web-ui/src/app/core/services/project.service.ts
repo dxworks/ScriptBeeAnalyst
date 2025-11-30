@@ -1,7 +1,7 @@
 import { Injectable, signal, computed } from '@angular/core';
 import { SupabaseService } from './supabase.service';
 import { AuthService } from './auth.service';
-import { Project, CreateProjectDto, UpdateProjectDto } from '../models/project.model';
+import { Project, ProjectStatus, CreateProjectDto, UpdateProjectDto } from '../models/project.model';
 
 @Injectable({
   providedIn: 'root',
@@ -61,9 +61,6 @@ export class ProjectService {
           description: dto.description ?? null,
           user_id: user.id,
           status: 'draft',
-          has_git: false,
-          has_github: false,
-          has_jira: false,
         })
         .select()
         .single();
@@ -139,5 +136,35 @@ export class ProjectService {
 
   getProjectById(id: string): Project | undefined {
     return this.projectsSignal().find(p => p.id === id);
+  }
+
+  async updateProjectStatus(id: string, status: ProjectStatus): Promise<Project | null> {
+    this.errorSignal.set(null);
+
+    try {
+      const { data, error } = await this.supabase.client
+        .from('projects')
+        .update({
+          status,
+          updated_at: new Date().toISOString(),
+        })
+        .eq('id', id)
+        .select()
+        .single();
+
+      if (error) {
+        this.errorSignal.set(error.message);
+        return null;
+      }
+
+      // Update local state
+      this.projectsSignal.update(projects =>
+        projects.map(p => (p.id === id ? data : p))
+      );
+      return data;
+    } catch (err) {
+      this.errorSignal.set('Failed to update project status');
+      return null;
+    }
   }
 }
