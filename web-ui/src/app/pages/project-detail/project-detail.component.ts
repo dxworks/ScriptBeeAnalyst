@@ -1,20 +1,23 @@
 import { Component, OnInit, computed, signal } from '@angular/core';
 import { ActivatedRoute, Router } from '@angular/router';
 import { ProjectService } from '../../core/services/project.service';
-import { Project } from '../../core/models/project.model';
+import { Project, ProjectStatus, CreateProjectDto, UpdateProjectDto } from '../../core/models/project.model';
+import { CreateProjectModalComponent } from '../../shared/components/create-project-modal/create-project-modal.component';
 
 type Section = 'description' | 'files' | 'chat';
 
 @Component({
   selector: 'app-project-detail',
   standalone: true,
-  imports: [],
+  imports: [CreateProjectModalComponent],
   templateUrl: './project-detail.component.html',
   styleUrl: './project-detail.component.scss',
 })
 export class ProjectDetailComponent implements OnInit {
   selectedProjectId = signal<string | null>(null);
   selectedSection = signal<Section>('description');
+  showCreateModal = signal(false);
+  modalLoading = signal(false);
 
   // Sorted projects alphabetically
   sortedProjects = computed(() => {
@@ -102,5 +105,82 @@ export class ProjectDetailComponent implements OnInit {
       // TODO: Handle file selection
       console.log('Files selected:', input.files);
     }
+  }
+
+  // Create project modal
+  openCreateModal(): void {
+    this.showCreateModal.set(true);
+  }
+
+  async onSaveProject(dto: CreateProjectDto | UpdateProjectDto): Promise<void> {
+    this.modalLoading.set(true);
+    const result = await this.projectService.createProject(dto as CreateProjectDto);
+    this.modalLoading.set(false);
+
+    if (result) {
+      this.showCreateModal.set(false);
+      // Select the newly created project
+      this.selectedProjectId.set(result.id);
+      this.router.navigate(['/projects', result.id], { replaceUrl: true });
+    }
+  }
+
+  onCancelCreate(): void {
+    this.showCreateModal.set(false);
+  }
+
+  // Status helper methods
+  getStatusClass(status: ProjectStatus): string {
+    switch (status) {
+      case 'ready':
+        return 'badge-success';
+      case 'processing':
+      case 'resuming':
+        return 'badge-warning';
+      case 'idle':
+        return 'badge-info';
+      case 'error':
+        return 'badge-error';
+      default:
+        return 'badge-neutral';
+    }
+  }
+
+  getStatusLabel(status: ProjectStatus): string {
+    switch (status) {
+      case 'ready':
+        return 'Ready';
+      case 'processing':
+        return 'Processing';
+      case 'resuming':
+        return 'Resuming';
+      case 'idle':
+        return 'Idle';
+      case 'error':
+        return 'Error';
+      default:
+        return 'Draft';
+    }
+  }
+
+  hasDataSources(): boolean {
+    const p = this.selectedProject();
+    if (!p) return false;
+    return p.has_git || p.has_github || p.has_jira;
+  }
+
+  // Placeholder methods for backend integration
+  onBuildGraph(): void {
+    const project = this.selectedProject();
+    if (!project) return;
+    // TODO: Call backend to start graph building
+    console.log('Build graph for project:', project.id);
+  }
+
+  onRetryProcessing(): void {
+    const project = this.selectedProject();
+    if (!project) return;
+    // TODO: Call backend to retry processing
+    console.log('Retry processing for project:', project.id);
   }
 }

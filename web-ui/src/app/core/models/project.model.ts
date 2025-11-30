@@ -11,7 +11,7 @@ export interface Project {
   has_jira: boolean;
 }
 
-export type ProjectStatus = 'pending' | 'processing' | 'ready' | 'error';
+export type ProjectStatus = 'draft' | 'processing' | 'ready' | 'idle' | 'resuming' | 'error';
 
 export interface CreateProjectDto {
   name: string;

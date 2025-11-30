@@ -7,7 +7,7 @@ create table public.projects (
   name text not null,
   description text,
   user_id uuid not null references auth.users(id) on delete cascade,
-  status text not null default 'pending' check (status in ('pending', 'processing', 'ready', 'error')),
+  status text not null default 'draft' check (status in ('draft', 'processing', 'ready', 'idle', 'resuming', 'error')),
   has_git boolean not null default false,
   has_github boolean not null default false,
   has_jira boolean not null default false,

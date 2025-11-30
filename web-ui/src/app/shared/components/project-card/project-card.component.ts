@@ -43,7 +43,10 @@ export class ProjectCardComponent {
       case 'ready':
         return 'badge-success';
       case 'processing':
+      case 'resuming':
         return 'badge-warning';
+      case 'idle':
+        return 'badge-info';
       case 'error':
         return 'badge-error';
       default:
@@ -58,10 +61,14 @@ export class ProjectCardComponent {
         return 'Ready';
       case 'processing':
         return 'Processing';
+      case 'resuming':
+        return 'Resuming';
+      case 'idle':
+        return 'Idle';
       case 'error':
         return 'Error';
       default:
-        return 'Pending';
+        return 'Draft';
     }
   }
 

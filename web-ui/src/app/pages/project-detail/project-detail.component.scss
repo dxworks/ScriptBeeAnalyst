@@ -15,6 +15,9 @@
 }
 
 .sidebar-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
   padding: var(--spacing-lg);
   border-bottom: 1px solid var(--color-border);
 
@@ -35,6 +38,25 @@
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
+  }
+}
+
+.btn-icon-add {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: none;
+  background-color: var(--color-accent);
+  color: var(--color-text-inverse);
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  transition: background-color var(--transition-fast);
+
+  &:hover {
+    background-color: var(--color-accent-dark);
   }
 }
 
@@ -119,6 +141,16 @@
   animation: spin 0.8s linear infinite;
 }
 
+.spinner-large {
+  width: 48px;
+  height: 48px;
+  border: 3px solid var(--color-border);
+  border-top-color: var(--color-accent);
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+  margin-bottom: var(--spacing-lg);
+}
+
 // Level 1: Projects list
 .sidebar-level-1 {
   width: 220px;
@@ -184,6 +216,85 @@
   display: flex;
   flex-direction: column;
   gap: var(--spacing-lg);
+}
+
+// Status message cards
+.status-card {
+  display: flex;
+  align-items: flex-start;
+  padding: var(--spacing-lg);
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--color-border);
+  background-color: var(--color-surface-card);
+
+  .status-content {
+    display: flex;
+    align-items: flex-start;
+    gap: var(--spacing-md);
+
+    svg, .spinner-small {
+      flex-shrink: 0;
+      margin-top: 2px;
+    }
+
+    h4 {
+      margin: 0 0 var(--spacing-xs) 0;
+      font-size: 1rem;
+      font-weight: 600;
+    }
+
+    p {
+      margin: 0;
+      color: var(--color-text-secondary);
+      font-size: 0.875rem;
+    }
+  }
+
+  // Status variants
+  &.status-draft {
+    border-color: var(--color-border);
+    background-color: var(--color-surface-card);
+
+    svg {
+      color: var(--color-text-muted);
+    }
+  }
+
+  &.status-processing,
+  &.status-resuming {
+    border-color: var(--color-warning);
+    background-color: rgba(245, 158, 11, 0.05);
+
+    h4 {
+      color: var(--color-warning);
+    }
+  }
+
+  &.status-idle {
+    border-color: var(--color-info);
+    background-color: rgba(59, 130, 246, 0.05);
+
+    svg {
+      color: var(--color-info);
+    }
+
+    h4 {
+      color: var(--color-info);
+    }
+  }
+
+  &.status-error {
+    border-color: var(--color-error);
+    background-color: rgba(239, 68, 68, 0.05);
+
+    svg {
+      color: var(--color-error);
+    }
+
+    h4 {
+      color: var(--color-error);
+    }
+  }
 }
 
 // Description section
@@ -335,6 +446,44 @@
   p {
     margin: 0 0 var(--spacing-sm) 0;
     max-width: 400px;
+  }
+
+  .btn {
+    margin-top: var(--spacing-md);
+  }
+
+  // Chat disabled (draft state)
+  &.chat-disabled {
+    background-color: var(--color-surface);
+    border-style: dashed;
+
+    svg {
+      opacity: 0.3;
+    }
+  }
+
+  // Chat loading (processing/resuming)
+  &.chat-loading {
+    background-color: var(--color-surface-card);
+
+    h2 {
+      color: var(--color-warning);
+    }
+  }
+
+  // Chat error
+  &.chat-error {
+    background-color: rgba(239, 68, 68, 0.02);
+    border-color: var(--color-error);
+
+    svg {
+      color: var(--color-error);
+      opacity: 0.7;
+    }
+
+    h2 {
+      color: var(--color-error);
+    }
   }
 }
 

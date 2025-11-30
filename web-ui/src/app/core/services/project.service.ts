@@ -60,7 +60,7 @@ export class ProjectService {
           name: dto.name,
           description: dto.description ?? null,
           user_id: user.id,
-          status: 'pending',
+          status: 'draft',
           has_git: false,
           has_github: false,
           has_jira: false,
