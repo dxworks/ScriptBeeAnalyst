@@ -1,0 +1,24 @@
+<div class="min-h-screen" style="background-color: var(--color-surface);">
+  <!-- Simple header for now -->
+  <header style="background-color: var(--color-navy-800); padding: 1rem 2rem;">
+    <div class="flex items-center justify-between">
+      <div class="flex items-center gap-sm">
+        <svg class="w-6 h-6" style="color: var(--color-accent);" viewBox="0 0 24 24" fill="currentColor">
+          <path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/>
+        </svg>
+        <span class="font-semibold text-inverse">ScriptBeeAssistant</span>
+      </div>
+      <button class="btn btn-ghost text-inverse" (click)="onLogout()">
+        Sign Out
+      </button>
+    </div>
+  </header>
+
+  <!-- Content -->
+  <main style="padding: 3rem 2rem;">
+    <div style="max-width: 1200px; margin: 0 auto;">
+      <h1>Dashboard</h1>
+      <p class="text-secondary">Welcome to ScriptBeeAssistant. Project list coming soon.</p>
+    </div>
+  </main>
+</div>

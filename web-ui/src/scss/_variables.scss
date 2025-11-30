@@ -1,0 +1,56 @@
+// Color palette - matching dashboard design
+:root {
+  // Primary dark navy
+  --color-navy-900: #0f1221;
+  --color-navy-800: #1a1f36;
+  --color-navy-700: #252b48;
+
+  // Accent purple/violet
+  --color-accent: #6366f1;
+  --color-accent-light: #818cf8;
+  --color-accent-dark: #4f46e5;
+
+  // Surface colors
+  --color-surface: #f5f7fa;
+  --color-surface-card: #ffffff;
+  --color-surface-hover: #f0f2f5;
+
+  // Text colors
+  --color-text-primary: #1f2937;
+  --color-text-secondary: #6b7280;
+  --color-text-muted: #9ca3af;
+  --color-text-inverse: #ffffff;
+
+  // Border colors
+  --color-border: #e5e7eb;
+  --color-border-light: #f3f4f6;
+
+  // Status colors
+  --color-success: #10b981;
+  --color-warning: #f59e0b;
+  --color-error: #ef4444;
+  --color-info: #3b82f6;
+
+  // Shadows
+  --shadow-card: 0 1px 3px 0 rgb(0 0 0 / 0.1), 0 1px 2px -1px rgb(0 0 0 / 0.1);
+  --shadow-card-hover: 0 4px 6px -1px rgb(0 0 0 / 0.1), 0 2px 4px -2px rgb(0 0 0 / 0.1);
+  --shadow-lg: 0 10px 15px -3px rgb(0 0 0 / 0.1), 0 4px 6px -4px rgb(0 0 0 / 0.1);
+
+  // Spacing
+  --spacing-xs: 0.25rem;
+  --spacing-sm: 0.5rem;
+  --spacing-md: 1rem;
+  --spacing-lg: 1.5rem;
+  --spacing-xl: 2rem;
+  --spacing-2xl: 3rem;
+
+  // Border radius
+  --radius-sm: 6px;
+  --radius-md: 8px;
+  --radius-lg: 12px;
+  --radius-full: 9999px;
+
+  // Transitions
+  --transition-fast: 150ms ease;
+  --transition-normal: 200ms ease;
+}
