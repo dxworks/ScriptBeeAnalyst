@@ -1,4 +1,5 @@
 import { Injectable, signal, computed } from '@angular/core';
+import { RealtimeChannel } from '@supabase/supabase-js';
 import { SupabaseService } from './supabase.service';
 import { AuthService } from './auth.service';
 import { Project, ProjectStatus, CreateProjectDto, UpdateProjectDto, SerializedFile } from '../models/project.model';
@@ -12,6 +13,7 @@ export class ProjectService {
   private readonly projectsSignal = signal<Project[]>([]);
   private readonly loadingSignal = signal<boolean>(false);
   private readonly errorSignal = signal<string | null>(null);
+  private realtimeChannel: RealtimeChannel | null = null;
 
   readonly projects = this.projectsSignal.asReadonly();
   readonly loading = this.loadingSignal.asReadonly();
@@ -192,6 +194,100 @@ export class ProjectService {
     } catch (err) {
       this.errorSignal.set('Failed to update project status');
       return null;
+    }
+  }
+
+  /**
+   * Subscribe to realtime project changes for the current user
+   * Updates local state when projects are updated externally (e.g., status changes)
+   */
+  subscribeToProjectChanges(): void {
+    const user = this.authService.user();
+    if (!user) {
+      console.warn('Cannot subscribe to project changes: user not authenticated');
+      return;
+    }
+
+    // Don't create duplicate subscriptions
+    if (this.realtimeChannel) {
+      console.warn('Realtime subscription already active');
+      return;
+    }
+
+    // Create a channel for projects table
+    this.realtimeChannel = this.supabase.client
+      .channel('projects-changes')
+      .on(
+        'postgres_changes',
+        {
+          event: 'UPDATE',
+          schema: 'public',
+          table: 'projects',
+          filter: `user_id=eq.${user.id}`,
+        },
+        (payload) => {
+          console.log('Project updated:', payload.new);
+          const updatedProject = payload.new as Project;
+
+          // Update local state with the new data
+          this.projectsSignal.update(projects =>
+            projects.map(p => (p.id === updatedProject.id ? updatedProject : p))
+          );
+        }
+      )
+      .on(
+        'postgres_changes',
+        {
+          event: 'INSERT',
+          schema: 'public',
+          table: 'projects',
+          filter: `user_id=eq.${user.id}`,
+        },
+        (payload) => {
+          console.log('Project inserted:', payload.new);
+          const newProject = payload.new as Project;
+
+          // Add to local state if not already present
+          this.projectsSignal.update(projects => {
+            if (projects.some(p => p.id === newProject.id)) {
+              return projects;
+            }
+            return [newProject, ...projects];
+          });
+        }
+      )
+      .on(
+        'postgres_changes',
+        {
+          event: 'DELETE',
+          schema: 'public',
+          table: 'projects',
+          filter: `user_id=eq.${user.id}`,
+        },
+        (payload) => {
+          console.log('Project deleted:', payload.old);
+          const deletedProject = payload.old as Project;
+
+          // Remove from local state
+          this.projectsSignal.update(projects =>
+            projects.filter(p => p.id !== deletedProject.id)
+          );
+        }
+      )
+      .subscribe((status) => {
+        console.log('Realtime subscription status:', status);
+      });
+  }
+
+  /**
+   * Unsubscribe from realtime project changes
+   * Clean up when component is destroyed or user logs out
+   */
+  unsubscribeFromProjectChanges(): void {
+    if (this.realtimeChannel) {
+      this.supabase.client.removeChannel(this.realtimeChannel);
+      this.realtimeChannel = null;
+      console.log('Realtime subscription removed');
     }
   }
 }

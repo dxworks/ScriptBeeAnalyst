@@ -3,3 +3,6 @@ fastapi
 uvicorn[standard]
 matplotlib
 numpy
+supabase
+python-jose[cryptography]
+python-dotenv

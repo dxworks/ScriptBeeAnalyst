@@ -1,8 +1,9 @@
-import { Component, OnInit, computed, signal, effect } from '@angular/core';
+import { Component, OnInit, OnDestroy, computed, signal, effect } from '@angular/core';
 import { ActivatedRoute, Router } from '@angular/router';
 import { ProjectService } from '../../core/services/project.service';
 import { FileService } from '../../core/services/file.service';
 import { ToastService } from '../../core/services/toast.service';
+import { DataServerService } from '../../core/services/data-server.service';
 import {
   Project,
   ProjectStatus,
@@ -32,7 +33,7 @@ interface StagedFile {
   templateUrl: './project-detail.component.html',
   styleUrl: './project-detail.component.scss',
 })
-export class ProjectDetailComponent implements OnInit {
+export class ProjectDetailComponent implements OnInit, OnDestroy {
   selectedProjectId = signal<string | null>(null);
   selectedSection = signal<Section>('description');
   showCreateModal = signal(false);
@@ -55,6 +56,9 @@ export class ProjectDetailComponent implements OnInit {
   // Delete project confirmation modal
   showDeleteProjectModal = signal(false);
   deletingProject = signal(false);
+
+  // Processing state
+  processingData = signal(false);
 
   // Sorted projects alphabetically
   sortedProjects = computed(() => {
@@ -88,7 +92,8 @@ export class ProjectDetailComponent implements OnInit {
     private router: Router,
     public projectService: ProjectService,
     public fileService: FileService,
-    private toastService: ToastService
+    private toastService: ToastService,
+    private dataServerService: DataServerService
   ) {
     // Load files when project changes
     effect(() => {
@@ -99,13 +104,48 @@ export class ProjectDetailComponent implements OnInit {
         this.projectFiles.set([]);
       }
     });
+
+    // Show toast notifications when selected project status changes
+    effect(() => {
+      const project = this.selectedProject();
+      if (!project) return;
+
+      // Only show toasts for certain status changes (avoid on initial load)
+      const status = project.status;
+
+      // Track previous status to detect changes
+      const previousStatus = this.previousStatus();
+      if (previousStatus === status) return; // No change
+
+      this.previousStatus.set(status);
+
+      // Show toast only if we're not currently processing (to avoid duplicate toasts)
+      if (this.processingData()) return;
+
+      // Show toasts for status changes
+      if (status === 'ready' && previousStatus === 'processing') {
+        this.toastService.success('Project graph built successfully!');
+      } else if (status === 'error' && previousStatus === 'processing') {
+        this.toastService.error('Failed to build project graph');
+      } else if (status === 'idle' && previousStatus === 'ready') {
+        this.toastService.info('Project suspended to save resources');
+      } else if (status === 'ready' && previousStatus === 'resuming') {
+        this.toastService.success('Project resumed successfully');
+      }
+    });
   }
+
+  // Track previous status for toast notifications
+  private previousStatus = signal<ProjectStatus | null>(null);
 
   ngOnInit(): void {
     // Load projects if not already loaded
     if (this.projectService.projects().length === 0) {
       this.projectService.loadProjects();
     }
+
+    // Subscribe to realtime project changes
+    this.projectService.subscribeToProjectChanges();
 
     // Get project ID from route
     this.route.paramMap.subscribe(params => {
@@ -122,6 +162,11 @@ export class ProjectDetailComponent implements OnInit {
         this.selectedSection.set(section);
       }
     });
+  }
+
+  ngOnDestroy(): void {
+    // Unsubscribe from realtime changes
+    this.projectService.unsubscribeFromProjectChanges();
   }
 
   private async loadFiles(projectId: string): Promise<void> {
@@ -411,29 +456,42 @@ export class ProjectDetailComponent implements OnInit {
     }
   }
 
-  // Process data - change status to processing
+  // Process data - call data-server to build the project graph
   async onProcessData(): Promise<void> {
     const project = this.selectedProject();
-    if (!project) return;
+    if (!project || this.processingData()) return;
 
-    const result = await this.projectService.updateProjectStatus(project.id, 'processing');
-    if (result) {
-      this.toastService.success('Processing started');
+    this.processingData.set(true);
+
+    // First, update status to 'processing' in the database
+    // This will trigger a realtime update to reflect in the UI
+    const statusUpdate = await this.projectService.updateProjectStatus(project.id, 'processing');
+    if (!statusUpdate) {
+      this.toastService.error('Failed to update project status');
+      this.processingData.set(false);
+      return;
+    }
+
+    // Then call data-server to build the graph
+    const buildResult = await this.dataServerService.buildProject(project.id);
+    this.processingData.set(false);
+
+    if (buildResult.success) {
+      // Status will be updated to 'ready' or 'error' by the data-server via realtime
+      // Show success message if available
+      if (buildResult.message) {
+        this.toastService.success(buildResult.message);
+      }
     } else {
-      this.toastService.error('Failed to start processing');
+      // If data-server call failed, show error and update status to 'error'
+      this.toastService.error(buildResult.error || 'Failed to build project graph');
+      await this.projectService.updateProjectStatus(project.id, 'error');
     }
   }
 
   async onRetryProcessing(): Promise<void> {
-    const project = this.selectedProject();
-    if (!project) return;
-
-    const result = await this.projectService.updateProjectStatus(project.id, 'processing');
-    if (result) {
-      this.toastService.success('Retrying processing');
-    } else {
-      this.toastService.error('Failed to retry processing');
-    }
+    // Retry is the same as processing - call the build endpoint
+    await this.onProcessData();
   }
 
   // File type label helper
