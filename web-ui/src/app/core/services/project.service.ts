@@ -1,7 +1,9 @@
 import { Injectable, signal, computed } from '@angular/core';
 import { SupabaseService } from './supabase.service';
 import { AuthService } from './auth.service';
-import { Project, ProjectStatus, CreateProjectDto, UpdateProjectDto } from '../models/project.model';
+import { Project, ProjectStatus, CreateProjectDto, UpdateProjectDto, SerializedFile } from '../models/project.model';
+
+const BUCKET_NAME = 'serialized-files';
 
 @Injectable({
   providedIn: 'root',
@@ -113,6 +115,31 @@ export class ProjectService {
     this.errorSignal.set(null);
 
     try {
+      // First, get all files associated with this project to delete from storage
+      const { data: files, error: filesError } = await this.supabase.client
+        .from('serialized_files')
+        .select('storage_path')
+        .eq('project_id', id);
+
+      if (filesError) {
+        this.errorSignal.set(filesError.message);
+        return false;
+      }
+
+      // Delete files from storage if any exist
+      if (files && files.length > 0) {
+        const storagePaths = files.map((f: { storage_path: string }) => f.storage_path);
+        const { error: storageError } = await this.supabase.client.storage
+          .from(BUCKET_NAME)
+          .remove(storagePaths);
+
+        if (storageError) {
+          this.errorSignal.set(`Failed to delete storage files: ${storageError.message}`);
+          return false;
+        }
+      }
+
+      // Now delete the project (serialized_files entries cascade automatically)
       const { error } = await this.supabase.client
         .from('projects')
         .delete()

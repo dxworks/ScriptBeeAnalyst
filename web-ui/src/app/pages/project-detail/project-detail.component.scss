@@ -351,6 +351,46 @@
   flex-wrap: wrap;
 }
 
+// Danger zone section
+.danger-zone {
+  background-color: rgba(239, 68, 68, 0.03);
+  border-radius: var(--radius-lg);
+  padding: var(--spacing-lg);
+  border: 1px solid var(--color-error);
+
+  h3 {
+    margin: 0 0 var(--spacing-md) 0;
+    font-size: 0.875rem;
+    font-weight: 600;
+    color: var(--color-error);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+  }
+}
+
+.danger-zone-content {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--spacing-lg);
+}
+
+.danger-zone-info {
+  flex: 1;
+}
+
+.danger-zone-title {
+  margin: 0 0 var(--spacing-xs) 0;
+  font-weight: 600;
+  color: var(--color-text-primary);
+}
+
+.danger-zone-description {
+  margin: 0;
+  font-size: 0.875rem;
+  color: var(--color-text-secondary);
+}
+
 // Files section
 .upload-zone {
   display: flex;

@@ -62,7 +62,9 @@ CLAUDE.md
 commands.md
 README.md
 TODO
+DONE
 /chat-ui/src/test
+WORKSESSION
 
 # Supabase - ignore Docker files, keep migrations and functions
 supabase/**

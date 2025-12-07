@@ -52,6 +52,10 @@ export class ProjectDetailComponent implements OnInit {
   showDeleteModal = signal(false);
   fileToDelete = signal<SerializedFile | null>(null);
 
+  // Delete project confirmation modal
+  showDeleteProjectModal = signal(false);
+  deletingProject = signal(false);
+
   // Sorted projects alphabetically
   sortedProjects = computed(() => {
     return [...this.projectService.projects()].sort((a, b) =>
@@ -71,6 +75,13 @@ export class ProjectDetailComponent implements OnInit {
   hasGithub = computed(() => this.projectFiles().some(f => f.file_type === 'github'));
   hasJira = computed(() => this.projectFiles().some(f => f.file_type === 'jira'));
   hasDataSources = computed(() => this.projectFiles().length > 0);
+
+  // Delete project confirmation message
+  deleteProjectMessage = computed(() => {
+    const project = this.selectedProject();
+    const name = project?.name ?? 'this project';
+    return `Are you sure you want to delete "${name}"? This will permanently delete the project and all its uploaded files. This action cannot be undone.`;
+  });
 
   constructor(
     private route: ActivatedRoute,
@@ -435,5 +446,33 @@ export class ProjectDetailComponent implements OnInit {
       case 'jira':
         return 'JIRA';
     }
+  }
+
+  // Delete project
+  confirmDeleteProject(): void {
+    this.showDeleteProjectModal.set(true);
+  }
+
+  async deleteProject(): Promise<void> {
+    const project = this.selectedProject();
+    if (!project) return;
+
+    this.deletingProject.set(true);
+    const success = await this.projectService.deleteProject(project.id);
+    this.deletingProject.set(false);
+    this.showDeleteProjectModal.set(false);
+
+    if (success) {
+      this.toastService.success(`Project "${project.name}" deleted successfully`);
+      // Navigate to projects list without selection
+      this.selectedProjectId.set(null);
+      this.router.navigate(['/projects'], { replaceUrl: true });
+    } else {
+      this.toastService.error(`Failed to delete project: ${this.projectService.error()}`);
+    }
+  }
+
+  cancelDeleteProject(): void {
+    this.showDeleteProjectModal.set(false);
   }
 }
