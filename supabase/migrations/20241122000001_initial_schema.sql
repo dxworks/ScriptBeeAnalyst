@@ -141,3 +141,29 @@ create policy "Users can delete own project files"
     bucket_id = 'serialized-files'
     and auth.uid() is not null
   );
+
+-- Create storage bucket for project graphs (pickles)
+insert into storage.buckets (id, name)
+values ('project-graphs', 'project-graphs');
+
+-- Storage policies for project-graphs: users can access graphs for their projects
+create policy "Users can upload graphs to own projects"
+  on storage.objects for insert
+  with check (
+    bucket_id = 'project-graphs'
+    and auth.uid() is not null
+  );
+
+create policy "Users can view own project graphs"
+  on storage.objects for select
+  using (
+    bucket_id = 'project-graphs'
+    and auth.uid() is not null
+  );
+
+create policy "Users can delete own project graphs"
+  on storage.objects for delete
+  using (
+    bucket_id = 'project-graphs'
+    and auth.uid() is not null
+  );

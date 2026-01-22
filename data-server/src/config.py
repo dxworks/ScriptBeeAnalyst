@@ -24,6 +24,11 @@ SUPABASE_SERVICE_KEY = os.getenv("SUPABASE_SERVICE_KEY", "")
 # JWT configuration
 JWT_SECRET = os.getenv("JWT_SECRET", "")
 
+# Graph processor configuration (Phase 3+)
+# Hardcoded user_id and project_id for testing - will be dynamic in Phase 6
+GRAPH_USER_ID = os.getenv("GRAPH_USER_ID", "")
+GRAPH_PROJECT_ID = os.getenv("GRAPH_PROJECT_ID", "")
+
 # Validate critical settings
 if not JWT_SECRET:
     raise ValueError("JWT_SECRET must be set (via .env file or environment variable)")

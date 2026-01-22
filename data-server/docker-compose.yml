@@ -12,6 +12,9 @@ services:
       - SUPABASE_ANON_KEY=${SUPABASE_ANON_KEY}
       - SUPABASE_SERVICE_KEY=${SUPABASE_SERVICE_KEY}
       - JWT_SECRET=${JWT_SECRET}
+      # Graph processor configuration (Phase 3+)
+      - GRAPH_USER_ID=${GRAPH_USER_ID}
+      - GRAPH_PROJECT_ID=${GRAPH_PROJECT_ID}
     volumes:
       # Mount source for development (hot reload)
       - ./src:/app/src:ro

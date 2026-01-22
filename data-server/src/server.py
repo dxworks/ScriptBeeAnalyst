@@ -1,5 +1,6 @@
 import io
 import sys
+import pickle
 import traceback
 from pathlib import Path
 from fastapi import FastAPI
@@ -8,13 +9,8 @@ from fastapi.responses import JSONResponse, Response
 from contextlib import asynccontextmanager
 import matplotlib.pyplot as plt
 
-from src.inspector_git.reader.iglog.readers.ig_log_reader import IGLogReader
-from src.inspector_git.linker.transformers import GitProjectTransformer
-from src.jira_miner.reader_dto.loader import JiraJsonLoader
-from src.jira_miner.linker.transformers import JiraProjectTransformer
-from src.github_miner.reader_dto.loader import GithubJsonLoader
-from src.github_miner.linker.transformers import GitHubProjectTransformer
-from src.common.project_linkers import ProjectLinker
+from supabase import create_client, Client
+from src.config import SUPABASE_URL, SUPABASE_SERVICE_KEY, GRAPH_USER_ID, GRAPH_PROJECT_ID
 
 
 class CodeRequest(BaseModel):
@@ -26,71 +22,68 @@ class CodeRequest(BaseModel):
 graph_data = {}
 
 
-def build_projects():
+def load_graph_from_supabase(user_id: str, project_id: str):
     """
-    Builds the project graph from local test-input files and links them together.
+    Downloads and loads the project graph from Supabase Storage.
+
+    Args:
+        user_id: User UUID for storage path
+        project_id: Project UUID for storage path
 
     Returns:
         Dict with 'git', 'jira', 'github' keys containing project objects
     """
-    base_path = Path(__file__).parent.parent / "test-input"
+    storage_path = f"{user_id}/{project_id}/graph.pkl"
+    print(f"📂 Downloading pickle from Supabase Storage: {storage_path}")
 
-    print(f"📂 Loading files from: {base_path}")
+    if not user_id or not project_id:
+        raise ValueError("GRAPH_USER_ID and GRAPH_PROJECT_ID must be set in .env file")
 
-    # InspectorGit
-    iglog_file = base_path / "inspector-git" / "zeppelin.iglog"
-    print(f"  - Loading Git data from {iglog_file.name}...")
-    with open(iglog_file, "r", encoding="utf-8") as f:
-        git_log_dto = IGLogReader().read(f)
+    # Initialize Supabase client with service key (bypasses RLS)
+    supabase: Client = create_client(SUPABASE_URL, SUPABASE_SERVICE_KEY)
 
-    git_project = GitProjectTransformer(
-        git_log_dto,
-        name=iglog_file.stem,
-        compute_annotated_lines=False,  # no blame
-    ).transform()
+    # Download pickle from Supabase Storage
+    try:
+        pickle_bytes = supabase.storage.from_("project-graphs").download(storage_path)
+    except Exception as e:
+        raise FileNotFoundError(f"Failed to download pickle from Supabase: {storage_path}. Error: {e}")
 
-    # Jira
-    jira_file = base_path / "jira-miner" / "ZEPPELIN-detailed-issues.json"
-    print(f"  - Loading JIRA data from {jira_file.name}...")
-    jira_loader = JiraJsonLoader(str(jira_file))
-    jira_data = jira_loader.load()
-    jira_project = JiraProjectTransformer(jira_data, name="Jira Project").transform()
+    # Deserialize pickle
+    graph_data = pickle.loads(pickle_bytes)
 
-    # GitHub
-    github_file = base_path / "github-miner" / "githubProject.json"
-    print(f"  - Loading GitHub data from {github_file.name}...")
-    github_loader = GithubJsonLoader(str(github_file))
-    github_data = github_loader.load()
-    github_project = GitHubProjectTransformer(github_data, name="GitHub Project").transform()
+    # Verify structure
+    if not isinstance(graph_data, dict):
+        raise ValueError("Pickle file does not contain a dict")
 
-    # Link projects together
-    print("🔗 Linking projects...")
-    ProjectLinker.link_projects(github_project, jira_project, jira_data)
-    ProjectLinker.link_projects(jira_project, git_project)
-    ProjectLinker.link_projects(github_project, git_project)
+    required_keys = {"git", "jira", "github"}
+    missing_keys = required_keys - set(graph_data.keys())
+    if missing_keys:
+        raise ValueError(f"Pickle missing required keys: {missing_keys}")
 
-    print("✅ Graph built successfully!")
-    print(f"   - Git commits: {len(git_project.git_commit_registry.all)}")
-    print(f"   - JIRA issues: {len(jira_project.issue_registry.all)}")
-    print(f"   - GitHub PRs: {len(github_project.pull_request_registry.all)}")
+    size_mb = len(pickle_bytes) / (1024 * 1024)
+    print("✅ Pickle loaded successfully from Supabase!")
+    print(f"   - Storage path: {storage_path}")
+    print(f"   - Size: {size_mb:.2f} MB")
+    print(f"   - Git commits: {len(graph_data['git'].git_commit_registry.all)}")
+    print(f"   - JIRA issues: {len(graph_data['jira'].issue_registry.all)}")
+    print(f"   - GitHub PRs: {len(graph_data['github'].pull_request_registry.all)}")
 
-    return {
-        "git": git_project,
-        "jira": jira_project,
-        "github": github_project,
-    }
+    return graph_data
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Application lifespan manager - loads graph at startup."""
+    """Application lifespan manager - loads graph from Supabase Storage at startup."""
     global graph_data
     print("\n" + "="*70)
     print("🚀 Starting data-server in STANDALONE mode...")
     print("="*70)
-    print("📦 Loading project data from local files...")
+    print("📦 Loading project data from Supabase Storage...")
     print()
-    graph_data = build_projects()
+
+    # Download and load pickle from Supabase Storage
+    graph_data = load_graph_from_supabase(GRAPH_USER_ID, GRAPH_PROJECT_ID)
+
     print()
     print("="*70)
     print("✅ Server ready! Data loaded and available at http://localhost:8001")
@@ -112,8 +105,8 @@ app = FastAPI(
     description="""
 ## Overview
 
-FastAPI backend for ScriptBeeAssistant - loads serialized project data (Git, GitHub, JIRA)
-from local test-input directory into an in-memory graph at startup.
+FastAPI backend for ScriptBeeAssistant - loads pre-built project graph from Supabase Storage
+into memory at startup. Graph is built separately by processor.py.
 
 **No authentication required** - this is a standalone development server.
 
@@ -138,16 +131,15 @@ graph_data = {
 
 ## Workflow
 
-1. Server loads data automatically at startup from `test-input/` directory
-2. Call `POST /execute` to run Python queries
-3. Call `POST /plot` to generate matplotlib visualizations
+1. Run `processor.py` to build graph and upload pickle to Supabase Storage
+2. Server downloads and loads pickle automatically at startup
+3. Call `POST /execute` to run Python queries
+4. Call `POST /plot` to generate matplotlib visualizations
 
 ## Data Source
 
-Files loaded from `data-server/test-input/`:
-- `inspector-git/zeppelin.iglog` (12MB)
-- `jira-miner/ZEPPELIN-detailed-issues.json` (67MB)
-- `github-miner/githubProject.json` (41MB)
+Pre-built graph pickle in Supabase Storage bucket `project-graphs` at path:
+`{user_id}/{project_id}/graph.pkl`
     """,
     version="1.0.0-standalone",
     lifespan=lifespan,
