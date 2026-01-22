@@ -58,10 +58,12 @@ chat-ui/agent_tools.md
 chat-ui/oracle_response.pkl
 
 .claude
-CLAUDE.md
-**/CLAUDE.md
-commands.md
-README.md
+
+# Ignore all markdown files except README.md
+*.md
+!README.md
+!**/README.md
+
 TODO
 DONE
 /chat-ui/src/test

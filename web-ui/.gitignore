@@ -46,3 +46,8 @@ Thumbs.db
 
 style-refrences
 /src/environments/environment.ts
+
+# Documentation files (per work ethics rule #1)
+# Ignore all .md files except README.md
+*.md
+!README.md
