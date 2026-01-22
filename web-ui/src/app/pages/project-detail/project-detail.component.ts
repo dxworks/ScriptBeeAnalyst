@@ -3,7 +3,6 @@ import { ActivatedRoute, Router } from '@angular/router';
 import { ProjectService } from '../../core/services/project.service';
 import { FileService } from '../../core/services/file.service';
 import { ToastService } from '../../core/services/toast.service';
-import { DataServerService } from '../../core/services/data-server.service';
 import {
   Project,
   ProjectStatus,
@@ -92,8 +91,7 @@ export class ProjectDetailComponent implements OnInit, OnDestroy {
     private router: Router,
     public projectService: ProjectService,
     public fileService: FileService,
-    private toastService: ToastService,
-    private dataServerService: DataServerService
+    private toastService: ToastService
   ) {
     // Load files when project changes
     effect(() => {
@@ -456,37 +454,28 @@ export class ProjectDetailComponent implements OnInit, OnDestroy {
     }
   }
 
-  // Process data - call data-server to build the project graph
+  // Process data - update status to 'processing', queue processor will handle build
   async onProcessData(): Promise<void> {
     const project = this.selectedProject();
     if (!project || this.processingData()) return;
 
     this.processingData.set(true);
 
-    // First, update status to 'processing' in the database
-    // This will trigger a realtime update to reflect in the UI
+    // Update status to 'processing' in the database
+    // The data-server queue processor will detect this and build the graph
     const statusUpdate = await this.projectService.updateProjectStatus(project.id, 'processing');
+
+    this.processingData.set(false);
+
     if (!statusUpdate) {
       this.toastService.error('Failed to update project status');
-      this.processingData.set(false);
       return;
     }
 
-    // Then call data-server to build the graph
-    const buildResult = await this.dataServerService.buildProject(project.id);
-    this.processingData.set(false);
+    // Show info toast to let user know processing started
+    this.toastService.info('Project queued for processing...');
 
-    if (buildResult.success) {
-      // Status will be updated to 'ready' or 'error' by the data-server via realtime
-      // Show success message if available
-      if (buildResult.message) {
-        this.toastService.success(buildResult.message);
-      }
-    } else {
-      // If data-server call failed, show error and update status to 'error'
-      this.toastService.error(buildResult.error || 'Failed to build project graph');
-      await this.projectService.updateProjectStatus(project.id, 'error');
-    }
+    // Status will be updated to 'ready' or 'error' by the data-server queue processor via realtime
   }
 
   async onRetryProcessing(): Promise<void> {
