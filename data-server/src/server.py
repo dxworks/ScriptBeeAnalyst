@@ -38,7 +38,6 @@ def load_graph_from_supabase(user_id: str, project_id: str):
         Dict with 'git', 'jira', 'github' keys containing project objects
     """
     storage_path = f"{user_id}/{project_id}/graph.pkl"
-    logger.info(f"Downloading pickle from Supabase Storage: {storage_path}")
 
     if not user_id or not project_id:
         raise ValueError("user_id and project_id are required")
@@ -64,14 +63,6 @@ def load_graph_from_supabase(user_id: str, project_id: str):
     if missing_keys:
         raise ValueError(f"Pickle missing required keys: {missing_keys}")
 
-    size_mb = len(pickle_bytes) / (1024 * 1024)
-    logger.info("Pickle loaded successfully from Supabase")
-    logger.info(f"Storage path: {storage_path}")
-    logger.info(f"Size: {size_mb:.2f} MB")
-    logger.info(f"Git commits: {len(graph_data['git'].git_commit_registry.all)}")
-    logger.info(f"JIRA issues: {len(graph_data['jira'].issue_registry.all)}")
-    logger.info(f"GitHub PRs: {len(graph_data['github'].pull_request_registry.all)}")
-
     return graph_data
 
 
@@ -79,10 +70,7 @@ def load_graph_from_supabase(user_id: str, project_id: str):
 async def lifespan(app: FastAPI):
     """Application lifespan manager - server starts with no data loaded."""
     global graph_data, current_project_id, current_user_id
-    logger.info("Starting data-server")
-    logger.info("Server ready at http://localhost:8001")
-    logger.info("API docs: http://localhost:8001/docs")
-    logger.info("Use POST /projects/{id}/load to load project data")
+    logger.info("Data server started on port 8001")
 
     try:
         yield
@@ -239,10 +227,6 @@ async def load_project(project_id: str):
         project_name = project["name"]
         project_status = project["status"]
 
-        logger.info(f"Project: {project_name}")
-        logger.info(f"User ID: {user_id}")
-        logger.info(f"Status: {project_status}")
-
         # Check if project is ready
         if project_status != "ready":
             return JSONResponse(
@@ -259,7 +243,6 @@ async def load_project(project_id: str):
 
     # Unload current project if any
     if current_project_id:
-        logger.info(f"Unloading previous project: {current_project_id}")
         graph_data.clear()
 
     # Download and load pickle from Supabase Storage
@@ -270,7 +253,7 @@ async def load_project(project_id: str):
         current_project_id = project_id
         current_user_id = user_id
 
-        logger.info("Project loaded successfully")
+        logger.info(f"Project {project_id} loaded into memory")
 
         return {
             "message": "Project loaded successfully",
