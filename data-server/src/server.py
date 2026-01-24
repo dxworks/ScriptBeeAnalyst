@@ -4,6 +4,7 @@ import pickle
 import traceback
 from pathlib import Path
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from fastapi.responses import JSONResponse, Response
 from contextlib import asynccontextmanager
@@ -167,6 +168,18 @@ Pre-built graph pickle in Supabase Storage bucket `project-graphs` at path:
     lifespan=lifespan,
     docs_url="/docs",
     redoc_url="/redoc",
+)
+
+# Add CORS middleware to allow requests from web UI
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[
+        "http://localhost:4200",  # Angular dev server
+        "http://127.0.0.1:4200",  # Alternative localhost
+    ],
+    allow_credentials=True,
+    allow_methods=["*"],  # Allow all methods (GET, POST, DELETE, etc.)
+    allow_headers=["*"],  # Allow all headers
 )
 
 
