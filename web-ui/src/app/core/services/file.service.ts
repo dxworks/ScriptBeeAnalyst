@@ -9,7 +9,7 @@ import {
 } from '../models/project.model';
 
 const BUCKET_NAME = 'serialized-files';
-const MAX_FILE_SIZE_MB = 50; // Configurable - Supabase default is 50MB
+const MAX_FILE_SIZE_MB = 500; // Configurable - matches Supabase storage limit
 const MAX_FILE_SIZE_BYTES = MAX_FILE_SIZE_MB * 1024 * 1024;
 
 export interface FileValidationResult {
