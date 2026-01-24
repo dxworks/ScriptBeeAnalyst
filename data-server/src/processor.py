@@ -17,8 +17,10 @@ Usage:
 
 import pickle
 import sys
+import time
+import argparse
 from pathlib import Path
-from typing import Dict
+from typing import Dict, Optional
 
 # Add parent directory to path if running as script
 if __name__ == "__main__" and __package__ is None:
@@ -33,6 +35,64 @@ from src.jira_miner.linker.transformers import JiraProjectTransformer
 from src.github_miner.reader_dto.loader import GithubJsonLoader
 from src.github_miner.linker.transformers import GitHubProjectTransformer
 from src.common.project_linkers import ProjectLinker
+
+
+def download_serialized_files_from_supabase(project_id: str) -> Dict[str, Path]:
+    """
+    Downloads serialized files from Supabase Storage for a given project.
+
+    Args:
+        project_id: Project UUID to download files for
+
+    Returns:
+        Dict mapping file_type ('git', 'github', 'jira') to local temp file paths
+    """
+    print(f"\n📥 Downloading serialized files from Supabase Storage...")
+    print(f"   - Project ID: {project_id}")
+
+    if not project_id:
+        raise ValueError("project_id must be provided")
+
+    # Initialize Supabase client with service key (bypasses RLS)
+    supabase: Client = create_client(SUPABASE_URL, SUPABASE_SERVICE_KEY)
+
+    # Query serialized_files table for this project
+    response = supabase.table("serialized_files").select("*").eq("project_id", project_id).execute()
+
+    if not response.data:
+        raise ValueError(f"No serialized files found for project_id: {project_id}")
+
+    print(f"   - Found {len(response.data)} file(s)")
+
+    downloaded_files = {}
+    temp_dir = Path("/tmp/processor_downloads")
+    temp_dir.mkdir(parents=True, exist_ok=True)
+
+    for file_record in response.data:
+        file_type = file_record["file_type"]
+        storage_path = file_record["storage_path"]
+        file_name = file_record["name"]
+
+        print(f"   - Downloading {file_type}: {file_name}...")
+
+        # Download from Supabase Storage
+        try:
+            file_bytes = supabase.storage.from_("serialized-files").download(storage_path)
+        except Exception as e:
+            raise FileNotFoundError(f"Failed to download {storage_path}: {e}")
+
+        # Save to temp directory
+        temp_file_path = temp_dir / f"{file_type}_{project_id}{Path(file_name).suffix}"
+        with open(temp_file_path, "wb") as f:
+            f.write(file_bytes)
+
+        size_mb = len(file_bytes) / (1024 * 1024)
+        print(f"     ✓ Downloaded {size_mb:.2f} MB to {temp_file_path}")
+
+        downloaded_files[file_type] = temp_file_path
+
+    print(f"✅ All files downloaded successfully!")
+    return downloaded_files
 
 
 def build_graph_from_local_files() -> Dict:
@@ -90,6 +150,75 @@ def build_graph_from_local_files() -> Dict:
     }
 
 
+def build_graph_from_downloaded_files(file_paths: Dict[str, Path]) -> Dict:
+    """
+    Builds the project graph from downloaded serialized files and links them together.
+
+    Args:
+        file_paths: Dict mapping file_type to file path (e.g., {'git': Path(...), 'jira': Path(...)})
+
+    Returns:
+        Dict with 'git', 'jira', 'github' keys containing project objects
+    """
+    print(f"\n📊 Building graph from downloaded files...")
+
+    git_project = None
+    jira_project = None
+    github_project = None
+    jira_data = None
+
+    # Load Git data if available
+    if "git" in file_paths:
+        git_file = file_paths["git"]
+        print(f"  - Loading Git data from {git_file.name}...")
+        with open(git_file, "r", encoding="utf-8") as f:
+            git_log_dto = IGLogReader().read(f)
+        git_project = GitProjectTransformer(
+            git_log_dto,
+            name=git_file.stem,
+            compute_annotated_lines=False,  # no blame
+        ).transform()
+
+    # Load JIRA data if available
+    if "jira" in file_paths:
+        jira_file = file_paths["jira"]
+        print(f"  - Loading JIRA data from {jira_file.name}...")
+        jira_loader = JiraJsonLoader(str(jira_file))
+        jira_data = jira_loader.load()
+        jira_project = JiraProjectTransformer(jira_data, name="Jira Project").transform()
+
+    # Load GitHub data if available
+    if "github" in file_paths:
+        github_file = file_paths["github"]
+        print(f"  - Loading GitHub data from {github_file.name}...")
+        github_loader = GithubJsonLoader(str(github_file))
+        github_data = github_loader.load()
+        github_project = GitHubProjectTransformer(github_data, name="GitHub Project").transform()
+
+    # Link projects together (only if both projects exist)
+    print("🔗 Linking projects...")
+    if github_project and jira_project and jira_data:
+        ProjectLinker.link_projects(github_project, jira_project, jira_data)
+    if jira_project and git_project:
+        ProjectLinker.link_projects(jira_project, git_project)
+    if github_project and git_project:
+        ProjectLinker.link_projects(github_project, git_project)
+
+    print("✅ Graph built successfully!")
+    if git_project:
+        print(f"   - Git commits: {len(git_project.git_commit_registry.all)}")
+    if jira_project:
+        print(f"   - JIRA issues: {len(jira_project.issue_registry.all)}")
+    if github_project:
+        print(f"   - GitHub PRs: {len(github_project.pull_request_registry.all)}")
+
+    return {
+        "git": git_project,
+        "jira": jira_project,
+        "github": github_project,
+    }
+
+
 def save_pickle_to_disk(graph_data: Dict, output_path: Path) -> None:
     """
     Serializes graph data to pickle file on local filesystem.
@@ -114,6 +243,43 @@ def save_pickle_to_disk(graph_data: Dict, output_path: Path) -> None:
     print(f"✅ Pickle saved successfully!")
     print(f"   - Path: {output_path}")
     print(f"   - Size: {size_mb:.2f} MB ({size_bytes:,} bytes)")
+
+
+def update_project_status(project_id: str, status: str) -> None:
+    """
+    Updates the status of a project in the database.
+
+    Args:
+        project_id: Project UUID
+        status: New status ('processing', 'ready', 'error', etc.)
+    """
+    supabase: Client = create_client(SUPABASE_URL, SUPABASE_SERVICE_KEY)
+
+    try:
+        supabase.table("projects").update({
+            "status": status,
+            "updated_at": "now()"
+        }).eq("id", project_id).execute()
+        print(f"   - Updated project status to: {status}")
+    except Exception as e:
+        print(f"   ⚠️  Failed to update project status: {e}")
+
+
+def get_next_project_to_process() -> Optional[Dict]:
+    """
+    Queries database for the next project with status='processing'.
+    Returns oldest project first (by updated_at).
+
+    Returns:
+        Project dict or None if no projects to process
+    """
+    supabase: Client = create_client(SUPABASE_URL, SUPABASE_SERVICE_KEY)
+
+    response = supabase.table("projects").select("*").eq("status", "processing").order("updated_at").limit(1).execute()
+
+    if response.data and len(response.data) > 0:
+        return response.data[0]
+    return None
 
 
 def upload_pickle_to_supabase(pickle_path: Path, user_id: str, project_id: str) -> None:
@@ -168,42 +334,169 @@ def upload_pickle_to_supabase(pickle_path: Path, user_id: str, project_id: str) 
     print(f"   - Size: {size_mb:.2f} MB")
 
 
-def main():
-    """Main entry point for the processor."""
-    print("\n" + "="*70)
-    print("🔧 Graph Processor - Phase 3: Local Files → Supabase Storage")
-    print("="*70)
-    print()
+def process_project(project_id: str, user_id: str) -> bool:
+    """
+    Processes a single project: downloads files, builds graph, uploads pickle.
 
+    Args:
+        project_id: Project UUID to process
+        user_id: User UUID (for storage path)
+
+    Returns:
+        True if successful, False otherwise
+    """
     try:
-        # Step 1: Build graph from local test files
-        graph_data = build_graph_from_local_files()
+        print(f"\n{'='*70}")
+        print(f"📦 Processing Project: {project_id}")
+        print(f"{'='*70}\n")
 
-        # Step 2: Save to local filesystem
+        # Step 1: Update status to 'processing'
+        update_project_status(project_id, "processing")
+
+        # Step 2: Download serialized files from Supabase Storage
+        file_paths = download_serialized_files_from_supabase(project_id)
+
+        # Step 3: Build graph from downloaded files
+        graph_data = build_graph_from_downloaded_files(file_paths)
+
+        # Step 4: Save to local filesystem (temporary)
         output_path = Path("/tmp/pickles/graph.pkl")
         save_pickle_to_disk(graph_data, output_path)
 
-        # Step 3: Upload to Supabase Storage
-        upload_pickle_to_supabase(output_path, GRAPH_USER_ID, GRAPH_PROJECT_ID)
+        # Step 5: Upload to Supabase Storage
+        upload_pickle_to_supabase(output_path, user_id, project_id)
 
-        print()
-        print("="*70)
+        # Step 6: Update status to 'ready'
+        update_project_status(project_id, "ready")
+
+        print(f"\n{'='*70}")
         print("🎉 Processing complete!")
-        print("="*70)
-        print()
+        print(f"{'='*70}\n")
 
-        return 0
+        return True
 
     except Exception as e:
-        print()
-        print("="*70)
+        print(f"\n{'='*70}")
         print("❌ ERROR: Processing failed!")
-        print("="*70)
+        print(f"{'='*70}")
         print(f"\n{type(e).__name__}: {e}")
         import traceback
         traceback.print_exc()
         print()
-        return 1
+
+        # Update status to 'error'
+        try:
+            update_project_status(project_id, "error")
+        except:
+            pass
+
+        return False
+
+
+def run_once(project_id: Optional[str] = None) -> int:
+    """
+    Process one project and exit.
+
+    Args:
+        project_id: Specific project to process, or None to poll database
+
+    Returns:
+        Exit code (0 = success, 1 = failure)
+    """
+    if project_id:
+        # Process specific project
+        user_id = GRAPH_USER_ID
+        success = process_project(project_id, user_id)
+        return 0 if success else 1
+    else:
+        # Poll database for next project
+        project = get_next_project_to_process()
+        if not project:
+            print("ℹ️  No projects with status='processing' found.")
+            return 0
+
+        success = process_project(project["id"], project["user_id"])
+        return 0 if success else 1
+
+
+def run_loop(poll_interval: int = 60) -> int:
+    """
+    Continuously poll database and process projects.
+
+    Args:
+        poll_interval: Seconds to wait between polls
+
+    Returns:
+        Exit code (never returns in normal operation)
+    """
+    print("\n" + "="*70)
+    print("🔄 Graph Processor - Running in LOOP mode")
+    print(f"   Polling every {poll_interval} seconds for projects with status='processing'")
+    print("   Press Ctrl+C to stop")
+    print("="*70 + "\n")
+
+    try:
+        while True:
+            project = get_next_project_to_process()
+
+            if project:
+                print(f"✨ Found project to process: {project['name']} ({project['id']})")
+                process_project(project["id"], project["user_id"])
+            else:
+                print(f"⏳ No projects to process. Waiting {poll_interval}s...")
+
+            time.sleep(poll_interval)
+
+    except KeyboardInterrupt:
+        print("\n\n🛑 Stopped by user (Ctrl+C)")
+        return 0
+
+
+def main():
+    """Main entry point for the processor."""
+    parser = argparse.ArgumentParser(
+        description="ScriptBeeAssistant Graph Processor - Builds graph from serialized files and uploads to Supabase",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+
+    parser.add_argument(
+        "--once",
+        action="store_true",
+        help="Process one project and exit (default mode)",
+    )
+
+    parser.add_argument(
+        "--loop",
+        action="store_true",
+        help="Run continuously, polling database every 60 seconds",
+    )
+
+    parser.add_argument(
+        "--project-id",
+        type=str,
+        help="Process specific project ID (overrides polling)",
+    )
+
+    parser.add_argument(
+        "--poll-interval",
+        type=int,
+        default=60,
+        help="Polling interval in seconds (default: 60, only used with --loop)",
+    )
+
+    args = parser.parse_args()
+
+    # Default to --once if no mode specified
+    if not args.once and not args.loop:
+        args.once = True
+
+    # Execute based on mode
+    if args.loop:
+        return run_loop(args.poll_interval)
+    else:
+        # For backward compatibility, use GRAPH_PROJECT_ID if no --project-id specified
+        project_id = args.project_id or GRAPH_PROJECT_ID
+        return run_once(project_id)
 
 
 if __name__ == "__main__":
