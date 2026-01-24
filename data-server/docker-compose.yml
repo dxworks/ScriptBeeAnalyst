@@ -15,6 +15,8 @@ services:
       # Graph processor configuration (Phase 3+)
       - GRAPH_USER_ID=${GRAPH_USER_ID}
       - GRAPH_PROJECT_ID=${GRAPH_PROJECT_ID}
+      # Logging configuration
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
     volumes:
       # Mount source for development (hot reload)
       - ./src:/app/src:ro
@@ -36,6 +38,8 @@ services:
       - GRAPH_USER_ID=${GRAPH_USER_ID}
       - GRAPH_PROJECT_ID=${GRAPH_PROJECT_ID}
       - RECURSION_LIMIT=${RECURSION_LIMIT:-50000}
+      # Logging configuration
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
       # Force Python to unbuffer output for Docker logs
       - PYTHONUNBUFFERED=1
     volumes:

@@ -12,6 +12,9 @@ import matplotlib.pyplot as plt
 
 from supabase import create_client, Client
 from src.config import SUPABASE_URL, SUPABASE_SERVICE_KEY, GRAPH_USER_ID, GRAPH_PROJECT_ID
+from src.logger import get_logger
+
+logger = get_logger("data-server")
 
 
 class CodeRequest(BaseModel):
@@ -35,7 +38,7 @@ def load_graph_from_supabase(user_id: str, project_id: str):
         Dict with 'git', 'jira', 'github' keys containing project objects
     """
     storage_path = f"{user_id}/{project_id}/graph.pkl"
-    print(f"📂 Downloading pickle from Supabase Storage: {storage_path}")
+    logger.info(f"Downloading pickle from Supabase Storage: {storage_path}")
 
     if not user_id or not project_id:
         raise ValueError("GRAPH_USER_ID and GRAPH_PROJECT_ID must be set in .env file")
@@ -62,12 +65,12 @@ def load_graph_from_supabase(user_id: str, project_id: str):
         raise ValueError(f"Pickle missing required keys: {missing_keys}")
 
     size_mb = len(pickle_bytes) / (1024 * 1024)
-    print("✅ Pickle loaded successfully from Supabase!")
-    print(f"   - Storage path: {storage_path}")
-    print(f"   - Size: {size_mb:.2f} MB")
-    print(f"   - Git commits: {len(graph_data['git'].git_commit_registry.all)}")
-    print(f"   - JIRA issues: {len(graph_data['jira'].issue_registry.all)}")
-    print(f"   - GitHub PRs: {len(graph_data['github'].pull_request_registry.all)}")
+    logger.info("Pickle loaded successfully from Supabase")
+    logger.info(f"Storage path: {storage_path}")
+    logger.info(f"Size: {size_mb:.2f} MB")
+    logger.info(f"Git commits: {len(graph_data['git'].git_commit_registry.all)}")
+    logger.info(f"JIRA issues: {len(graph_data['jira'].issue_registry.all)}")
+    logger.info(f"GitHub PRs: {len(graph_data['github'].pull_request_registry.all)}")
 
     return graph_data
 
@@ -76,39 +79,27 @@ def load_graph_from_supabase(user_id: str, project_id: str):
 async def lifespan(app: FastAPI):
     """Application lifespan manager - optionally loads graph from Supabase Storage at startup."""
     global graph_data, current_project_id, current_user_id
-    print("\n" + "="*70)
-    print("🚀 Starting data-server in STANDALONE mode...")
-    print("="*70)
+    logger.info("Starting data-server in STANDALONE mode")
 
     # Optional: Load graph if GRAPH_PROJECT_ID is set
     if GRAPH_USER_ID and GRAPH_PROJECT_ID:
-        print("📦 Loading project data from Supabase Storage...")
-        print()
+        logger.info("Loading project data from Supabase Storage")
         try:
             graph_data = load_graph_from_supabase(GRAPH_USER_ID, GRAPH_PROJECT_ID)
             current_project_id = GRAPH_PROJECT_ID
             current_user_id = GRAPH_USER_ID
-            print()
-            print("="*70)
-            print("✅ Server ready! Data loaded and available at http://localhost:8001")
-            print("📖 API docs: http://localhost:8001/docs")
-            print("="*70 + "\n")
+            logger.info("Server ready - Data loaded and available at http://localhost:8001")
+            logger.info("API docs: http://localhost:8001/docs")
         except FileNotFoundError as e:
-            print(f"⚠️  Warning: {e}")
-            print("   Server will start without pre-loaded data.")
-            print("   You can load projects later via API endpoints.")
-            print()
-            print("="*70)
-            print("✅ Server ready at http://localhost:8001")
-            print("📖 API docs: http://localhost:8001/docs")
-            print("="*70 + "\n")
+            logger.warning(f"Warning: {e}")
+            logger.warning("Server will start without pre-loaded data")
+            logger.warning("You can load projects later via API endpoints")
+            logger.info("Server ready at http://localhost:8001")
+            logger.info("API docs: http://localhost:8001/docs")
     else:
-        print("ℹ️  No GRAPH_PROJECT_ID set - starting without pre-loaded data")
-        print()
-        print("="*70)
-        print("✅ Server ready at http://localhost:8001")
-        print("📖 API docs: http://localhost:8001/docs")
-        print("="*70 + "\n")
+        logger.info("No GRAPH_PROJECT_ID set - starting without pre-loaded data")
+        logger.info("Server ready at http://localhost:8001")
+        logger.info("API docs: http://localhost:8001/docs")
 
     try:
         yield
@@ -116,7 +107,7 @@ async def lifespan(app: FastAPI):
         graph_data.clear()
         current_project_id = None
         current_user_id = None
-        print("🛑 Shutdown complete - graph cleared from memory.")
+        logger.info("Shutdown complete - graph cleared from memory")
 
 
 # =============================================================================
@@ -242,9 +233,7 @@ async def load_project(project_id: str):
     """
     global graph_data, current_project_id, current_user_id
 
-    print(f"\n{'='*70}")
-    print(f"📂 Loading project: {project_id}")
-    print(f"{'='*70}\n")
+    logger.info(f"Loading project: {project_id}")
 
     # Initialize Supabase client
     supabase: Client = create_client(SUPABASE_URL, SUPABASE_SERVICE_KEY)
@@ -264,9 +253,9 @@ async def load_project(project_id: str):
         project_name = project["name"]
         project_status = project["status"]
 
-        print(f"   - Project: {project_name}")
-        print(f"   - User ID: {user_id}")
-        print(f"   - Status: {project_status}")
+        logger.info(f"Project: {project_name}")
+        logger.info(f"User ID: {user_id}")
+        logger.info(f"Status: {project_status}")
 
         # Check if project is ready
         if project_status != "ready":
@@ -276,7 +265,7 @@ async def load_project(project_id: str):
             )
 
     except Exception as e:
-        print(f"❌ Failed to fetch project from database: {e}")
+        logger.error(f"Failed to fetch project from database: {e}")
         return JSONResponse(
             {"error": f"Failed to fetch project: {str(e)}"},
             status_code=500
@@ -284,7 +273,7 @@ async def load_project(project_id: str):
 
     # Unload current project if any
     if current_project_id:
-        print(f"\n🗑️  Unloading previous project: {current_project_id}")
+        logger.info(f"Unloading previous project: {current_project_id}")
         graph_data.clear()
 
     # Download and load pickle from Supabase Storage
@@ -295,9 +284,7 @@ async def load_project(project_id: str):
         current_project_id = project_id
         current_user_id = user_id
 
-        print(f"\n{'='*70}")
-        print(f"✅ Project loaded successfully!")
-        print(f"{'='*70}\n")
+        logger.info("Project loaded successfully")
 
         return {
             "message": "Project loaded successfully",
@@ -312,13 +299,13 @@ async def load_project(project_id: str):
         }
 
     except FileNotFoundError as e:
-        print(f"\n❌ Pickle file not found: {e}\n")
+        logger.error(f"Pickle file not found: {e}")
         return JSONResponse(
             {"error": str(e)},
             status_code=404
         )
     except Exception as e:
-        print(f"\n❌ Failed to load project: {e}\n")
+        logger.error(f"Failed to load project: {e}")
         return JSONResponse(
             {"error": f"Failed to load project: {str(e)}"},
             status_code=500
@@ -340,15 +327,13 @@ async def unload_project(project_id: str):
             status_code=400
         )
 
-    print(f"\n{'='*70}")
-    print(f"🗑️  Unloading project: {project_id}")
-    print(f"{'='*70}\n")
+    logger.info(f"Unloading project: {project_id}")
 
     graph_data.clear()
     current_project_id = None
     current_user_id = None
 
-    print(f"✅ Project unloaded successfully\n")
+    logger.info("Project unloaded successfully")
 
     return {"message": "Project unloaded successfully"}
 

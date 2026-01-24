@@ -28,7 +28,10 @@ if __name__ == "__main__" and __package__ is None:
 
 from supabase import create_client, Client
 from src.config import SUPABASE_URL, SUPABASE_SERVICE_KEY, GRAPH_USER_ID, GRAPH_PROJECT_ID, RECURSION_LIMIT
+from src.logger import get_logger
 from src.inspector_git.reader.iglog.readers.ig_log_reader import IGLogReader
+
+logger = get_logger("processor")
 from src.inspector_git.linker.transformers import GitProjectTransformer
 from src.jira_miner.reader_dto.loader import JiraJsonLoader
 from src.jira_miner.linker.transformers import JiraProjectTransformer
@@ -47,8 +50,8 @@ def download_serialized_files_from_supabase(project_id: str) -> Dict[str, Path]:
     Returns:
         Dict mapping file_type ('git', 'github', 'jira') to local temp file paths
     """
-    print(f"\n📥 Downloading serialized files from Supabase Storage...")
-    print(f"   - Project ID: {project_id}")
+    logger.info("Downloading serialized files from Supabase Storage")
+    logger.info(f"Project ID: {project_id}")
 
     if not project_id:
         raise ValueError("project_id must be provided")
@@ -62,7 +65,7 @@ def download_serialized_files_from_supabase(project_id: str) -> Dict[str, Path]:
     if not response.data:
         raise ValueError(f"No serialized files found for project_id: {project_id}")
 
-    print(f"   - Found {len(response.data)} file(s)")
+    logger.info(f"Found {len(response.data)} file(s)")
 
     downloaded_files = {}
     temp_dir = Path("/tmp/processor_downloads")
@@ -73,7 +76,7 @@ def download_serialized_files_from_supabase(project_id: str) -> Dict[str, Path]:
         storage_path = file_record["storage_path"]
         file_name = file_record["name"]
 
-        print(f"   - Downloading {file_type}: {file_name}...")
+        logger.info(f"Downloading {file_type}: {file_name}")
 
         # Download from Supabase Storage
         try:
@@ -87,11 +90,11 @@ def download_serialized_files_from_supabase(project_id: str) -> Dict[str, Path]:
             f.write(file_bytes)
 
         size_mb = len(file_bytes) / (1024 * 1024)
-        print(f"     ✓ Downloaded {size_mb:.2f} MB to {temp_file_path}")
+        logger.info(f"Downloaded {size_mb:.2f} MB to {temp_file_path}")
 
         downloaded_files[file_type] = temp_file_path
 
-    print(f"✅ All files downloaded successfully!")
+    logger.info("All files downloaded successfully")
     return downloaded_files
 
 
@@ -104,11 +107,11 @@ def build_graph_from_local_files() -> Dict:
     """
     base_path = Path(__file__).parent.parent / "test-input"
 
-    print(f"📂 Loading files from: {base_path}")
+    logger.info(f"Loading files from: {base_path}")
 
     # InspectorGit
     iglog_file = base_path / "inspector-git" / "zeppelin.iglog"
-    print(f"  - Loading Git data from {iglog_file.name}...")
+    logger.info(f"Loading Git data from {iglog_file.name}")
     with open(iglog_file, "r", encoding="utf-8") as f:
         git_log_dto = IGLogReader().read(f)
 
@@ -120,28 +123,28 @@ def build_graph_from_local_files() -> Dict:
 
     # Jira
     jira_file = base_path / "jira-miner" / "ZEPPELIN-detailed-issues.json"
-    print(f"  - Loading JIRA data from {jira_file.name}...")
+    logger.info(f"  - Loading JIRA data from {jira_file.name}...")
     jira_loader = JiraJsonLoader(str(jira_file))
     jira_data = jira_loader.load()
     jira_project = JiraProjectTransformer(jira_data, name="Jira Project").transform()
 
     # GitHub
     github_file = base_path / "github-miner" / "githubProject.json"
-    print(f"  - Loading GitHub data from {github_file.name}...")
+    logger.info(f"  - Loading GitHub data from {github_file.name}...")
     github_loader = GithubJsonLoader(str(github_file))
     github_data = github_loader.load()
     github_project = GitHubProjectTransformer(github_data, name="GitHub Project").transform()
 
     # Link projects together
-    print("🔗 Linking projects...")
+    logger.info("Linking projects")
     ProjectLinker.link_projects(github_project, jira_project, jira_data)
     ProjectLinker.link_projects(jira_project, git_project)
     ProjectLinker.link_projects(github_project, git_project)
 
-    print("✅ Graph built successfully!")
-    print(f"   - Git commits: {len(git_project.git_commit_registry.all)}")
-    print(f"   - JIRA issues: {len(jira_project.issue_registry.all)}")
-    print(f"   - GitHub PRs: {len(github_project.pull_request_registry.all)}")
+    logger.info("Graph built successfully")
+    logger.info(f"Git commits: {len(git_project.git_commit_registry.all)}")
+    logger.info(f"JIRA issues: {len(jira_project.issue_registry.all)}")
+    logger.info(f"GitHub PRs: {len(github_project.pull_request_registry.all)}")
 
     return {
         "git": git_project,
@@ -160,7 +163,7 @@ def build_graph_from_downloaded_files(file_paths: Dict[str, Path]) -> Dict:
     Returns:
         Dict with 'git', 'jira', 'github' keys containing project objects
     """
-    print(f"\n📊 Building graph from downloaded files...")
+    logger.info("Building graph from downloaded files")
 
     git_project = None
     jira_project = None
@@ -170,7 +173,7 @@ def build_graph_from_downloaded_files(file_paths: Dict[str, Path]) -> Dict:
     # Load Git data if available
     if "git" in file_paths:
         git_file = file_paths["git"]
-        print(f"  - Loading Git data from {git_file.name}...")
+        logger.info(f"Loading Git data from {git_file.name}")
         with open(git_file, "r", encoding="utf-8") as f:
             git_log_dto = IGLogReader().read(f)
         git_project = GitProjectTransformer(
@@ -182,7 +185,7 @@ def build_graph_from_downloaded_files(file_paths: Dict[str, Path]) -> Dict:
     # Load JIRA data if available
     if "jira" in file_paths:
         jira_file = file_paths["jira"]
-        print(f"  - Loading JIRA data from {jira_file.name}...")
+        logger.info(f"Loading JIRA data from {jira_file.name}")
         jira_loader = JiraJsonLoader(str(jira_file))
         jira_data = jira_loader.load()
         jira_project = JiraProjectTransformer(jira_data, name="Jira Project").transform()
@@ -190,13 +193,13 @@ def build_graph_from_downloaded_files(file_paths: Dict[str, Path]) -> Dict:
     # Load GitHub data if available
     if "github" in file_paths:
         github_file = file_paths["github"]
-        print(f"  - Loading GitHub data from {github_file.name}...")
+        logger.info(f"Loading GitHub data from {github_file.name}")
         github_loader = GithubJsonLoader(str(github_file))
         github_data = github_loader.load()
         github_project = GitHubProjectTransformer(github_data, name="GitHub Project").transform()
 
     # Link projects together (only if both projects exist)
-    print("🔗 Linking projects...")
+    logger.info("Linking projects")
     if github_project and jira_project and jira_data:
         ProjectLinker.link_projects(github_project, jira_project, jira_data)
     if jira_project and git_project:
@@ -204,13 +207,13 @@ def build_graph_from_downloaded_files(file_paths: Dict[str, Path]) -> Dict:
     if github_project and git_project:
         ProjectLinker.link_projects(github_project, git_project)
 
-    print("✅ Graph built successfully!")
+    logger.info("Graph built successfully")
     if git_project:
-        print(f"   - Git commits: {len(git_project.git_commit_registry.all)}")
+        logger.info(f"Git commits: {len(git_project.git_commit_registry.all)}")
     if jira_project:
-        print(f"   - JIRA issues: {len(jira_project.issue_registry.all)}")
+        logger.info(f"JIRA issues: {len(jira_project.issue_registry.all)}")
     if github_project:
-        print(f"   - GitHub PRs: {len(github_project.pull_request_registry.all)}")
+        logger.info(f"GitHub PRs: {len(github_project.pull_request_registry.all)}")
 
     return {
         "git": git_project,
@@ -227,7 +230,7 @@ def save_pickle_to_disk(graph_data: Dict, output_path: Path) -> None:
         graph_data: Dict containing 'git', 'jira', 'github' project objects
         output_path: Path where pickle file should be saved
     """
-    print(f"\n💾 Saving pickle to: {output_path}")
+    logger.info(f"Saving pickle to: {output_path}")
 
     # Ensure parent directory exists
     output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -240,9 +243,9 @@ def save_pickle_to_disk(graph_data: Dict, output_path: Path) -> None:
     size_bytes = output_path.stat().st_size
     size_mb = size_bytes / (1024 * 1024)
 
-    print(f"✅ Pickle saved successfully!")
-    print(f"   - Path: {output_path}")
-    print(f"   - Size: {size_mb:.2f} MB ({size_bytes:,} bytes)")
+    logger.info("Pickle saved successfully")
+    logger.info(f"Path: {output_path}")
+    logger.info(f"Size: {size_mb:.2f} MB ({size_bytes:,} bytes)")
 
 
 def update_project_status(project_id: str, status: str) -> None:
@@ -260,9 +263,9 @@ def update_project_status(project_id: str, status: str) -> None:
             "status": status,
             "updated_at": "now()"
         }).eq("id", project_id).execute()
-        print(f"   - Updated project status to: {status}")
+        logger.info(f"Updated project status to: {status}")
     except Exception as e:
-        print(f"   ⚠️  Failed to update project status: {e}")
+        logger.warning(f"Failed to update project status: {e}")
 
 
 def get_next_project_to_process() -> Optional[Dict]:
@@ -291,7 +294,7 @@ def upload_pickle_to_supabase(pickle_path: Path, user_id: str, project_id: str) 
         user_id: User UUID for storage path
         project_id: Project UUID for storage path
     """
-    print(f"\n☁️  Uploading pickle to Supabase Storage...")
+    logger.info("Uploading pickle to Supabase Storage")
 
     if not user_id or not project_id:
         raise ValueError("GRAPH_USER_ID and GRAPH_PROJECT_ID must be set in .env file")
@@ -302,8 +305,8 @@ def upload_pickle_to_supabase(pickle_path: Path, user_id: str, project_id: str) 
     # Storage path: {user_id}/{project_id}/graph.pkl
     storage_path = f"{user_id}/{project_id}/graph.pkl"
 
-    print(f"   - Target path: {storage_path}")
-    print(f"   - Bucket: project-graphs")
+    logger.info(f"Target path: {storage_path}")
+    logger.info("Bucket: project-graphs")
 
     # Read pickle file
     with open(pickle_path, "rb") as f:
@@ -319,7 +322,7 @@ def upload_pickle_to_supabase(pickle_path: Path, user_id: str, project_id: str) 
     except Exception as e:
         # If file exists, try update instead
         if "already exists" in str(e).lower():
-            print(f"   - File exists, updating...")
+            logger.info("File exists, updating")
             supabase.storage.from_("project-graphs").update(
                 path=storage_path,
                 file=pickle_bytes,
@@ -329,9 +332,9 @@ def upload_pickle_to_supabase(pickle_path: Path, user_id: str, project_id: str) 
             raise
 
     size_mb = len(pickle_bytes) / (1024 * 1024)
-    print(f"✅ Pickle uploaded successfully!")
-    print(f"   - Storage path: {storage_path}")
-    print(f"   - Size: {size_mb:.2f} MB")
+    logger.info("Pickle uploaded successfully")
+    logger.info(f"Storage path: {storage_path}")
+    logger.info(f"Size: {size_mb:.2f} MB")
 
 
 def process_project(project_id: str, user_id: str) -> bool:
@@ -346,9 +349,7 @@ def process_project(project_id: str, user_id: str) -> bool:
         True if successful, False otherwise
     """
     try:
-        print(f"\n{'='*70}")
-        print(f"📦 Processing Project: {project_id}")
-        print(f"{'='*70}\n")
+        logger.info(f"Processing Project: {project_id}")
 
         # Step 1: Update status to 'processing'
         update_project_status(project_id, "processing")
@@ -369,20 +370,15 @@ def process_project(project_id: str, user_id: str) -> bool:
         # Step 6: Update status to 'ready'
         update_project_status(project_id, "ready")
 
-        print(f"\n{'='*70}")
-        print("🎉 Processing complete!")
-        print(f"{'='*70}\n")
+        logger.info("Processing complete")
 
         return True
 
     except Exception as e:
-        print(f"\n{'='*70}")
-        print("❌ ERROR: Processing failed!")
-        print(f"{'='*70}")
-        print(f"\n{type(e).__name__}: {e}")
+        logger.error("ERROR: Processing failed")
+        logger.error(f"{type(e).__name__}: {e}")
         import traceback
         traceback.print_exc()
-        print()
 
         # Update status to 'error'
         try:
@@ -405,7 +401,7 @@ def run_once(project_id: str) -> int:
     """
     user_id = GRAPH_USER_ID
     if not user_id:
-        print("❌ ERROR: GRAPH_USER_ID environment variable not set")
+        logger.error("ERROR: GRAPH_USER_ID environment variable not set")
         return 1
 
     success = process_project(project_id, user_id)
@@ -422,26 +418,24 @@ def run_loop(poll_interval: int = 60) -> int:
     Returns:
         Exit code (never returns in normal operation)
     """
-    print("\n" + "="*70)
-    print("🔄 Graph Processor - Running in LOOP mode")
-    print(f"   Polling every {poll_interval} seconds for projects with status='processing'")
-    print("   Press Ctrl+C to stop")
-    print("="*70 + "\n")
+    logger.info("Graph Processor - Running in LOOP mode")
+    logger.info(f"Polling every {poll_interval} seconds for projects with status='processing'")
+    logger.info("Press Ctrl+C to stop")
 
     try:
         while True:
             project = get_next_project_to_process()
 
             if project:
-                print(f"✨ Found project to process: {project['name']} ({project['id']})")
+                logger.info(f"Found project to process: {project['name']} ({project['id']})")
                 process_project(project["id"], project["user_id"])
             else:
-                print(f"⏳ No projects to process. Waiting {poll_interval}s...")
+                logger.info(f"No projects to process. Waiting {poll_interval}s")
 
             time.sleep(poll_interval)
 
     except KeyboardInterrupt:
-        print("\n\n🛑 Stopped by user (Ctrl+C)")
+        logger.info("Stopped by user (Ctrl+C)")
         return 0
 
 
@@ -449,7 +443,7 @@ def main():
     """Main entry point for the processor."""
     # Increase recursion limit for large graph pickling
     sys.setrecursionlimit(RECURSION_LIMIT)
-    print(f"🔧 Python recursion limit set to: {RECURSION_LIMIT}")
+    logger.info(f"Python recursion limit set to: {RECURSION_LIMIT}")
 
     parser = argparse.ArgumentParser(
         description="ScriptBeeAssistant Graph Processor - Builds graph from serialized files and uploads to Supabase",
@@ -483,8 +477,8 @@ Modes:
         # Default mode: use GRAPH_PROJECT_ID from environment
         project_id = GRAPH_PROJECT_ID
         if not project_id:
-            print("❌ ERROR: GRAPH_PROJECT_ID environment variable not set")
-            print("   Set GRAPH_PROJECT_ID in .env file or use --loop mode")
+            logger.error("ERROR: GRAPH_PROJECT_ID environment variable not set")
+            logger.error("Set GRAPH_PROJECT_ID in .env file or use --loop mode")
             return 1
         return run_once(project_id)
 
