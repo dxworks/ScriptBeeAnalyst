@@ -406,15 +406,19 @@ class GitProjectTransformer:
 
     def transform(self) -> GitProject:
         project = GitProject(name = self.name)
-        LOG.info("Creating GIT project %s", self.name)
+
+        # DISABLED: Logging commit processing for inspector git processing/loading "bar" - uncomment for debugging
+        # LOG.info("Creating GIT project %s", self.name)
+
         commit_no = len(self.git_log_dto.commits)
         for index, commit_dto in enumerate(self.git_log_dto.commits):
-            LOG.info(
-                "Creating commit %s / %s (%s%%)\r",
-                index + 1,
-                commit_no,
-                (index + 1) * 100 // commit_no,
-            )
+            # DISABLED: Logging commit processing for inspector git processing/loading "bar" - uncomment for debugging
+            # LOG.info(
+            #     "Creating commit %s / %s (%s%%)\r",
+            #     index + 1,
+            #     commit_no,
+            #     (index + 1) * 100 // commit_no,
+            # )
             CommitTransformer.add_to_project(
                 commit_dto, project, self.compute_annotated_lines, self.change_factory
             )
@@ -423,7 +427,9 @@ class GitProjectTransformer:
         if first_commit:
             self._compute_branch_ids(first_commit)
 
-        LOG.info("Done creating GIT project %s", self.name)
+        # DISABLED: Logging commit processing for inspector git processing/loading "bar" - uncomment for debugging
+        # LOG.info("Done creating GIT project %s", self.name)
+
         return project
 
     def _compute_branch_ids(self, commit: GitCommit) -> None:
