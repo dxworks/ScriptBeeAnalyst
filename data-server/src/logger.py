@@ -80,6 +80,11 @@ logging.basicConfig(
     force=True  # Override any existing config
 )
 
+# Suppress noisy third-party loggers
+# httpx and httpcore log every HTTP request at INFO level - suppress unless WARNING+
+logging.getLogger("httpx").setLevel(logging.WARNING)
+logging.getLogger("httpcore").setLevel(logging.WARNING)
+
 def get_logger(name: str) -> logging.Logger:
     """Return a logger with the given name."""
     logger = logging.getLogger(name)

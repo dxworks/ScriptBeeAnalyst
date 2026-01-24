@@ -48,7 +48,6 @@ def download_serialized_files_from_supabase(project_id: str) -> Dict[str, Path]:
         Dict mapping file_type ('git', 'github', 'jira') to local temp file paths
     """
     logger.info("Downloading serialized files from Supabase Storage")
-    logger.info(f"Project ID: {project_id}")
 
     if not project_id:
         raise ValueError("project_id must be provided")
@@ -62,18 +61,15 @@ def download_serialized_files_from_supabase(project_id: str) -> Dict[str, Path]:
     if not response.data:
         raise ValueError(f"No serialized files found for project_id: {project_id}")
 
-    logger.info(f"Found {len(response.data)} file(s)")
-
     downloaded_files = {}
     temp_dir = Path("/tmp/processor_downloads")
     temp_dir.mkdir(parents=True, exist_ok=True)
 
+    file_summaries = []
     for file_record in response.data:
         file_type = file_record["file_type"]
         storage_path = file_record["storage_path"]
         file_name = file_record["name"]
-
-        logger.info(f"Downloading {file_type}: {file_name}")
 
         # Download from Supabase Storage
         try:
@@ -86,12 +82,10 @@ def download_serialized_files_from_supabase(project_id: str) -> Dict[str, Path]:
         with open(temp_file_path, "wb") as f:
             f.write(file_bytes)
 
-        size_mb = len(file_bytes) / (1024 * 1024)
-        logger.info(f"Downloaded {size_mb:.2f} MB to {temp_file_path}")
-
         downloaded_files[file_type] = temp_file_path
+        file_summaries.append(f"{file_type} ({file_name})")
 
-    logger.info("All files downloaded successfully")
+    logger.info(f"Downloaded: {', '.join(file_summaries)}")
     return downloaded_files
 
 
@@ -170,7 +164,6 @@ def build_graph_from_downloaded_files(file_paths: Dict[str, Path]) -> Dict:
     # Load Git data if available
     if "git" in file_paths:
         git_file = file_paths["git"]
-        logger.info(f"Loading Git data from {git_file.name}")
         with open(git_file, "r", encoding="utf-8") as f:
             git_log_dto = IGLogReader().read(f)
         git_project = GitProjectTransformer(
@@ -182,7 +175,6 @@ def build_graph_from_downloaded_files(file_paths: Dict[str, Path]) -> Dict:
     # Load JIRA data if available
     if "jira" in file_paths:
         jira_file = file_paths["jira"]
-        logger.info(f"Loading JIRA data from {jira_file.name}")
         jira_loader = JiraJsonLoader(str(jira_file))
         jira_data = jira_loader.load()
         jira_project = JiraProjectTransformer(jira_data, name="Jira Project").transform()
@@ -190,13 +182,11 @@ def build_graph_from_downloaded_files(file_paths: Dict[str, Path]) -> Dict:
     # Load GitHub data if available
     if "github" in file_paths:
         github_file = file_paths["github"]
-        logger.info(f"Loading GitHub data from {github_file.name}")
         github_loader = GithubJsonLoader(str(github_file))
         github_data = github_loader.load()
         github_project = GitHubProjectTransformer(github_data, name="GitHub Project").transform()
 
     # Link projects together (only if both projects exist)
-    logger.info("Linking projects")
     if github_project and jira_project and jira_data:
         ProjectLinker.link_projects(github_project, jira_project, jira_data)
     if jira_project and git_project:
@@ -204,13 +194,16 @@ def build_graph_from_downloaded_files(file_paths: Dict[str, Path]) -> Dict:
     if github_project and git_project:
         ProjectLinker.link_projects(github_project, git_project)
 
-    logger.info("Graph built successfully")
+    # Build stats summary
+    stats = []
     if git_project:
-        logger.info(f"Git commits: {len(git_project.git_commit_registry.all)}")
+        stats.append(f"Git commits: {len(git_project.git_commit_registry.all)}")
     if jira_project:
-        logger.info(f"JIRA issues: {len(jira_project.issue_registry.all)}")
+        stats.append(f"JIRA issues: {len(jira_project.issue_registry.all)}")
     if github_project:
-        logger.info(f"GitHub PRs: {len(github_project.pull_request_registry.all)}")
+        stats.append(f"GitHub PRs: {len(github_project.pull_request_registry.all)}")
+
+    logger.info(f"Project built successfully - {', '.join(stats)}")
 
     return {
         "git": git_project,
@@ -227,22 +220,12 @@ def save_pickle_to_disk(graph_data: Dict, output_path: Path) -> None:
         graph_data: Dict containing 'git', 'jira', 'github' project objects
         output_path: Path where pickle file should be saved
     """
-    logger.info(f"Saving pickle to: {output_path}")
-
     # Ensure parent directory exists
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
     # Serialize with highest protocol for performance
     with open(output_path, "wb") as f:
         pickle.dump(graph_data, f, protocol=pickle.HIGHEST_PROTOCOL)
-
-    # Get file size
-    size_bytes = output_path.stat().st_size
-    size_mb = size_bytes / (1024 * 1024)
-
-    logger.info("Pickle saved successfully")
-    logger.info(f"Path: {output_path}")
-    logger.info(f"Size: {size_mb:.2f} MB ({size_bytes:,} bytes)")
 
 
 def update_project_status(project_id: str, status: str) -> None:
@@ -260,7 +243,6 @@ def update_project_status(project_id: str, status: str) -> None:
             "status": status,
             "updated_at": "now()"
         }).eq("id", project_id).execute()
-        logger.info(f"Updated project status to: {status}")
     except Exception as e:
         logger.warning(f"Failed to update project status: {e}")
 
@@ -291,8 +273,6 @@ def upload_pickle_to_supabase(pickle_path: Path, user_id: str, project_id: str) 
         user_id: User UUID for storage path
         project_id: Project UUID for storage path
     """
-    logger.info("Uploading pickle to Supabase Storage")
-
     if not user_id or not project_id:
         raise ValueError("user_id and project_id are required")
 
@@ -301,9 +281,6 @@ def upload_pickle_to_supabase(pickle_path: Path, user_id: str, project_id: str) 
 
     # Storage path: {user_id}/{project_id}/graph.pkl
     storage_path = f"{user_id}/{project_id}/graph.pkl"
-
-    logger.info(f"Target path: {storage_path}")
-    logger.info("Bucket: project-graphs")
 
     # Read pickle file
     with open(pickle_path, "rb") as f:
@@ -319,7 +296,6 @@ def upload_pickle_to_supabase(pickle_path: Path, user_id: str, project_id: str) 
     except Exception as e:
         # If file exists, try update instead
         if "already exists" in str(e).lower():
-            logger.info("File exists, updating")
             supabase.storage.from_("project-graphs").update(
                 path=storage_path,
                 file=pickle_bytes,
@@ -329,9 +305,7 @@ def upload_pickle_to_supabase(pickle_path: Path, user_id: str, project_id: str) 
             raise
 
     size_mb = len(pickle_bytes) / (1024 * 1024)
-    logger.info("Pickle uploaded successfully")
-    logger.info(f"Storage path: {storage_path}")
-    logger.info(f"Size: {size_mb:.2f} MB")
+    logger.info(f"Saved to Supabase Storage - Size: {size_mb:.2f} MB")
 
 
 def process_project(project_id: str, user_id: str) -> bool:
@@ -346,8 +320,6 @@ def process_project(project_id: str, user_id: str) -> bool:
         True if successful, False otherwise
     """
     try:
-        logger.info(f"Processing Project: {project_id}")
-
         # Step 1: Update status to 'processing'
         update_project_status(project_id, "processing")
 
@@ -366,8 +338,6 @@ def process_project(project_id: str, user_id: str) -> bool:
 
         # Step 6: Update status to 'ready'
         update_project_status(project_id, "ready")
-
-        logger.info("Processing complete")
 
         return True
 
@@ -396,16 +366,14 @@ def run_loop(poll_interval: int = 60) -> int:
     Returns:
         Exit code (never returns in normal operation)
     """
-    logger.info("Graph Processor - Running in LOOP mode")
-    logger.info(f"Polling every {poll_interval} seconds for projects with status='processing'")
-    logger.info("Press Ctrl+C to stop")
+    logger.info("Processor started - Polling database every 60s")
 
     try:
         while True:
             project = get_next_project_to_process()
 
             if project:
-                logger.info(f"Found project to process: {project['name']} ({project['id']})")
+                logger.info(f"Processing: {project['name']} ({project['id']})")
                 process_project(project["id"], project["user_id"])
             else:
                 logger.info(f"No projects to process. Waiting {poll_interval}s")
@@ -421,7 +389,6 @@ def main():
     """Main entry point for the processor."""
     # Increase recursion limit for large graph pickling
     sys.setrecursionlimit(RECURSION_LIMIT)
-    logger.info(f"Python recursion limit set to: {RECURSION_LIMIT}")
 
     parser = argparse.ArgumentParser(
         description="ScriptBeeAssistant Graph Processor - Builds graph from serialized files and uploads to Supabase",
