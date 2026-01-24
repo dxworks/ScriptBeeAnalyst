@@ -73,22 +73,40 @@ def load_graph_from_supabase(user_id: str, project_id: str):
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Application lifespan manager - loads graph from Supabase Storage at startup."""
+    """Application lifespan manager - optionally loads graph from Supabase Storage at startup."""
     global graph_data
     print("\n" + "="*70)
     print("🚀 Starting data-server in STANDALONE mode...")
     print("="*70)
-    print("📦 Loading project data from Supabase Storage...")
-    print()
 
-    # Download and load pickle from Supabase Storage
-    graph_data = load_graph_from_supabase(GRAPH_USER_ID, GRAPH_PROJECT_ID)
+    # Optional: Load graph if GRAPH_PROJECT_ID is set
+    if GRAPH_USER_ID and GRAPH_PROJECT_ID:
+        print("📦 Loading project data from Supabase Storage...")
+        print()
+        try:
+            graph_data = load_graph_from_supabase(GRAPH_USER_ID, GRAPH_PROJECT_ID)
+            print()
+            print("="*70)
+            print("✅ Server ready! Data loaded and available at http://localhost:8001")
+            print("📖 API docs: http://localhost:8001/docs")
+            print("="*70 + "\n")
+        except FileNotFoundError as e:
+            print(f"⚠️  Warning: {e}")
+            print("   Server will start without pre-loaded data.")
+            print("   You can load projects later via API endpoints.")
+            print()
+            print("="*70)
+            print("✅ Server ready at http://localhost:8001")
+            print("📖 API docs: http://localhost:8001/docs")
+            print("="*70 + "\n")
+    else:
+        print("ℹ️  No GRAPH_PROJECT_ID set - starting without pre-loaded data")
+        print()
+        print("="*70)
+        print("✅ Server ready at http://localhost:8001")
+        print("📖 API docs: http://localhost:8001/docs")
+        print("="*70 + "\n")
 
-    print()
-    print("="*70)
-    print("✅ Server ready! Data loaded and available at http://localhost:8001")
-    print("📖 API docs: http://localhost:8001/docs")
-    print("="*70 + "\n")
     try:
         yield
     finally:

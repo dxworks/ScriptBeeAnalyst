@@ -1,7 +1,7 @@
 #!/bin/bash
 
-# Start data-server Docker containers (attached mode - logs visible)
+# Start data-server and processor Docker containers (attached mode - logs visible)
 # Run from data-server directory: ./dev-start.sh
 
-echo "Starting data-server containers..."
+echo "Starting data-server and processor containers..."
 docker compose --env-file ../.env up

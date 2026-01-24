@@ -1,18 +1,18 @@
 #!/usr/bin/env python3
 """
-Graph Processor - Part 1 of data-server split
+Graph Processor - Background service for building project graphs
 
-Builds project graphs from serialized data files and saves them as pickle files.
-In Phase 1: Reads from local test-input/ directory, saves to local /tmp/pickles/
-
-Future phases will add:
-- Reading from Supabase Storage
-- Uploading pickles to Supabase
-- Database polling for automatic processing
+Downloads serialized files from Supabase Storage, builds graphs, and uploads pickles.
 
 Usage:
-    cd data-server
+    # Default mode - process project from GRAPH_PROJECT_ID env variable (for testing)
     python -m src.processor
+
+    # Loop mode - continuously poll database for projects with status='processing'
+    python -m src.processor --loop
+
+    # Docker (runs in --loop mode automatically)
+    docker compose up processor
 """
 
 import pickle
@@ -27,7 +27,7 @@ if __name__ == "__main__" and __package__ is None:
     sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from supabase import create_client, Client
-from src.config import SUPABASE_URL, SUPABASE_SERVICE_KEY, GRAPH_USER_ID, GRAPH_PROJECT_ID
+from src.config import SUPABASE_URL, SUPABASE_SERVICE_KEY, GRAPH_USER_ID, GRAPH_PROJECT_ID, RECURSION_LIMIT
 from src.inspector_git.reader.iglog.readers.ig_log_reader import IGLogReader
 from src.inspector_git.linker.transformers import GitProjectTransformer
 from src.jira_miner.reader_dto.loader import JiraJsonLoader
@@ -393,30 +393,23 @@ def process_project(project_id: str, user_id: str) -> bool:
         return False
 
 
-def run_once(project_id: Optional[str] = None) -> int:
+def run_once(project_id: str) -> int:
     """
     Process one project and exit.
 
     Args:
-        project_id: Specific project to process, or None to poll database
+        project_id: Project ID to process (from GRAPH_PROJECT_ID env variable)
 
     Returns:
         Exit code (0 = success, 1 = failure)
     """
-    if project_id:
-        # Process specific project
-        user_id = GRAPH_USER_ID
-        success = process_project(project_id, user_id)
-        return 0 if success else 1
-    else:
-        # Poll database for next project
-        project = get_next_project_to_process()
-        if not project:
-            print("ℹ️  No projects with status='processing' found.")
-            return 0
+    user_id = GRAPH_USER_ID
+    if not user_id:
+        print("❌ ERROR: GRAPH_USER_ID environment variable not set")
+        return 1
 
-        success = process_project(project["id"], project["user_id"])
-        return 0 if success else 1
+    success = process_project(project_id, user_id)
+    return 0 if success else 1
 
 
 def run_loop(poll_interval: int = 60) -> int:
@@ -454,27 +447,24 @@ def run_loop(poll_interval: int = 60) -> int:
 
 def main():
     """Main entry point for the processor."""
+    # Increase recursion limit for large graph pickling
+    sys.setrecursionlimit(RECURSION_LIMIT)
+    print(f"🔧 Python recursion limit set to: {RECURSION_LIMIT}")
+
     parser = argparse.ArgumentParser(
         description="ScriptBeeAssistant Graph Processor - Builds graph from serialized files and uploads to Supabase",
         formatter_class=argparse.RawDescriptionHelpFormatter,
-    )
-
-    parser.add_argument(
-        "--once",
-        action="store_true",
-        help="Process one project and exit (default mode)",
+        epilog="""
+Modes:
+  Default (no args):  Process project from GRAPH_PROJECT_ID env variable and exit (for testing)
+  --loop:             Run continuously, polling database for projects with status='processing'
+        """,
     )
 
     parser.add_argument(
         "--loop",
         action="store_true",
         help="Run continuously, polling database every 60 seconds",
-    )
-
-    parser.add_argument(
-        "--project-id",
-        type=str,
-        help="Process specific project ID (overrides polling)",
     )
 
     parser.add_argument(
@@ -486,16 +476,16 @@ def main():
 
     args = parser.parse_args()
 
-    # Default to --once if no mode specified
-    if not args.once and not args.loop:
-        args.once = True
-
     # Execute based on mode
     if args.loop:
         return run_loop(args.poll_interval)
     else:
-        # For backward compatibility, use GRAPH_PROJECT_ID if no --project-id specified
-        project_id = args.project_id or GRAPH_PROJECT_ID
+        # Default mode: use GRAPH_PROJECT_ID from environment
+        project_id = GRAPH_PROJECT_ID
+        if not project_id:
+            print("❌ ERROR: GRAPH_PROJECT_ID environment variable not set")
+            print("   Set GRAPH_PROJECT_ID in .env file or use --loop mode")
+            return 1
         return run_once(project_id)
 
 
