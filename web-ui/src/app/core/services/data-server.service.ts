@@ -10,6 +10,19 @@ export interface BuildResult {
   error?: string;
 }
 
+export interface LoadProjectResult {
+  success: boolean;
+  message?: string;
+  project_id?: string;
+  project_name?: string;
+  stats?: {
+    git_commits: number;
+    jira_issues: number;
+    github_prs: number;
+  };
+  error?: string;
+}
+
 export interface HealthResponse {
   status: string;
   loaded_projects: string[];
@@ -64,6 +77,41 @@ export class DataServerService {
   }
 
   /**
+   * Load project graph into data-server memory
+   * @param projectId - UUID of the project
+   * @returns LoadProjectResult with success status, stats, and message
+   */
+  async loadProject(projectId: string): Promise<LoadProjectResult> {
+    try {
+      const response = await firstValueFrom(
+        this.http.post<{
+          message: string;
+          project_id: string;
+          project_name: string;
+          stats: {
+            git_commits: number;
+            jira_issues: number;
+            github_prs: number;
+          };
+        }>(
+          `${this.baseUrl}/projects/${projectId}/load`,
+          {}
+        )
+      );
+
+      return {
+        success: true,
+        message: response.message,
+        project_id: response.project_id,
+        project_name: response.project_name,
+        stats: response.stats,
+      };
+    } catch (err) {
+      return this.handleLoadError(err);
+    }
+  }
+
+  /**
    * Unload project graph from data-server memory
    * @param projectId - UUID of the project
    * @returns true if successfully unloaded
@@ -106,6 +154,51 @@ export class DataServerService {
       console.error('Failed to get health status:', err);
       return null;
     }
+  }
+
+  private handleLoadError(err: unknown): LoadProjectResult {
+    if (err instanceof HttpErrorResponse) {
+      // Server-side error
+      if (err.status === 0) {
+        return {
+          success: false,
+          error: `Unable to connect to data server. Please ensure it's running on ${this.baseUrl}`,
+        };
+      }
+
+      // Extract error message from response body
+      const errorMessage = err.error?.error || err.error?.detail || err.error?.message || err.message;
+
+      switch (err.status) {
+        case 404:
+          return {
+            success: false,
+            error: errorMessage || 'Project not found or pickle file missing',
+          };
+        case 400:
+          return {
+            success: false,
+            error: errorMessage || 'Project is not ready for loading',
+          };
+        case 500:
+          return {
+            success: false,
+            error: errorMessage || 'Server error while loading project',
+          };
+        default:
+          return {
+            success: false,
+            error: errorMessage || 'Failed to load project',
+          };
+      }
+    }
+
+    // Client-side or network error
+    console.error('Error loading project:', err);
+    return {
+      success: false,
+      error: `Unexpected error: ${err instanceof Error ? err.message : 'Unknown error'}`,
+    };
   }
 
   private handleError(err: unknown, operation: string): BuildResult {

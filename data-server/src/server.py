@@ -74,7 +74,7 @@ def load_graph_from_supabase(user_id: str, project_id: str):
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Application lifespan manager - optionally loads graph from Supabase Storage at startup."""
-    global graph_data
+    global graph_data, current_project_id, current_user_id
     print("\n" + "="*70)
     print("🚀 Starting data-server in STANDALONE mode...")
     print("="*70)
@@ -85,6 +85,8 @@ async def lifespan(app: FastAPI):
         print()
         try:
             graph_data = load_graph_from_supabase(GRAPH_USER_ID, GRAPH_PROJECT_ID)
+            current_project_id = GRAPH_PROJECT_ID
+            current_user_id = GRAPH_USER_ID
             print()
             print("="*70)
             print("✅ Server ready! Data loaded and available at http://localhost:8001")
@@ -111,6 +113,8 @@ async def lifespan(app: FastAPI):
         yield
     finally:
         graph_data.clear()
+        current_project_id = None
+        current_user_id = None
         print("🛑 Shutdown complete - graph cleared from memory.")
 
 
@@ -170,6 +174,11 @@ Pre-built graph pickle in Supabase Storage bucket `project-graphs` at path:
 # Endpoints
 # =============================================================================
 
+# Track currently loaded project
+current_project_id = None
+current_user_id = None
+
+
 @app.get("/health")
 async def health_check():
     """Health check endpoint."""
@@ -177,12 +186,158 @@ async def health_check():
         "status": "ok",
         "mode": "standalone",
         "data_loaded": bool(graph_data),
+        "current_project_id": current_project_id,
         "stats": {
             "git_commits": len(graph_data.get("git", {}).git_commit_registry.all) if graph_data else 0,
             "jira_issues": len(graph_data.get("jira", {}).issue_registry.all) if graph_data else 0,
             "github_prs": len(graph_data.get("github", {}).pull_request_registry.all) if graph_data else 0,
         }
     }
+
+
+@app.get("/projects/current")
+async def get_current_project():
+    """Get information about the currently loaded project."""
+    if not graph_data or not current_project_id:
+        return JSONResponse(
+            {"message": "No project currently loaded"},
+            status_code=404
+        )
+
+    return {
+        "project_id": current_project_id,
+        "user_id": current_user_id,
+        "stats": {
+            "git_commits": len(graph_data.get("git", {}).git_commit_registry.all) if graph_data else 0,
+            "jira_issues": len(graph_data.get("jira", {}).issue_registry.all) if graph_data else 0,
+            "github_prs": len(graph_data.get("github", {}).pull_request_registry.all) if graph_data else 0,
+        }
+    }
+
+
+@app.post("/projects/{project_id}/load")
+async def load_project(project_id: str):
+    """
+    Load a specific project's graph into memory.
+
+    - Queries database to get user_id for the project
+    - Downloads pickle from Supabase Storage
+    - Unloads any currently loaded project
+    - Loads new project into memory
+
+    Returns project stats on success.
+    """
+    global graph_data, current_project_id, current_user_id
+
+    print(f"\n{'='*70}")
+    print(f"📂 Loading project: {project_id}")
+    print(f"{'='*70}\n")
+
+    # Initialize Supabase client
+    supabase: Client = create_client(SUPABASE_URL, SUPABASE_SERVICE_KEY)
+
+    # Query database to get project info (especially user_id)
+    try:
+        response = supabase.table("projects").select("*").eq("id", project_id).single().execute()
+        project = response.data
+
+        if not project:
+            return JSONResponse(
+                {"error": f"Project {project_id} not found"},
+                status_code=404
+            )
+
+        user_id = project["user_id"]
+        project_name = project["name"]
+        project_status = project["status"]
+
+        print(f"   - Project: {project_name}")
+        print(f"   - User ID: {user_id}")
+        print(f"   - Status: {project_status}")
+
+        # Check if project is ready
+        if project_status != "ready":
+            return JSONResponse(
+                {"error": f"Project is not ready (status: {project_status}). Please process the project first."},
+                status_code=400
+            )
+
+    except Exception as e:
+        print(f"❌ Failed to fetch project from database: {e}")
+        return JSONResponse(
+            {"error": f"Failed to fetch project: {str(e)}"},
+            status_code=500
+        )
+
+    # Unload current project if any
+    if current_project_id:
+        print(f"\n🗑️  Unloading previous project: {current_project_id}")
+        graph_data.clear()
+
+    # Download and load pickle from Supabase Storage
+    try:
+        loaded_graph = load_graph_from_supabase(user_id, project_id)
+        graph_data.clear()
+        graph_data.update(loaded_graph)
+        current_project_id = project_id
+        current_user_id = user_id
+
+        print(f"\n{'='*70}")
+        print(f"✅ Project loaded successfully!")
+        print(f"{'='*70}\n")
+
+        return {
+            "message": "Project loaded successfully",
+            "project_id": project_id,
+            "project_name": project_name,
+            "user_id": user_id,
+            "stats": {
+                "git_commits": len(graph_data.get("git", {}).git_commit_registry.all) if graph_data else 0,
+                "jira_issues": len(graph_data.get("jira", {}).issue_registry.all) if graph_data else 0,
+                "github_prs": len(graph_data.get("github", {}).pull_request_registry.all) if graph_data else 0,
+            }
+        }
+
+    except FileNotFoundError as e:
+        print(f"\n❌ Pickle file not found: {e}\n")
+        return JSONResponse(
+            {"error": str(e)},
+            status_code=404
+        )
+    except Exception as e:
+        print(f"\n❌ Failed to load project: {e}\n")
+        return JSONResponse(
+            {"error": f"Failed to load project: {str(e)}"},
+            status_code=500
+        )
+
+
+@app.delete("/projects/{project_id}/unload")
+async def unload_project(project_id: str):
+    """
+    Unload a project from memory.
+
+    If the specified project is currently loaded, clears it from memory.
+    """
+    global graph_data, current_project_id, current_user_id
+
+    if current_project_id != project_id:
+        return JSONResponse(
+            {"error": f"Project {project_id} is not currently loaded"},
+            status_code=400
+        )
+
+    print(f"\n{'='*70}")
+    print(f"🗑️  Unloading project: {project_id}")
+    print(f"{'='*70}\n")
+
+    graph_data.clear()
+    current_project_id = None
+    current_user_id = None
+
+    print(f"✅ Project unloaded successfully\n")
+
+    return {"message": "Project unloaded successfully"}
 
 
 @app.post("/execute")

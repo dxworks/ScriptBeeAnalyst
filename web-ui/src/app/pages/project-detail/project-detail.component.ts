@@ -3,6 +3,7 @@ import { ActivatedRoute, Router } from '@angular/router';
 import { ProjectService } from '../../core/services/project.service';
 import { FileService } from '../../core/services/file.service';
 import { ToastService } from '../../core/services/toast.service';
+import { DataServerService } from '../../core/services/data-server.service';
 import {
   Project,
   ProjectStatus,
@@ -59,6 +60,9 @@ export class ProjectDetailComponent implements OnInit, OnDestroy {
   // Processing state
   processingData = signal(false);
 
+  // Data server loading state
+  loadingInDataServer = signal(false);
+
   // Sorted projects alphabetically
   sortedProjects = computed(() => {
     return [...this.projectService.projects()].sort((a, b) =>
@@ -91,7 +95,8 @@ export class ProjectDetailComponent implements OnInit, OnDestroy {
     private router: Router,
     public projectService: ProjectService,
     public fileService: FileService,
-    private toastService: ToastService
+    private toastService: ToastService,
+    private dataServerService: DataServerService
   ) {
     // Load files when project changes
     effect(() => {
@@ -481,6 +486,26 @@ export class ProjectDetailComponent implements OnInit, OnDestroy {
   async onRetryProcessing(): Promise<void> {
     // Retry is the same as processing - call the build endpoint
     await this.onProcessData();
+  }
+
+  // Load project in data server
+  async onLoadInDataServer(): Promise<void> {
+    const project = this.selectedProject();
+    if (!project || this.loadingInDataServer()) return;
+
+    this.loadingInDataServer.set(true);
+
+    const result = await this.dataServerService.loadProject(project.id);
+
+    this.loadingInDataServer.set(false);
+
+    if (result.success) {
+      this.toastService.success(
+        `Project loaded successfully! ${result.stats?.git_commits || 0} commits, ${result.stats?.jira_issues || 0} issues, ${result.stats?.github_prs || 0} PRs`
+      );
+    } else {
+      this.toastService.error(result.error || 'Failed to load project in data server');
+    }
   }
 
   // File type label helper
