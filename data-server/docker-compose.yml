@@ -12,9 +12,6 @@ services:
       - SUPABASE_ANON_KEY=${SUPABASE_ANON_KEY}
       - SUPABASE_SERVICE_KEY=${SUPABASE_SERVICE_KEY}
       - JWT_SECRET=${JWT_SECRET}
-      # Graph processor configuration (Phase 3+)
-      - GRAPH_USER_ID=${GRAPH_USER_ID}
-      - GRAPH_PROJECT_ID=${GRAPH_PROJECT_ID}
       # Logging configuration
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
     volumes:
@@ -35,8 +32,6 @@ services:
       - SUPABASE_SERVICE_KEY=${SUPABASE_SERVICE_KEY}
       - JWT_SECRET=${JWT_SECRET}
       # Graph processor configuration
-      - GRAPH_USER_ID=${GRAPH_USER_ID}
-      - GRAPH_PROJECT_ID=${GRAPH_PROJECT_ID}
       - RECURSION_LIMIT=${RECURSION_LIMIT:-50000}
       # Logging configuration
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
@@ -45,5 +40,5 @@ services:
     volumes:
       # Mount source for development (hot reload)
       - ./src:/app/src:ro
-    command: python -u -m src.processor --loop
+    command: python -u -m src.processor
     restart: unless-stopped

@@ -5,13 +5,10 @@ Graph Processor - Background service for building project graphs
 Downloads serialized files from Supabase Storage, builds graphs, and uploads pickles.
 
 Usage:
-    # Default mode - process project from GRAPH_PROJECT_ID env variable (for testing)
+    # Continuously poll database for projects with status='processing'
     python -m src.processor
 
-    # Loop mode - continuously poll database for projects with status='processing'
-    python -m src.processor --loop
-
-    # Docker (runs in --loop mode automatically)
+    # Docker (runs automatically)
     docker compose up processor
 """
 
@@ -27,7 +24,7 @@ if __name__ == "__main__" and __package__ is None:
     sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from supabase import create_client, Client
-from src.config import SUPABASE_URL, SUPABASE_SERVICE_KEY, GRAPH_USER_ID, GRAPH_PROJECT_ID, RECURSION_LIMIT
+from src.config import SUPABASE_URL, SUPABASE_SERVICE_KEY, RECURSION_LIMIT
 from src.logger import get_logger
 from src.inspector_git.reader.iglog.readers.ig_log_reader import IGLogReader
 
@@ -297,7 +294,7 @@ def upload_pickle_to_supabase(pickle_path: Path, user_id: str, project_id: str) 
     logger.info("Uploading pickle to Supabase Storage")
 
     if not user_id or not project_id:
-        raise ValueError("GRAPH_USER_ID and GRAPH_PROJECT_ID must be set in .env file")
+        raise ValueError("user_id and project_id are required")
 
     # Initialize Supabase client with service key (bypasses RLS)
     supabase: Client = create_client(SUPABASE_URL, SUPABASE_SERVICE_KEY)
@@ -389,25 +386,6 @@ def process_project(project_id: str, user_id: str) -> bool:
         return False
 
 
-def run_once(project_id: str) -> int:
-    """
-    Process one project and exit.
-
-    Args:
-        project_id: Project ID to process (from GRAPH_PROJECT_ID env variable)
-
-    Returns:
-        Exit code (0 = success, 1 = failure)
-    """
-    user_id = GRAPH_USER_ID
-    if not user_id:
-        logger.error("ERROR: GRAPH_USER_ID environment variable not set")
-        return 1
-
-    success = process_project(project_id, user_id)
-    return 0 if success else 1
-
-
 def run_loop(poll_interval: int = 60) -> int:
     """
     Continuously poll database and process projects.
@@ -449,38 +427,21 @@ def main():
         description="ScriptBeeAssistant Graph Processor - Builds graph from serialized files and uploads to Supabase",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
-Modes:
-  Default (no args):  Process project from GRAPH_PROJECT_ID env variable and exit (for testing)
-  --loop:             Run continuously, polling database for projects with status='processing'
+Runs continuously, polling database for projects with status='processing'.
+Press Ctrl+C to stop.
         """,
-    )
-
-    parser.add_argument(
-        "--loop",
-        action="store_true",
-        help="Run continuously, polling database every 60 seconds",
     )
 
     parser.add_argument(
         "--poll-interval",
         type=int,
         default=60,
-        help="Polling interval in seconds (default: 60, only used with --loop)",
+        help="Polling interval in seconds (default: 60)",
     )
 
     args = parser.parse_args()
 
-    # Execute based on mode
-    if args.loop:
-        return run_loop(args.poll_interval)
-    else:
-        # Default mode: use GRAPH_PROJECT_ID from environment
-        project_id = GRAPH_PROJECT_ID
-        if not project_id:
-            logger.error("ERROR: GRAPH_PROJECT_ID environment variable not set")
-            logger.error("Set GRAPH_PROJECT_ID in .env file or use --loop mode")
-            return 1
-        return run_once(project_id)
+    return run_loop(args.poll_interval)
 
 
 if __name__ == "__main__":

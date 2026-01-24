@@ -2,15 +2,17 @@
 
 # Test script for the new /projects/{id}/load endpoint
 
+# ============================================
+# CONFIGURATION - Update these IDs as needed
+# ============================================
+PROJECT_ID="16f4e41c-7dc5-403a-86a4-9ccb605c2b57"
+
 echo "Testing Data Server Load Endpoint"
 echo "=================================="
 echo ""
 
-# Get project ID from .env file
-PROJECT_ID=$(grep GRAPH_PROJECT_ID ../.env | cut -d '=' -f2)
-
 if [ -z "$PROJECT_ID" ]; then
-    echo "❌ GRAPH_PROJECT_ID not found in .env file"
+    echo "❌ PROJECT_ID not set in script. Please update the hardcoded value at the top of this file."
     exit 1
 fi
 

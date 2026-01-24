@@ -11,7 +11,7 @@ from contextlib import asynccontextmanager
 import matplotlib.pyplot as plt
 
 from supabase import create_client, Client
-from src.config import SUPABASE_URL, SUPABASE_SERVICE_KEY, GRAPH_USER_ID, GRAPH_PROJECT_ID
+from src.config import SUPABASE_URL, SUPABASE_SERVICE_KEY
 from src.logger import get_logger
 
 logger = get_logger("data-server")
@@ -41,7 +41,7 @@ def load_graph_from_supabase(user_id: str, project_id: str):
     logger.info(f"Downloading pickle from Supabase Storage: {storage_path}")
 
     if not user_id or not project_id:
-        raise ValueError("GRAPH_USER_ID and GRAPH_PROJECT_ID must be set in .env file")
+        raise ValueError("user_id and project_id are required")
 
     # Initialize Supabase client with service key (bypasses RLS)
     supabase: Client = create_client(SUPABASE_URL, SUPABASE_SERVICE_KEY)
@@ -77,34 +77,18 @@ def load_graph_from_supabase(user_id: str, project_id: str):
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Application lifespan manager - optionally loads graph from Supabase Storage at startup."""
+    """Application lifespan manager - server starts with no data loaded."""
     global graph_data, current_project_id, current_user_id
-    logger.info("Starting data-server in STANDALONE mode")
-
-    # Optional: Load graph if GRAPH_PROJECT_ID is set
-    if GRAPH_USER_ID and GRAPH_PROJECT_ID:
-        logger.info("Loading project data from Supabase Storage")
-        try:
-            graph_data = load_graph_from_supabase(GRAPH_USER_ID, GRAPH_PROJECT_ID)
-            current_project_id = GRAPH_PROJECT_ID
-            current_user_id = GRAPH_USER_ID
-            logger.info("Server ready - Data loaded and available at http://localhost:8001")
-            logger.info("API docs: http://localhost:8001/docs")
-        except FileNotFoundError as e:
-            logger.warning(f"Warning: {e}")
-            logger.warning("Server will start without pre-loaded data")
-            logger.warning("You can load projects later via API endpoints")
-            logger.info("Server ready at http://localhost:8001")
-            logger.info("API docs: http://localhost:8001/docs")
-    else:
-        logger.info("No GRAPH_PROJECT_ID set - starting without pre-loaded data")
-        logger.info("Server ready at http://localhost:8001")
-        logger.info("API docs: http://localhost:8001/docs")
+    logger.info("Starting data-server")
+    logger.info("Server ready at http://localhost:8001")
+    logger.info("API docs: http://localhost:8001/docs")
+    logger.info("Use POST /projects/{id}/load to load project data")
 
     try:
         yield
     finally:
-        graph_data.clear()
+        if graph_data:
+            graph_data.clear()
         current_project_id = None
         current_user_id = None
         logger.info("Shutdown complete - graph cleared from memory")
@@ -115,12 +99,12 @@ async def lifespan(app: FastAPI):
 # =============================================================================
 
 app = FastAPI(
-    title="ScriptBeeAssistant Data Server (Standalone)",
+    title="ScriptBeeAssistant Data Server",
     description="""
 ## Overview
 
-FastAPI backend for ScriptBeeAssistant - loads pre-built project graph from Supabase Storage
-into memory at startup. Graph is built separately by processor.py.
+FastAPI backend for ScriptBeeAssistant - dynamically loads project graphs from Supabase Storage
+into memory. Graphs are built separately by processor.py background service.
 
 **No authentication required** - this is a standalone development server.
 
@@ -145,17 +129,19 @@ graph_data = {
 
 ## Workflow
 
-1. Run `processor.py` to build graph and upload pickle to Supabase Storage
-2. Server downloads and loads pickle automatically at startup
-3. Call `POST /execute` to run Python queries
-4. Call `POST /plot` to generate matplotlib visualizations
+1. Upload serialized files via web UI
+2. Processor builds graph and uploads pickle to Supabase Storage
+3. Call `POST /projects/{id}/load` to load project into memory
+4. Call `POST /execute` to run Python queries
+5. Call `POST /plot` to generate matplotlib visualizations
+6. Call `DELETE /projects/{id}/unload` to free memory
 
 ## Data Source
 
-Pre-built graph pickle in Supabase Storage bucket `project-graphs` at path:
+Pre-built graph pickles in Supabase Storage bucket `project-graphs` at path:
 `{user_id}/{project_id}/graph.pkl`
     """,
-    version="1.0.0-standalone",
+    version="1.0.0",
     lifespan=lifespan,
     docs_url="/docs",
     redoc_url="/redoc",
