@@ -1,0 +1,6 @@
+{
+  "How many commits are there in total?": "```python\ngit_project = graph_data[\"git\"]\ntotal_commits = len(git_project.git_commit_registry.all)\nprint(f\"There are {total_commits} commits in total.\")\n```",
+  "Who is the most active author?": "```python\nfrom collections import Counter\n\ngit_project = graph_data[\"git\"]\nauthor_commit_count = Counter()\n\nfor commit in git_project.git_commit_registry.all:\n    author_commit_count[commit.author] += 1\n\nmost_active_author = author_commit_count.most_common(1)\n\nif most_active_author:\n    author, count = most_active_author[0]\n    print(f\"The most active author is {author.git_id} with {count} commits.\")\nelse:\n    print(\"No authors found.\")\n```",
+  "How many issues are in the project?": "```python\njira_project = graph_data[\"jira\"]\nnum_issues = len(jira_project.issue_registry.all)\n\nprint(f\"There are {num_issues} issues in the project.\")\n```",
+  "Show me all pull requests": "```python\ngithub_project = graph_data[\"github\"]\n\nprint(\"List of all pull requests:\")\nfor pull_request in github_project.pull_request_registry.all:\n    print(f\"Pull Request #{pull_request.number}: {pull_request.title}\")\n```"
+}
