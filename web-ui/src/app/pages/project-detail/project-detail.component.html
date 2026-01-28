@@ -23,6 +23,11 @@
             (click)="selectProject(project)"
           >
             <span class="item-name">{{ project.name }}</span>
+            @if (loadedProjectId() === project.id) {
+              <svg class="loaded-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" title="Loaded in server memory">
+                <polyline points="20 6 9 17 4 12"/>
+              </svg>
+            }
             <span class="item-status badge" [class]="getStatusClass(project.status)">
               {{ getStatusLabel(project.status) }}
             </span>

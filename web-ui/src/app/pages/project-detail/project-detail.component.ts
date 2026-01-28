@@ -63,6 +63,12 @@ export class ProjectDetailComponent implements OnInit, OnDestroy {
   // Data server loading state
   loadingInDataServer = signal(false);
 
+  // Track which project is currently loaded in data server
+  loadedProjectId = signal<string | null>(null);
+
+  // Polling interval reference
+  private pollingInterval: any = null;
+
   // Sorted projects alphabetically
   sortedProjects = computed(() => {
     return [...this.projectService.projects()].sort((a, b) =>
@@ -150,6 +156,12 @@ export class ProjectDetailComponent implements OnInit, OnDestroy {
     // Subscribe to realtime project changes
     this.projectService.subscribeToProjectChanges();
 
+    // Poll data server state to track loaded project
+    this.pollServerState(); // Initial poll
+    this.pollingInterval = setInterval(() => {
+      this.pollServerState();
+    }, 5000); // Poll every 5 seconds
+
     // Get project ID from route
     this.route.paramMap.subscribe(params => {
       const id = params.get('id');
@@ -170,6 +182,25 @@ export class ProjectDetailComponent implements OnInit, OnDestroy {
   ngOnDestroy(): void {
     // Unsubscribe from realtime changes
     this.projectService.unsubscribeFromProjectChanges();
+
+    // Clear polling interval
+    if (this.pollingInterval) {
+      clearInterval(this.pollingInterval);
+      this.pollingInterval = null;
+    }
+  }
+
+  /**
+   * Poll data server to check which project is currently loaded in memory
+   */
+  private async pollServerState(): Promise<void> {
+    const currentProject = await this.dataServerService.getCurrentProject();
+
+    if (currentProject) {
+      this.loadedProjectId.set(currentProject.project_id);
+    } else {
+      this.loadedProjectId.set(null);
+    }
   }
 
   private async loadFiles(projectId: string): Promise<void> {
@@ -503,6 +534,8 @@ export class ProjectDetailComponent implements OnInit, OnDestroy {
       this.toastService.success(
         `Project loaded successfully! ${result.stats?.git_commits || 0} commits, ${result.stats?.jira_issues || 0} issues, ${result.stats?.github_prs || 0} PRs`
       );
+      // Poll immediately to update loaded state
+      await this.pollServerState();
     } else {
       this.toastService.error(result.error || 'Failed to load project in data server');
     }

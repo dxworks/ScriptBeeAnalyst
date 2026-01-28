@@ -121,6 +121,18 @@
   padding: 2px 6px;
 }
 
+.loaded-icon {
+  flex-shrink: 0;
+  color: var(--color-success);
+  opacity: 1 !important;
+  margin-left: auto;
+  margin-right: var(--spacing-xs);
+}
+
+.sidebar-item.active .loaded-icon {
+  color: var(--color-text-inverse);
+}
+
 .sidebar-loading,
 .sidebar-empty,
 .sidebar-placeholder {

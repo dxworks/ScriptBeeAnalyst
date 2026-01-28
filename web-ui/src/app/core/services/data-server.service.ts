@@ -28,6 +28,16 @@ export interface HealthResponse {
   loaded_projects: string[];
 }
 
+export interface CurrentProjectResponse {
+  project_id: string;
+  user_id: string;
+  stats: {
+    git_commits: number;
+    jira_issues: number;
+    github_prs: number;
+  };
+}
+
 @Injectable({
   providedIn: 'root',
 })
@@ -152,6 +162,26 @@ export class DataServerService {
       return response;
     } catch (err) {
       console.error('Failed to get health status:', err);
+      return null;
+    }
+  }
+
+  /**
+   * Get currently loaded project from data server (no auth required)
+   * @returns CurrentProjectResponse or null if no project is loaded
+   */
+  async getCurrentProject(): Promise<CurrentProjectResponse | null> {
+    try {
+      const response = await firstValueFrom(
+        this.http.get<CurrentProjectResponse>(`${this.baseUrl}/projects/current`)
+      );
+      return response;
+    } catch (err) {
+      // 404 means no project is loaded, which is not an error
+      if (err instanceof HttpErrorResponse && err.status === 404) {
+        return null;
+      }
+      console.error('Failed to get current project:', err);
       return null;
     }
   }
