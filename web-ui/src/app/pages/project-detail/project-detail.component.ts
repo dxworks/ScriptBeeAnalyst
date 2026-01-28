@@ -66,6 +66,12 @@ export class ProjectDetailComponent implements OnInit, OnDestroy {
   // Track which project is currently loaded in data server
   loadedProjectId = signal<string | null>(null);
 
+  // Track loaded project stats
+  loadedProjectStats = signal<{ git_commits: number; jira_issues: number; github_prs: number } | null>(null);
+
+  // Track data server connection status
+  dataServerConnected = signal<boolean>(true);
+
   // Polling interval reference
   private pollingInterval: any = null;
 
@@ -194,12 +200,23 @@ export class ProjectDetailComponent implements OnInit, OnDestroy {
    * Poll data server to check which project is currently loaded in memory
    */
   private async pollServerState(): Promise<void> {
-    const currentProject = await this.dataServerService.getCurrentProject();
+    try {
+      const currentProject = await this.dataServerService.getCurrentProject();
 
-    if (currentProject) {
-      this.loadedProjectId.set(currentProject.project_id);
-    } else {
-      this.loadedProjectId.set(null);
+      if (currentProject) {
+        this.loadedProjectId.set(currentProject.project_id);
+        this.loadedProjectStats.set(currentProject.stats);
+        this.dataServerConnected.set(true);
+      } else {
+        this.loadedProjectId.set(null);
+        this.loadedProjectStats.set(null);
+        this.dataServerConnected.set(true);
+      }
+    } catch (error) {
+      // If polling fails, assume server is disconnected
+      // Don't clear loadedProjectId - keep last known state
+      this.dataServerConnected.set(false);
+      console.warn('Data server polling failed:', error);
     }
   }
 
@@ -534,7 +551,12 @@ export class ProjectDetailComponent implements OnInit, OnDestroy {
       this.toastService.success(
         `Project loaded successfully! ${result.stats?.git_commits || 0} commits, ${result.stats?.jira_issues || 0} issues, ${result.stats?.github_prs || 0} PRs`
       );
-      // Poll immediately to update loaded state
+      // Update local state immediately
+      this.loadedProjectId.set(result.project_id || project.id);
+      if (result.stats) {
+        this.loadedProjectStats.set(result.stats);
+      }
+      // Poll to confirm
       await this.pollServerState();
     } else {
       this.toastService.error(result.error || 'Failed to load project in data server');
@@ -554,7 +576,10 @@ export class ProjectDetailComponent implements OnInit, OnDestroy {
 
     if (success) {
       this.toastService.success('Project unloaded from server memory');
-      // Poll immediately to update loaded state
+      // Update local state immediately
+      this.loadedProjectId.set(null);
+      this.loadedProjectStats.set(null);
+      // Poll to confirm
       await this.pollServerState();
     } else {
       this.toastService.error('Failed to unload project from server');

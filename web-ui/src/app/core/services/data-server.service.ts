@@ -169,6 +169,7 @@ export class DataServerService {
   /**
    * Get currently loaded project from data server (no auth required)
    * @returns CurrentProjectResponse or null if no project is loaded
+   * @throws Error if server is unreachable or returns an error
    */
   async getCurrentProject(): Promise<CurrentProjectResponse | null> {
     try {
@@ -181,8 +182,12 @@ export class DataServerService {
       if (err instanceof HttpErrorResponse && err.status === 404) {
         return null;
       }
+      // For connection errors or other issues, throw to let caller handle
+      if (err instanceof HttpErrorResponse && err.status === 0) {
+        throw new Error('Data server unreachable');
+      }
       console.error('Failed to get current project:', err);
-      return null;
+      throw err;
     }
   }
 

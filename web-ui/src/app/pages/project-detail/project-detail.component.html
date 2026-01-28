@@ -410,6 +410,16 @@
         <div class="content-section">
           <div class="content-header">
             <h1>Chat</h1>
+            @if (!dataServerConnected()) {
+              <span class="connection-status offline">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <circle cx="12" cy="12" r="10"/>
+                  <line x1="15" y1="9" x2="9" y2="15"/>
+                  <line x1="9" y1="9" x2="15" y2="15"/>
+                </svg>
+                Data Server Offline
+              </span>
+            }
           </div>
           <div class="content-body">
             @switch (selectedProject()?.status) {
@@ -424,13 +434,33 @@
                 } @else if (isCurrentProjectLoaded()) {
                   <!-- Current project is loaded - ready for chat -->
                   <div class="chat-placeholder">
-                    <svg width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
-                      <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>
+                    <svg width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" class="text-success">
+                      <circle cx="12" cy="12" r="10"/>
+                      <path d="M9 12l2 2 4-4"/>
                     </svg>
-                    <h2>Chat Interface</h2>
+                    <h2>Project Loaded</h2>
+                    @if (loadedProjectStats()) {
+                      <div class="loaded-stats">
+                        <div class="stat-item">
+                          <span class="stat-value">{{ loadedProjectStats()!.git_commits }}</span>
+                          <span class="stat-label">Commits</span>
+                        </div>
+                        <div class="stat-item">
+                          <span class="stat-value">{{ loadedProjectStats()!.jira_issues }}</span>
+                          <span class="stat-label">Issues</span>
+                        </div>
+                        <div class="stat-item">
+                          <span class="stat-value">{{ loadedProjectStats()!.github_prs }}</span>
+                          <span class="stat-label">Pull Requests</span>
+                        </div>
+                      </div>
+                    }
                     <p class="text-secondary">AI-powered chat will be integrated here.</p>
                     <p class="text-muted">This area will connect to Chainlit for natural language queries about your project data.</p>
-                    <button class="btn btn-secondary" (click)="onUnloadFromDataServer()">Unload from Server</button>
+                    @if (!dataServerConnected()) {
+                      <p class="text-error">Data server is offline. Connection lost.</p>
+                    }
+                    <button class="btn btn-secondary" (click)="onUnloadFromDataServer()" [disabled]="!dataServerConnected()">Unload from Server</button>
                   </div>
                 } @else if (isDifferentProjectLoaded()) {
                   <!-- Different project is loaded -->
@@ -443,7 +473,10 @@
                     <h2>Another Project Loaded</h2>
                     <p class="text-secondary">A different project is currently loaded in server memory.</p>
                     <p class="text-muted">Unload it first to load this project.</p>
-                    <button class="btn btn-secondary" (click)="onUnloadFromDataServer()">Unload Other Project</button>
+                    @if (!dataServerConnected()) {
+                      <p class="text-error">Data server is offline. Connection lost.</p>
+                    }
+                    <button class="btn btn-secondary" (click)="onUnloadFromDataServer()" [disabled]="!dataServerConnected()">Unload Other Project</button>
                   </div>
                 } @else {
                   <!-- Project not loaded - show load button -->
@@ -454,7 +487,10 @@
                     <h2>Load Project to Chat</h2>
                     <p class="text-secondary">Load this project into server memory to start chatting.</p>
                     <p class="text-muted">This will enable AI-powered queries about your project data.</p>
-                    <button class="btn btn-primary" (click)="onLoadInDataServer()">Load Project</button>
+                    @if (!dataServerConnected()) {
+                      <p class="text-error">Data server is offline. Please start the server and try again.</p>
+                    }
+                    <button class="btn btn-primary" (click)="onLoadInDataServer()" [disabled]="!dataServerConnected()">Load Project</button>
                   </div>
                 }
               }

@@ -2,6 +2,7 @@ import io
 import sys
 import pickle
 import traceback
+import logging
 from pathlib import Path
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -15,6 +16,17 @@ from src.config import SUPABASE_URL, SUPABASE_SERVICE_KEY
 from src.logger import get_logger
 
 logger = get_logger("data-server")
+
+
+# Filter to suppress Uvicorn access logs for /projects/current endpoint
+class SuppressCurrentProjectLogFilter(logging.Filter):
+    def filter(self, record: logging.LogRecord) -> bool:
+        # Suppress logs that contain "GET /projects/current"
+        return "GET /projects/current" not in record.getMessage()
+
+
+# Apply filter to Uvicorn's access logger
+logging.getLogger("uvicorn.access").addFilter(SuppressCurrentProjectLogFilter())
 
 
 class CodeRequest(BaseModel):
