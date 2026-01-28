@@ -1,14 +1,30 @@
-# Welcome to Chainlit! 🚀🤖
+# 🤖 ScriptBee Project Analyst
 
-Hi there, Developer! 👋 We're excited to have you on board. Chainlit is a powerful tool designed to help you prototype, debug and share applications built on top of LLMs.
+Welcome to the **ScriptBee Project Analyst** - your AI-powered assistant for exploring software project data!
 
-## Useful Links 🔗
+## What can I do?
 
-- **Documentation:** Get started with our comprehensive [Chainlit Documentation](https://docs.chainlit.io) 📚
-- **Discord Community:** Join our friendly [Chainlit Discord](https://discord.gg/k73SQ3FyUh) to ask questions, share your projects, and connect with other developers! 💬
+I can help you analyze and understand your project data from:
+- 📝 **Git** - Commit history, authors, file changes
+- 🐛 **Jira** - Issues, workflows, sprint data
+- 🔀 **GitHub** - Pull requests, reviews, merge activity
 
-We can't wait to see what you create with Chainlit! Happy coding! 💻😊
+## How to use
 
-## Welcome screen
+1. **Load a project** via the web UI first
+2. **Ask questions** in natural language:
+   - "How many commits are there?"
+   - "Who are the most active contributors?"
+   - "Show me commits over time"
+3. **Get insights** - I'll query the data and explain the results
 
-To modify the welcome screen, edit the `chainlit.md` file at the root of your project. If you do not want a welcome screen, just leave this file empty.
+## Features
+
+✨ Natural conversation - no need to write code
+📊 Visualizations - charts and graphs when you ask
+💾 History saved - your conversations are preserved
+🔒 Secure - only you can see your data
+
+## Getting Started
+
+Just type your question below and I'll help you explore your project!

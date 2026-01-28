@@ -68,6 +68,23 @@ commit_count = len(git_project.git_commit_registry.all)
 print(f"Total commits: {commit_count}")
 """
 
+    elif "top" in query_lower and ("contributor" in query_lower or "author" in query_lower):
+        # Specific handling for "top contributors/authors" question
+        return """
+# Get top 10 authors by commit count
+from collections import Counter
+
+git_project = graph_data["git"]
+author_counts = Counter()
+
+for commit in git_project.git_commit_registry.all:
+    author_counts[commit.author.name] += 1
+
+print("Top 10 contributors by commit count:")
+for author, count in author_counts.most_common(10):
+    print(f"  {author}: {count} commits")
+"""
+
     elif "author" in query_lower:
         return """
 # Get top 10 authors by commit count
