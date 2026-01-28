@@ -541,6 +541,41 @@ export class ProjectDetailComponent implements OnInit, OnDestroy {
     }
   }
 
+  // Unload project from data server (unloads whatever is currently loaded)
+  async onUnloadFromDataServer(): Promise<void> {
+    const loadedId = this.loadedProjectId();
+    if (!loadedId || this.loadingInDataServer()) return;
+
+    this.loadingInDataServer.set(true);
+
+    const success = await this.dataServerService.unloadProject(loadedId);
+
+    this.loadingInDataServer.set(false);
+
+    if (success) {
+      this.toastService.success('Project unloaded from server memory');
+      // Poll immediately to update loaded state
+      await this.pollServerState();
+    } else {
+      this.toastService.error('Failed to unload project from server');
+    }
+  }
+
+  // Check if current project is loaded in data server
+  isCurrentProjectLoaded(): boolean {
+    const project = this.selectedProject();
+    if (!project) return false;
+    return this.loadedProjectId() === project.id;
+  }
+
+  // Check if a different project is loaded in data server
+  isDifferentProjectLoaded(): boolean {
+    const project = this.selectedProject();
+    if (!project) return false;
+    const loadedId = this.loadedProjectId();
+    return !!loadedId && loadedId !== project.id;
+  }
+
   // File type label helper
   getFileTypeLabel(fileType: FileType): string {
     switch (fileType) {
