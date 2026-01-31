@@ -3,6 +3,7 @@ Chainlit UI: Chat interface integrated with orchestrator and conversation histor
 
 This is the main entry point for the Chainlit chat application.
 """
+import logging
 import os
 from datetime import datetime
 from pathlib import Path
@@ -21,6 +22,14 @@ env_path = Path(__file__).parent.parent / ".env"
 load_dotenv(env_path)
 
 FASTAPI_ENDPOINT = os.getenv("FASTAPI_ENDPOINT", "http://localhost:8001")
+USE_MOCK_AGENTS = os.getenv("USE_MOCK_AGENTS", "true").lower() == "true"
+
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
 
 
 def get_current_project_info():
@@ -122,8 +131,9 @@ You can still ask general questions, but data queries won't work until a project
             ).send()
 
     # Create orchestrator
-    # Use mocked agents during development to save costs (change to False for real LLM)
-    orchestrator = create_orchestrator(mock_agents=True)
+    # Use mocked agents during development to save costs (controlled by USE_MOCK_AGENTS env var)
+    logger.info(f"Creating orchestrator with mock_agents={USE_MOCK_AGENTS}")
+    orchestrator = create_orchestrator(mock_agents=USE_MOCK_AGENTS)
 
     # Store in session
     cl.user_session.set("orchestrator", orchestrator)
@@ -176,11 +186,14 @@ async def on_message(message: cl.Message):
     status_msg = cl.Message(content="🤔 Thinking...")
     await status_msg.send()
 
+    # Log user message
+    logger.info(f"[USER MESSAGE] {message.content}")
+
     # Invoke orchestrator
     try:
         state = {
             "messages": messages,
-            "mock_agents": True,  # Use mocked responses during development
+            "mock_agents": USE_MOCK_AGENTS,  # Controlled by env var
         }
 
         result = await orchestrator.ainvoke(state)
@@ -194,6 +207,7 @@ async def on_message(message: cl.Message):
 
         if isinstance(last_message, AIMessage):
             response_content = last_message.content
+            logger.info(f"[AI RESPONSE] {response_content}")
 
             # Save assistant message to database
             if conversation_id and supabase_client:

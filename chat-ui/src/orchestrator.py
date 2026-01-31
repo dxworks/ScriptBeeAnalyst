@@ -7,6 +7,7 @@ This agent:
 - Never shows code to users - only presents results
 - Uses StateGraph for orchestration
 """
+import logging
 import os
 from pathlib import Path
 from typing import Annotated, Literal, Sequence
@@ -24,6 +25,13 @@ from tools import ask_user, generate_plot, query_data
 # Load environment variables
 env_path = Path(__file__).parent.parent / ".env"
 load_dotenv(env_path)
+
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
 
 
 # State definition
@@ -60,7 +68,7 @@ def create_oracle_node(mock_agents: bool = False):
 
     def generate_plot_tool(plot_description: str) -> str:
         """Generate a plot/visualization using natural language."""
-        return generate_plot(plot_description, mock_agent=True)  # Always mocked for now
+        return generate_plot(plot_description, mock_agent=mock_agents)
 
     # Bind tools to LLM
     tools = [query_data_tool, generate_plot_tool, ask_user]
@@ -79,7 +87,15 @@ def create_oracle_node(mock_agents: bool = False):
             messages = [SystemMessage(content=system_prompt)] + list(messages)
 
         # Call LLM
+        logger.info("[ORCHESTRATOR] Calling LLM to decide next action...")
         response = llm_with_tools.invoke(messages)
+
+        # Log if tools were called
+        if hasattr(response, "tool_calls") and response.tool_calls:
+            tool_names = [tc.get("name") for tc in response.tool_calls]
+            logger.info(f"[ORCHESTRATOR] LLM decided to call tools: {tool_names}")
+        else:
+            logger.info("[ORCHESTRATOR] LLM responded directly (no tool calls)")
 
         return {"messages": [response]}
 
@@ -131,7 +147,7 @@ def create_orchestrator_graph(mock_agents: bool = False) -> StateGraph:
 
     def generate_plot_tool(plot_description: str) -> str:
         """Tool function for ToolNode."""
-        return generate_plot(plot_description, mock_agent=True)
+        return generate_plot(plot_description, mock_agent=mock_agents)
 
     tools = [query_data_tool, generate_plot_tool, ask_user]
     workflow.add_node("tools", ToolNode(tools))

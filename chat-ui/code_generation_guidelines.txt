@@ -232,10 +232,3 @@ num_commits = len(git_project.git_commit_registry.all)
 project_name = git_project.name
 
 print(f"Project '{project_name}' has {num_commits} commits.")
-
-### 4. What is the number of commits and the name of the project we are currently evaluating?
-git_project = graph_data["git"]
-num_commits = len(git_project.git_commit_registry.all)
-project_name = git_project.name
-
-print(f"Project '{project_name}' has {num_commits} commits.")

@@ -4,6 +4,7 @@ Orchestrator Tools: Functions that the main agent can call.
 These tools integrate sub-agents with the data-server API to provide
 clean interfaces for the orchestrator.
 """
+import logging
 import os
 import re
 from pathlib import Path
@@ -19,6 +20,13 @@ env_path = Path(__file__).parent.parent / ".env"
 load_dotenv(env_path)
 
 FASTAPI_ENDPOINT = os.getenv("FASTAPI_ENDPOINT", "http://localhost:8001")
+
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
 
 
 def _strip_markdown_code_block(code: str) -> str:
@@ -77,6 +85,7 @@ def query_data(
     Raises:
         Exception: If server is unreachable, no project loaded, or code fails
     """
+    logger.info(f"[QUERY_DATA] Processing query: {natural_language_query}")
     if verbose:
         print(f"[QUERY_DATA] Processing: {natural_language_query}")
 
@@ -85,9 +94,11 @@ def query_data(
         code = data_agent.generate_code(natural_language_query, mock=mock_agent)
         code = _strip_markdown_code_block(code)
 
+        logger.info(f"[QUERY_DATA] Generated code:\n{code}")
         if verbose:
             print(f"[QUERY_DATA] Generated code:\n{code}\n")
     except Exception as e:
+        logger.error(f"[QUERY_DATA] Failed to generate code: {e}")
         raise Exception(f"Failed to generate code: {e}")
 
     # Step 2: Execute code on data-server
@@ -103,6 +114,7 @@ def query_data(
             data = response.json()
             output = data.get("output", "").strip()
 
+            logger.info(f"[QUERY_DATA] Execution successful. Output: {output}")
             if verbose:
                 print(f"[QUERY_DATA] Execution successful")
                 print(f"[QUERY_DATA] Output: {output}")
@@ -134,7 +146,7 @@ def query_data(
 
 def generate_plot(
     plot_description: str,
-    mock_agent: bool = True,
+    mock_agent: bool = False,
     verbose: bool = False,
     save_path: Optional[Path] = None
 ) -> str:
@@ -159,6 +171,7 @@ def generate_plot(
     Raises:
         Exception: If server is unreachable, no project loaded, or code fails
     """
+    logger.info(f"[GENERATE_PLOT] Processing plot: {plot_description}")
     if verbose:
         print(f"[GENERATE_PLOT] Processing: {plot_description}")
 
@@ -167,9 +180,11 @@ def generate_plot(
         code = plot_agent.generate_code(plot_description, mock=mock_agent)
         code = _strip_markdown_code_block(code)
 
+        logger.info(f"[GENERATE_PLOT] Generated code:\n{code}")
         if verbose:
             print(f"[GENERATE_PLOT] Generated code:\n{code}\n")
     except Exception as e:
+        logger.error(f"[GENERATE_PLOT] Failed to generate plot code: {e}")
         raise Exception(f"Failed to generate plot code: {e}")
 
     # Step 2: Execute code on data-server
@@ -192,6 +207,7 @@ def generate_plot(
             with open(save_path, "wb") as f:
                 f.write(response.content)
 
+            logger.info(f"[GENERATE_PLOT] Plot saved to: {save_path}")
             if verbose:
                 print(f"[GENERATE_PLOT] Plot saved to: {save_path}")
 
