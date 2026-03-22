@@ -194,6 +194,7 @@ async def on_message(message: cl.Message):
         state = {
             "messages": messages,
             "mock_agents": USE_MOCK_AGENTS,  # Controlled by env var
+            "tool_traces": [],
         }
 
         result = await orchestrator.ainvoke(state)
@@ -201,6 +202,23 @@ async def on_message(message: cl.Message):
         # Update messages
         messages = result["messages"]
         cl.user_session.set("messages", messages)
+
+        # Display tool traces as collapsible Steps
+        traces = result.get("tool_traces", [])
+        for trace in traces:
+            step_name = f"{'🔍' if trace.tool_name == 'query_data' else '📊'} {trace.tool_name}"
+            if trace.is_error:
+                step_name += " (failed)"
+
+            async with cl.Step(name=step_name, type="tool") as step:
+                step.input = (
+                    f"**Query:** {trace.input_query}\n\n"
+                    f"**Generated Code:**\n```python\n{trace.generated_code}\n```"
+                )
+                if trace.is_error:
+                    step.output = f"**Error:**\n```\n{trace.server_response}\n```"
+                else:
+                    step.output = f"**Server Response:**\n```\n{trace.server_response}\n```"
 
         # Get last message (should be AI response)
         last_message = messages[-1]

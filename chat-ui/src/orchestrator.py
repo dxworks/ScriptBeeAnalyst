@@ -8,6 +8,7 @@ This agent:
 - Uses StateGraph for orchestration
 """
 import logging
+import operator
 import os
 from pathlib import Path
 from typing import Annotated, Literal, Sequence
@@ -17,10 +18,12 @@ from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, System
 from langchain_openai import ChatOpenAI
 from langgraph.graph import END, StateGraph
 from langgraph.graph.message import add_messages
-from langgraph.prebuilt import ToolNode
 from typing_extensions import TypedDict
 
-from tools import ask_user, generate_plot, query_data
+from tools import (
+    ToolTrace, ask_user, generate_plot, query_data,
+    query_data_traced, generate_plot_traced,
+)
 
 # Load environment variables
 env_path = Path(__file__).parent.parent / ".env"
@@ -39,6 +42,7 @@ class OrchestratorState(TypedDict):
     """State for the orchestrator agent."""
     messages: Annotated[Sequence[BaseMessage], add_messages]
     mock_agents: bool  # Whether to use mocked sub-agents
+    tool_traces: Annotated[list, operator.add]  # Accumulated ToolTrace objects across loops
 
 
 def load_system_prompt() -> str:
@@ -120,6 +124,74 @@ def should_continue(state: OrchestratorState) -> Literal["tools", "end"]:
     return "end"
 
 
+def create_traced_tools_node(mock_agents: bool = False):
+    """
+    Create a custom tools node that captures ToolTrace for each tool execution.
+
+    Replaces LangGraph's prebuilt ToolNode to intercept generated code and server responses.
+    """
+    def traced_tools_node(state: OrchestratorState) -> dict:
+        last_message = state["messages"][-1]
+        tool_calls = last_message.tool_calls
+
+        tool_messages = []
+        traces = []
+
+        for tc in tool_calls:
+            name = tc["name"]
+            args = tc["args"]
+            call_id = tc["id"]
+
+            logger.info(f"[TOOLS_NODE] Executing tool: {name} with args: {args}")
+
+            if name == "query_data_tool":
+                result, trace = query_data_traced(
+                    args["natural_language_query"],
+                    mock_agent=mock_agents,
+                )
+                traces.append(trace)
+                if trace.is_error:
+                    logger.error(f"[TOOLS_NODE] query_data failed: {result}")
+                    tool_messages.append(
+                        ToolMessage(content=f"Error: {result}", tool_call_id=call_id)
+                    )
+                else:
+                    tool_messages.append(
+                        ToolMessage(content=result, tool_call_id=call_id)
+                    )
+
+            elif name == "generate_plot_tool":
+                result, trace = generate_plot_traced(
+                    args["plot_description"],
+                    mock_agent=mock_agents,
+                )
+                traces.append(trace)
+                if trace.is_error:
+                    logger.error(f"[TOOLS_NODE] generate_plot failed: {result}")
+                    tool_messages.append(
+                        ToolMessage(content=f"Error: {result}", tool_call_id=call_id)
+                    )
+                else:
+                    tool_messages.append(
+                        ToolMessage(content=result, tool_call_id=call_id)
+                    )
+
+            elif name == "ask_user":
+                result = ask_user(args["question"])
+                tool_messages.append(
+                    ToolMessage(content=result, tool_call_id=call_id)
+                )
+
+            else:
+                tool_messages.append(
+                    ToolMessage(content=f"Unknown tool: {name}", tool_call_id=call_id)
+                )
+
+        return {"messages": tool_messages, "tool_traces": traces}
+
+    return traced_tools_node
+
+
 def create_orchestrator_graph(mock_agents: bool = False) -> StateGraph:
     """
     Create the orchestrator StateGraph.
@@ -139,18 +211,9 @@ def create_orchestrator_graph(mock_agents: bool = False) -> StateGraph:
     # Add nodes
     workflow.add_node("oracle", oracle_node)
 
-    # Tools node - uses langraph's ToolNode which handles tool execution
-    # Must use the SAME function names as bind_tools
-    def query_data_tool(natural_language_query: str) -> str:
-        """Tool function for ToolNode."""
-        return query_data(natural_language_query, mock_agent=mock_agents)
-
-    def generate_plot_tool(plot_description: str) -> str:
-        """Tool function for ToolNode."""
-        return generate_plot(plot_description, mock_agent=mock_agents)
-
-    tools = [query_data_tool, generate_plot_tool, ask_user]
-    workflow.add_node("tools", ToolNode(tools))
+    # Custom tools node with tracing (replaces ToolNode)
+    traced_tools_node = create_traced_tools_node(mock_agents=mock_agents)
+    workflow.add_node("tools", traced_tools_node)
 
     # Add edges
     workflow.set_entry_point("oracle")
@@ -189,6 +252,7 @@ def chat_cli(mock_agents: bool = False, verbose: bool = True):
     state = {
         "messages": [],
         "mock_agents": mock_agents,
+        "tool_traces": [],
     }
 
     while True:
@@ -214,6 +278,21 @@ def chat_cli(mock_agents: bool = False, verbose: bool = True):
 
             # Update state with result
             state = result
+
+            # Show tool traces if any
+            traces = state.get("tool_traces", [])
+            if traces and verbose:
+                print(f"\n--- Tool Traces ({len(traces)}) ---")
+                for i, trace in enumerate(traces, 1):
+                    status = "ERROR" if trace.is_error else "OK"
+                    print(f"\n[{i}] {trace.tool_name} [{status}]")
+                    print(f"    Query: {trace.input_query}")
+                    print(f"    Code:\n{trace.generated_code}")
+                    print(f"    Response: {trace.server_response}")
+                print("--- End Traces ---")
+
+            # Reset traces for next turn
+            state["tool_traces"] = []
 
             # Get last message (should be AI response)
             last_message = state["messages"][-1]
