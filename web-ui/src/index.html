@@ -5,7 +5,17 @@
   <title>WebUi</title>
   <base href="/">
   <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#f5f7fa">
   <link rel="icon" type="image/x-icon" href="favicon.ico">
+  <script>
+    // Prevent FOUC: apply theme before first paint
+    (function() {
+      if (localStorage.getItem('sba-theme-preference') === 'dark') {
+        document.documentElement.setAttribute('data-theme', 'dark');
+        document.querySelector('meta[name="theme-color"]').content = '#111827';
+      }
+    })();
+  </script>
 </head>
 <body>
   <app-root></app-root>

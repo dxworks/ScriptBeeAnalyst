@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Annotated, Literal, Sequence
 
 from dotenv import load_dotenv
-from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage, ToolMessage
+from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage, ToolMessage, trim_messages
 from langchain_openai import ChatOpenAI
 from langgraph.graph import END, StateGraph
 from langgraph.graph.message import add_messages
@@ -28,6 +28,10 @@ from tools import (
 # Load environment variables
 env_path = Path(__file__).parent.parent / ".env"
 load_dotenv(env_path)
+
+# Max tokens for conversation history sent to the LLM.
+# Keeps requests within the org's TPM limit by trimming older messages.
+MAX_HISTORY_TOKENS = int(os.getenv("MAX_HISTORY_TOKENS", "8000"))
 
 # Configure logging
 logging.basicConfig(
@@ -90,9 +94,21 @@ def create_oracle_node(mock_agents: bool = False):
         if not messages or not isinstance(messages[0], SystemMessage):
             messages = [SystemMessage(content=system_prompt)] + list(messages)
 
+        # Trim to fit token budget (only affects LLM view, not state)
+        trimmed = trim_messages(
+            messages,
+            max_tokens=MAX_HISTORY_TOKENS,
+            token_counter="approximate",
+            strategy="last",
+            include_system=True,
+            start_on="human",
+        )
+
         # Call LLM
-        logger.info("[ORCHESTRATOR] Calling LLM to decide next action...")
-        response = llm_with_tools.invoke(messages)
+        logger.info(
+            f"[ORCHESTRATOR] Calling LLM. History: {len(messages)} → {len(trimmed)} messages"
+        )
+        response = llm_with_tools.invoke(trimmed)
 
         # Log if tools were called
         if hasattr(response, "tool_calls") and response.tool_calls:

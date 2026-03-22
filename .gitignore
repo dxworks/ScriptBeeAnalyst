@@ -30,6 +30,10 @@ Thumbs.db
 
 # Environment & secrets
 .env
+.env.supabase
+
+# Local Supabase deployment (contains secrets and Docker volumes)
+local_supabase_deploy/
 
 # Chainlit
 .chainlit
@@ -83,3 +87,6 @@ web-ui/src/environments/environment.development.ts
 !supabase/migrations/**
 !supabase/functions/
 !supabase/functions/**
+.serena
+.playwright-mcp
+/test-screenshots

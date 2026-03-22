@@ -1,4 +1,6 @@
 // Color palette - matching dashboard design
+
+// ===== Light Theme (default) =====
 :root {
   // Primary dark navy
   --color-navy-900: #0f1221;
@@ -29,7 +31,15 @@
   --color-success: #10b981;
   --color-warning: #f59e0b;
   --color-error: #ef4444;
+  --color-error-dark: #dc2626;
   --color-info: #3b82f6;
+
+  // RGB channel variables (for rgba() usage)
+  --color-accent-rgb: 99, 102, 241;
+  --color-success-rgb: 16, 185, 129;
+  --color-warning-rgb: 245, 158, 11;
+  --color-error-rgb: 239, 68, 68;
+  --color-info-rgb: 59, 130, 246;
 
   // Shadows
   --shadow-card: 0 1px 3px 0 rgb(0 0 0 / 0.1), 0 1px 2px -1px rgb(0 0 0 / 0.1);
@@ -53,4 +63,51 @@
   // Transitions
   --transition-fast: 150ms ease;
   --transition-normal: 200ms ease;
+}
+
+// ===== Dark Theme =====
+html[data-theme="dark"] {
+  // Navy stays unchanged (header is already dark in both themes)
+
+  // Accent (brighter for dark background contrast)
+  --color-accent: #818cf8;
+  --color-accent-light: #a5b4fc;
+  --color-accent-dark: #6366f1;
+
+  // Surfaces (Discord/Supabase-inspired navy-charcoal)
+  --color-surface: #111827;
+  --color-surface-card: #1f2937;
+  --color-surface-hover: #374151;
+
+  // Text (inverted contrast hierarchy)
+  --color-text-primary: #f9fafb;
+  --color-text-secondary: #9ca3af;
+  --color-text-muted: #6b7280;
+  --color-text-inverse: #ffffff;
+
+  // Borders (subtle in dark mode)
+  --color-border: #374151;
+  --color-border-light: #1f2937;
+
+  // Status (brighter for dark background legibility)
+  --color-success: #34d399;
+  --color-warning: #fbbf24;
+  --color-error: #f87171;
+  --color-error-dark: #ef4444;
+  --color-info: #60a5fa;
+
+  // RGB channel variables (dark variants)
+  --color-accent-rgb: 129, 140, 248;
+  --color-success-rgb: 52, 211, 153;
+  --color-warning-rgb: 251, 191, 36;
+  --color-error-rgb: 248, 113, 113;
+  --color-info-rgb: 96, 165, 250;
+
+  // Shadows (stronger opacity for dark backgrounds)
+  --shadow-card: 0 1px 3px 0 rgb(0 0 0 / 0.3), 0 1px 2px -1px rgb(0 0 0 / 0.3);
+  --shadow-card-hover: 0 4px 6px -1px rgb(0 0 0 / 0.3), 0 2px 4px -2px rgb(0 0 0 / 0.3);
+  --shadow-lg: 0 10px 15px -3px rgb(0 0 0 / 0.4), 0 4px 6px -4px rgb(0 0 0 / 0.4);
+
+  // Native dark browser controls and scrollbars
+  color-scheme: dark;
 }

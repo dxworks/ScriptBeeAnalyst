@@ -275,7 +275,7 @@
   &.status-processing,
   &.status-resuming {
     border-color: var(--color-warning);
-    background-color: rgba(245, 158, 11, 0.05);
+    background-color: rgba(var(--color-warning-rgb), 0.05);
 
     h4 {
       color: var(--color-warning);
@@ -284,7 +284,7 @@
 
   &.status-idle {
     border-color: var(--color-info);
-    background-color: rgba(59, 130, 246, 0.05);
+    background-color: rgba(var(--color-info-rgb), 0.05);
 
     svg {
       color: var(--color-info);
@@ -297,7 +297,7 @@
 
   &.status-error {
     border-color: var(--color-error);
-    background-color: rgba(239, 68, 68, 0.05);
+    background-color: rgba(var(--color-error-rgb), 0.05);
 
     svg {
       color: var(--color-error);
@@ -316,7 +316,7 @@
   padding: var(--spacing-lg);
   border-radius: var(--radius-lg);
   border: 1px solid var(--color-success);
-  background-color: rgba(16, 185, 129, 0.05);
+  background-color: rgba(var(--color-success-rgb), 0.05);
 
   .action-content {
     display: flex;
@@ -410,7 +410,7 @@
 
 // Danger zone section
 .danger-zone {
-  background-color: rgba(239, 68, 68, 0.03);
+  background-color: rgba(var(--color-error-rgb), 0.03);
   border-radius: var(--radius-lg);
   padding: var(--spacing-lg);
   border: 1px solid var(--color-error);
@@ -463,7 +463,7 @@
 
   &:hover {
     border-color: var(--color-accent);
-    background-color: rgba(99, 102, 241, 0.02);
+    background-color: rgba(var(--color-accent-rgb), 0.02);
   }
 
   svg {
@@ -522,7 +522,7 @@
 
 // Staged files section
 .staged-files {
-  background-color: rgba(99, 102, 241, 0.05);
+  background-color: rgba(var(--color-accent-rgb), 0.05);
   border: 1px dashed var(--color-accent);
   border-radius: var(--radius-lg);
   padding: var(--spacing-lg);
@@ -571,12 +571,12 @@
   }
 
   &.uploading {
-    background-color: rgba(245, 158, 11, 0.05);
+    background-color: rgba(var(--color-warning-rgb), 0.05);
     border-color: var(--color-warning);
   }
 
   &.error {
-    background-color: rgba(239, 68, 68, 0.05);
+    background-color: rgba(var(--color-error-rgb), 0.05);
     border-color: var(--color-error);
   }
 }
@@ -695,7 +695,7 @@
 
   // Chat error
   &.chat-error {
-    background-color: rgba(239, 68, 68, 0.02);
+    background-color: rgba(var(--color-error-rgb), 0.02);
     border-color: var(--color-error);
 
     svg {
@@ -720,7 +720,7 @@
   font-weight: 500;
 
   &.offline {
-    background-color: rgba(239, 68, 68, 0.1);
+    background-color: rgba(var(--color-error-rgb), 0.1);
     color: var(--color-error);
     border: 1px solid var(--color-error);
 

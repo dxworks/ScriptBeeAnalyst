@@ -8,21 +8,21 @@ module.exports = {
       colors: {
         // Primary dark navy for header/sidebar
         'navy': {
-          900: '#0f1221',
-          800: '#1a1f36',
-          700: '#252b48',
+          900: 'var(--color-navy-900)',
+          800: 'var(--color-navy-800)',
+          700: 'var(--color-navy-700)',
         },
         // Accent purple/violet
         'accent': {
-          DEFAULT: '#6366f1',
-          light: '#818cf8',
-          dark: '#4f46e5',
+          DEFAULT: 'var(--color-accent)',
+          light: 'var(--color-accent-light)',
+          dark: 'var(--color-accent-dark)',
         },
         // Background grays
         'surface': {
-          DEFAULT: '#f5f7fa',
-          card: '#ffffff',
-          hover: '#f0f2f5',
+          DEFAULT: 'var(--color-surface)',
+          card: 'var(--color-surface-card)',
+          hover: 'var(--color-surface-hover)',
         },
       },
       fontFamily: {

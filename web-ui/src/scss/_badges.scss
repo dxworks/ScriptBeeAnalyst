@@ -11,27 +11,27 @@
 }
 
 .badge-primary {
-  background-color: rgba(99, 102, 241, 0.1);
+  background-color: rgba(var(--color-accent-rgb), 0.1);
   color: var(--color-accent);
 }
 
 .badge-success {
-  background-color: rgba(16, 185, 129, 0.1);
+  background-color: rgba(var(--color-success-rgb), 0.1);
   color: var(--color-success);
 }
 
 .badge-warning {
-  background-color: rgba(245, 158, 11, 0.1);
+  background-color: rgba(var(--color-warning-rgb), 0.1);
   color: var(--color-warning);
 }
 
 .badge-error {
-  background-color: rgba(239, 68, 68, 0.1);
+  background-color: rgba(var(--color-error-rgb), 0.1);
   color: var(--color-error);
 }
 
 .badge-info {
-  background-color: rgba(59, 130, 246, 0.1);
+  background-color: rgba(var(--color-info-rgb), 0.1);
   color: var(--color-info);
 }
 

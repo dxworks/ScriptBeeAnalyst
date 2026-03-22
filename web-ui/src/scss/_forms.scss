@@ -30,7 +30,7 @@
   &:focus {
     outline: none;
     border-color: var(--color-accent);
-    box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.1);
+    box-shadow: 0 0 0 3px rgba(var(--color-accent-rgb), 0.1);
   }
 
   &:disabled {
@@ -42,7 +42,7 @@
     border-color: var(--color-error);
 
     &:focus {
-      box-shadow: 0 0 0 3px rgba(239, 68, 68, 0.1);
+      box-shadow: 0 0 0 3px rgba(var(--color-error-rgb), 0.1);
     }
   }
 }

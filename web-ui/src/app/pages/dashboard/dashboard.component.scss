@@ -81,7 +81,7 @@
 }
 
 .error-state {
-  background-color: rgba(239, 68, 68, 0.05);
+  background-color: rgba(var(--color-error-rgb), 0.05);
   border-radius: var(--radius-lg);
 
   p {

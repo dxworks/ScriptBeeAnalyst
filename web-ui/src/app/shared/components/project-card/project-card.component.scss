@@ -53,7 +53,7 @@
   }
 
   &.btn-icon-danger:hover {
-    background-color: rgba(239, 68, 68, 0.1);
+    background-color: rgba(var(--color-error-rgb), 0.1);
     color: var(--color-error);
   }
 }

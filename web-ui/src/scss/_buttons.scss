@@ -30,7 +30,7 @@
 
   &:focus {
     outline: none;
-    box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.3);
+    box-shadow: 0 0 0 3px rgba(var(--color-accent-rgb), 0.3);
   }
 }
 

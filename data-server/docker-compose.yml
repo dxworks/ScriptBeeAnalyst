@@ -6,9 +6,11 @@ services:
     container_name: scriptbee-data-server
     ports:
       - "8001:8001"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     environment:
-      # Supabase connection (server-hosted on jarvis)
-      - SUPABASE_URL=${SUPABASE_URL}
+      # Supabase connection - uses SUPABASE_URL_DOCKER to resolve host from inside container
+      - SUPABASE_URL=${SUPABASE_URL_DOCKER:-${SUPABASE_URL}}
       - SUPABASE_ANON_KEY=${SUPABASE_ANON_KEY}
       - SUPABASE_SERVICE_KEY=${SUPABASE_SERVICE_KEY}
       - JWT_SECRET=${JWT_SECRET}
@@ -25,9 +27,11 @@ services:
       context: .
       dockerfile: Dockerfile
     container_name: scriptbee-processor
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     environment:
-      # Supabase connection (server-hosted on jarvis)
-      - SUPABASE_URL=${SUPABASE_URL}
+      # Supabase connection - uses SUPABASE_URL_DOCKER to resolve host from inside container
+      - SUPABASE_URL=${SUPABASE_URL_DOCKER:-${SUPABASE_URL}}
       - SUPABASE_ANON_KEY=${SUPABASE_ANON_KEY}
       - SUPABASE_SERVICE_KEY=${SUPABASE_SERVICE_KEY}
       - JWT_SECRET=${JWT_SECRET}

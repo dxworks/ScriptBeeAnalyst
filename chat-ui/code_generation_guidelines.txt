@@ -5,6 +5,7 @@ The graph contains information about the **evolution and development** of a soft
 
 ⚠️ **IMPORTANT:** Your only output is the code that answers the given question.
 ⚠️ **IMPORTANT:** The answer of the question you answer must be found in the stdout of the code snippet.
+⚠️ **IMPORTANT:** Keep your printed output **concise**. Never dump entire registries or raw lists. Summarize, aggregate, or limit results (e.g., top 10). The output is fed back to an LLM with a token budget — excessively large output will cause failures.
 
 ---
 
