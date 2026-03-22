@@ -5,6 +5,7 @@ import {
   SerializedFile,
   FileType,
   getFileTypeFromName,
+  getRepoNameFromFile,
   isValidSerializedFileName,
 } from '../models/project.model';
 
@@ -48,7 +49,7 @@ export class FileService {
     if (!isValidSerializedFileName(file.name)) {
       return {
         valid: false,
-        error: `Invalid filename. Expected: git.iglog, github.json, or jira.json (case-insensitive)`,
+        error: `Invalid filename. Expected: *.iglog, github.json, or jira.json`,
       };
     }
 
@@ -93,18 +94,27 @@ export class FileService {
   }
 
   /**
-   * Check if a file of the given type already exists for the project
+   * Check if a file of the given type (and repo name for git) already exists for the project.
+   * For git files, matches on file_type + repo_name. For non-git, matches on file_type only.
    */
   async checkFileExists(
     projectId: string,
-    fileType: FileType
+    fileType: FileType,
+    repoName: string | null = null
   ): Promise<SerializedFile | null> {
-    const { data, error } = await this.supabase.client
+    let query = this.supabase.client
       .from('serialized_files')
       .select('*')
       .eq('project_id', projectId)
-      .eq('file_type', fileType)
-      .single();
+      .eq('file_type', fileType);
+
+    if (repoName !== null) {
+      query = query.eq('repo_name', repoName);
+    } else {
+      query = query.is('repo_name', null);
+    }
+
+    const { data, error } = await query.single();
 
     if (error || !data) {
       return null;
@@ -138,6 +148,7 @@ export class FileService {
     }
 
     const fileType = validation.fileType!;
+    const repoName = getRepoNameFromFile(file.name);
 
     try {
       // Generate unique storage path with hash before extension
@@ -168,6 +179,7 @@ export class FileService {
         .insert({
           name: file.name,
           file_type: fileType,
+          repo_name: repoName,
           storage_path: storagePath,
           size_bytes: file.size,
           project_id: projectId,

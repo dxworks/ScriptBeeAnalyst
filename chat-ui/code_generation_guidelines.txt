@@ -121,8 +121,15 @@ Other registries:
   - changes: List[Change]
   - Methods: is_alive() - [returns a bool value, "if file was deleted"],
              file_name(),
+             relative_path() - [returns the file path prefixed with the repository name, e.g., "backend/src/main.py"],
+             full_path() - [returns "{project.name}/{relative_path}"],
              last_existing_name() - [gives last existing name of the file before it possibly being deleted/
                                      the current name for non deleted files]
+
+  **NOTE on multi-repository projects:** File paths are always prefixed with the repository name.
+  For example, `file.relative_path()` returns `"backend/src/main.py"` (not `"src/main.py"`).
+  When a project spans multiple repositories (e.g., backend + frontend), all files from each repo
+  are stored in the same GitProject with their repo prefix for disambiguation.
 
 - **LineChange, Hunk** (with added/deleted lines)
 

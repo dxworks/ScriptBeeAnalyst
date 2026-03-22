@@ -16,8 +16,9 @@ import pickle
 import sys
 import time
 import argparse
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Dict, Optional
+from typing import Dict, List, Optional, Tuple
 
 # Add parent directory to path if running as script
 if __name__ == "__main__" and __package__ is None:
@@ -27,9 +28,12 @@ from supabase import create_client, Client
 from src.config import SUPABASE_URL, SUPABASE_SERVICE_KEY, RECURSION_LIMIT
 from src.logger import get_logger
 from src.inspector_git.reader.iglog.readers.ig_log_reader import IGLogReader
+from src.inspector_git.reader.dto.gitlog.git_log_dto import GitLogDTO
+from src.inspector_git.utils.constants import DEV_NULL
 
 logger = get_logger("processor")
-from src.inspector_git.linker.transformers import GitProjectTransformer
+from src.inspector_git.linker.transformers import GitProjectTransformer, CommitTransformer, SimpleChangeFactory
+from src.common.models import GitProject
 from src.jira_miner.reader_dto.loader import JiraJsonLoader
 from src.jira_miner.linker.transformers import JiraProjectTransformer
 from src.github_miner.reader_dto.loader import GithubJsonLoader
@@ -37,15 +41,24 @@ from src.github_miner.linker.transformers import GitHubProjectTransformer
 from src.common.project_linkers import ProjectLinker
 
 
-def download_serialized_files_from_supabase(project_id: str) -> Dict[str, Path]:
+@dataclass
+class DownloadedFiles:
+    """Holds downloaded file paths, supporting multiple git files (one per repo)."""
+    git_files: List[Tuple[str, Path]] = field(default_factory=list)  # [(repo_name, path), ...]
+    jira_file: Optional[Path] = None
+    github_file: Optional[Path] = None
+
+
+def download_serialized_files_from_supabase(project_id: str) -> DownloadedFiles:
     """
     Downloads serialized files from Supabase Storage for a given project.
+    Supports multiple git (iglog) files with different repo names.
 
     Args:
         project_id: Project UUID to download files for
 
     Returns:
-        Dict mapping file_type ('git', 'github', 'jira') to local temp file paths
+        DownloadedFiles with git_files list, optional jira_file and github_file
     """
     logger.info("Downloading serialized files from Supabase Storage")
 
@@ -61,7 +74,7 @@ def download_serialized_files_from_supabase(project_id: str) -> Dict[str, Path]:
     if not response.data:
         raise ValueError(f"No serialized files found for project_id: {project_id}")
 
-    downloaded_files = {}
+    downloaded = DownloadedFiles()
     temp_dir = Path("/tmp/processor_downloads")
     temp_dir.mkdir(parents=True, exist_ok=True)
 
@@ -70,6 +83,7 @@ def download_serialized_files_from_supabase(project_id: str) -> Dict[str, Path]:
         file_type = file_record["file_type"]
         storage_path = file_record["storage_path"]
         file_name = file_record["name"]
+        repo_name = file_record.get("repo_name")
 
         # Download from Supabase Storage
         try:
@@ -77,16 +91,43 @@ def download_serialized_files_from_supabase(project_id: str) -> Dict[str, Path]:
         except Exception as e:
             raise FileNotFoundError(f"Failed to download {storage_path}: {e}")
 
-        # Save to temp directory
-        temp_file_path = temp_dir / f"{file_type}_{project_id}{Path(file_name).suffix}"
-        with open(temp_file_path, "wb") as f:
-            f.write(file_bytes)
-
-        downloaded_files[file_type] = temp_file_path
-        file_summaries.append(f"{file_type} ({file_name})")
+        if file_type == "git":
+            # Multiple git files allowed, use repo_name in temp filename
+            safe_repo = repo_name or "git"
+            temp_file_path = temp_dir / f"git_{safe_repo}_{project_id}.iglog"
+            with open(temp_file_path, "wb") as f:
+                f.write(file_bytes)
+            downloaded.git_files.append((safe_repo, temp_file_path))
+            file_summaries.append(f"git/{safe_repo} ({file_name})")
+        else:
+            temp_file_path = temp_dir / f"{file_type}_{project_id}{Path(file_name).suffix}"
+            with open(temp_file_path, "wb") as f:
+                f.write(file_bytes)
+            if file_type == "jira":
+                downloaded.jira_file = temp_file_path
+            elif file_type == "github":
+                downloaded.github_file = temp_file_path
+            file_summaries.append(f"{file_type} ({file_name})")
 
     logger.info(f"Downloaded: {', '.join(file_summaries)}")
-    return downloaded_files
+    return downloaded
+
+
+def prefix_change_paths(git_log_dto: GitLogDTO, repo_name: str) -> None:
+    """
+    Prefix all file paths in a GitLogDTO with the repo name.
+    Modifies the DTO in place. Skips DEV_NULL paths.
+
+    Args:
+        git_log_dto: Parsed git log DTO to modify
+        repo_name: Repository name to use as prefix (e.g., "backend")
+    """
+    for commit_dto in git_log_dto.commits:
+        for change_dto in commit_dto.changes:
+            if change_dto.old_file_name != DEV_NULL:
+                change_dto.old_file_name = f"{repo_name}/{change_dto.old_file_name}"
+            if change_dto.new_file_name != DEV_NULL:
+                change_dto.new_file_name = f"{repo_name}/{change_dto.new_file_name}"
 
 
 def build_graph_from_local_files() -> Dict:
@@ -100,17 +141,24 @@ def build_graph_from_local_files() -> Dict:
 
     logger.info(f"Loading files from: {base_path}")
 
-    # InspectorGit
+    # InspectorGit — use the same multi-repo pipeline as production
     iglog_file = base_path / "inspector-git" / "zeppelin.iglog"
-    logger.info(f"Loading Git data from {iglog_file.name}")
+    repo_name = iglog_file.stem  # "zeppelin"
+    logger.info(f"Loading Git repo '{repo_name}' from {iglog_file.name}")
     with open(iglog_file, "r", encoding="utf-8") as f:
         git_log_dto = IGLogReader().read(f)
 
-    git_project = GitProjectTransformer(
-        git_log_dto,
-        name=iglog_file.stem,
-        compute_annotated_lines=False,  # no blame
-    ).transform()
+    prefix_change_paths(git_log_dto, repo_name)
+
+    git_project = GitProject(name="LocalTest")
+    change_factory = SimpleChangeFactory()
+    for commit_dto in git_log_dto.commits:
+        CommitTransformer.add_to_project(commit_dto, git_project, False, change_factory)
+
+    # Compute branch IDs — matches original GitProjectTransformer behavior
+    first_commit = next(iter(git_project.git_commit_registry.all), None)
+    if first_commit:
+        _compute_branch_ids(first_commit)
 
     # Jira
     jira_file = base_path / "jira-miner" / "ZEPPELIN-detailed-issues.json"
@@ -144,12 +192,15 @@ def build_graph_from_local_files() -> Dict:
     }
 
 
-def build_graph_from_downloaded_files(file_paths: Dict[str, Path]) -> Dict:
+def build_graph_from_downloaded_files(downloaded: DownloadedFiles, project_name: str = "Project") -> Dict:
     """
     Builds the project graph from downloaded serialized files and links them together.
+    Supports multiple git (iglog) files — all repos are merged into a single GitProject
+    with file paths prefixed by repo name.
 
     Args:
-        file_paths: Dict mapping file_type to file path (e.g., {'git': Path(...), 'jira': Path(...)})
+        downloaded: DownloadedFiles with git_files list, optional jira_file and github_file
+        project_name: Name for the merged GitProject
 
     Returns:
         Dict with 'git', 'jira', 'github' keys containing project objects
@@ -161,27 +212,48 @@ def build_graph_from_downloaded_files(file_paths: Dict[str, Path]) -> Dict:
     github_project = None
     jira_data = None
 
-    # Load Git data if available
-    if "git" in file_paths:
-        git_file = file_paths["git"]
-        with open(git_file, "r", encoding="utf-8") as f:
-            git_log_dto = IGLogReader().read(f)
-        git_project = GitProjectTransformer(
-            git_log_dto,
-            name=git_file.stem,
-            compute_annotated_lines=False,  # no blame
-        ).transform()
+    # Load Git data — multiple iglog files merged into a single GitProject
+    if downloaded.git_files:
+        git_project = GitProject(name=project_name)
+        change_factory = SimpleChangeFactory()
+
+        for repo_name, git_file in downloaded.git_files:
+            logger.info(f"Loading Git repo '{repo_name}' from {git_file.name}")
+            with open(git_file, "r", encoding="utf-8") as f:
+                git_log_dto = IGLogReader().read(f)
+
+            # Always prefix file paths with repo name
+            prefix_change_paths(git_log_dto, repo_name)
+
+            # Add all commits from this repo to the shared project
+            for commit_dto in git_log_dto.commits:
+                CommitTransformer.add_to_project(
+                    commit_dto, git_project, False, change_factory
+                )
+
+        # Compute branch IDs — matches original GitProjectTransformer behavior
+        # (only processes the first commit in the registry)
+        first_commit = next(iter(git_project.git_commit_registry.all), None)
+        if first_commit:
+            _compute_branch_ids(first_commit)
+
+        logger.info(
+            f"Merged {len(downloaded.git_files)} git repo(s): "
+            f"{len(git_project.git_commit_registry.all)} commits, "
+            f"{len(git_project.account_registry.all)} authors, "
+            f"{len(git_project.file_registry.all)} files"
+        )
 
     # Load JIRA data if available
-    if "jira" in file_paths:
-        jira_file = file_paths["jira"]
+    if downloaded.jira_file:
+        jira_file = downloaded.jira_file
         jira_loader = JiraJsonLoader(str(jira_file))
         jira_data = jira_loader.load()
         jira_project = JiraProjectTransformer(jira_data, name="Jira Project").transform()
 
     # Load GitHub data if available
-    if "github" in file_paths:
-        github_file = file_paths["github"]
+    if downloaded.github_file:
+        github_file = downloaded.github_file
         github_loader = GithubJsonLoader(str(github_file))
         github_data = github_loader.load()
         github_project = GitHubProjectTransformer(github_data, name="GitHub Project").transform()
@@ -210,6 +282,20 @@ def build_graph_from_downloaded_files(file_paths: Dict[str, Path]) -> Dict:
         "jira": jira_project,
         "github": github_project,
     }
+
+
+def _compute_branch_ids(commit) -> None:
+    """
+    Compute branch ID for a single commit.
+    Matches the original GitProjectTransformer._compute_branch_ids behavior.
+    """
+    parents = commit.parents
+    if commit.is_merge_commit:
+        commit.branch_id = parents[0].branch_id if parents else 0
+    elif not parents or parents[0].is_split_commit:
+        commit.branch_id = 1
+    else:
+        commit.branch_id = parents[0].branch_id
 
 
 def save_pickle_to_disk(graph_data: Dict, output_path: Path) -> None:
@@ -308,13 +394,14 @@ def upload_pickle_to_supabase(pickle_path: Path, user_id: str, project_id: str) 
     logger.info(f"Saved to Supabase Storage - Size: {size_mb:.2f} MB")
 
 
-def process_project(project_id: str, user_id: str) -> bool:
+def process_project(project_id: str, user_id: str, project_name: str = "Project") -> bool:
     """
     Processes a single project: downloads files, builds graph, uploads pickle.
 
     Args:
         project_id: Project UUID to process
         user_id: User UUID (for storage path)
+        project_name: Human-readable project name (used as GitProject name)
 
     Returns:
         True if successful, False otherwise
@@ -324,10 +411,10 @@ def process_project(project_id: str, user_id: str) -> bool:
         update_project_status(project_id, "processing")
 
         # Step 2: Download serialized files from Supabase Storage
-        file_paths = download_serialized_files_from_supabase(project_id)
+        downloaded = download_serialized_files_from_supabase(project_id)
 
         # Step 3: Build graph from downloaded files
-        graph_data = build_graph_from_downloaded_files(file_paths)
+        graph_data = build_graph_from_downloaded_files(downloaded, project_name=project_name)
 
         # Step 4: Save to local filesystem (temporary)
         output_path = Path("/tmp/pickles/graph.pkl")
@@ -374,7 +461,7 @@ def run_loop(poll_interval: int = 60) -> int:
 
             if project:
                 logger.info(f"Processing: {project['name']} ({project['id']})")
-                process_project(project["id"], project["user_id"])
+                process_project(project["id"], project["user_id"], project["name"])
             else:
                 logger.info(f"No projects to process. Waiting {poll_interval}s")
 

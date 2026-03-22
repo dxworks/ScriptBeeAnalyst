@@ -279,7 +279,7 @@
                   hidden
                 />
               </label>
-              <p class="upload-hint">Expected files: git.iglog, github.json, jira.json (max {{ fileService.getMaxFileSizeMB() }}MB)</p>
+              <p class="upload-hint">Expected files: *.iglog (one per repo), github.json, jira.json (max {{ fileService.getMaxFileSizeMB() }}MB)</p>
             </div>
 
             <!-- Staged Files (ready to upload) -->
@@ -307,7 +307,7 @@
                   </div>
                 </div>
                 <div class="file-cards">
-                  @for (staged of stagedFiles(); track staged.fileType) {
+                  @for (staged of stagedFiles(); track staged.file.name) {
                     <div class="file-card" [class.uploading]="staged.status === 'uploading'" [class.error]="staged.status === 'error'">
                       <div class="file-icon">
                         <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -330,7 +330,7 @@
                       <button
                         class="btn-icon btn-icon-danger"
                         title="Remove"
-                        (click)="removeStagedFile(staged.fileType)"
+                        (click)="removeStagedFile(staged)"
                         [disabled]="staged.status === 'uploading'"
                       >
                         <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">

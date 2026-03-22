@@ -12,6 +12,7 @@ import {
   SerializedFile,
   FileType,
   getFileTypeFromName,
+  getRepoNameFromFile,
   isValidSerializedFileName,
 } from '../../core/models/project.model';
 import { CreateProjectModalComponent } from '../../shared/components/create-project-modal/create-project-modal.component';
@@ -22,6 +23,7 @@ type Section = 'description' | 'files' | 'chat';
 interface StagedFile {
   file: File;
   fileType: FileType;
+  repoName: string | null;
   status: 'pending' | 'uploading' | 'error';
   error?: string;
 }
@@ -304,25 +306,32 @@ export class ProjectDetailComponent implements OnInit, OnDestroy {
       }
 
       const fileType = validation.fileType!;
+      const repoName = getRepoNameFromFile(file.name);
 
-      // Check if file of this type already exists (in DB)
-      const existingFile = await this.fileService.checkFileExists(projectId, fileType);
+      // Check if file of this type (and repo name) already exists (in DB)
+      const existingFile = await this.fileService.checkFileExists(projectId, fileType, repoName);
 
-      // Also check if already staged
-      const alreadyStaged = this.stagedFiles().some(sf => sf.fileType === fileType);
+      // Also check if already staged (match by fileType + repoName)
+      const alreadyStaged = this.stagedFiles().some(
+        sf => sf.fileType === fileType && sf.repoName === repoName
+      );
 
       if (existingFile) {
         // Show confirmation modal to replace
         this.fileToReplace.set({ existing: existingFile, newFile: file });
         this.showReplaceModal.set(true);
       } else if (alreadyStaged) {
-        // Replace in staged files
+        // Replace in staged files (match by fileType + repoName)
         this.stagedFiles.update(files =>
-          files.map(sf => sf.fileType === fileType ? { file, fileType, status: 'pending' as const } : sf)
+          files.map(sf =>
+            sf.fileType === fileType && sf.repoName === repoName
+              ? { file, fileType, repoName, status: 'pending' as const }
+              : sf
+          )
         );
       } else {
         // Add to staged files
-        this.stagedFiles.update(files => [...files, { file, fileType, status: 'pending' as const }]);
+        this.stagedFiles.update(files => [...files, { file, fileType, repoName, status: 'pending' as const }]);
       }
     }
 
@@ -332,7 +341,7 @@ export class ProjectDetailComponent implements OnInit, OnDestroy {
         ? invalidFiles.join(', ')
         : `${invalidFiles.slice(0, 2).join(', ')} and ${invalidFiles.length - 2} more`;
       this.toastService.warning(
-        `Invalid file${invalidFiles.length > 1 ? 's' : ''}: ${fileNames}. Expected: git.iglog, github.json, or jira.json`
+        `Invalid file${invalidFiles.length > 1 ? 's' : ''}: ${fileNames}. Expected: *.iglog, github.json, or jira.json`
       );
     }
 
@@ -344,8 +353,10 @@ export class ProjectDetailComponent implements OnInit, OnDestroy {
     }
   }
 
-  removeStagedFile(fileType: FileType): void {
-    this.stagedFiles.update(files => files.filter(sf => sf.fileType !== fileType));
+  removeStagedFile(staged: StagedFile): void {
+    this.stagedFiles.update(files =>
+      files.filter(sf => !(sf.fileType === staged.fileType && sf.repoName === staged.repoName))
+    );
   }
 
   async confirmReplaceFile(): Promise<void> {
@@ -385,10 +396,13 @@ export class ProjectDetailComponent implements OnInit, OnDestroy {
 
     this.uploadingFiles.set(true);
 
+    const matchesStagedFile = (sf: StagedFile, target: StagedFile) =>
+      sf.fileType === target.fileType && sf.repoName === target.repoName;
+
     for (const staged of this.stagedFiles()) {
       // Update status to uploading
       this.stagedFiles.update(files =>
-        files.map(sf => sf.fileType === staged.fileType ? { ...sf, status: 'uploading' as const } : sf)
+        files.map(sf => matchesStagedFile(sf, staged) ? { ...sf, status: 'uploading' as const } : sf)
       );
 
       const result = await this.fileService.uploadFile(projectId, staged.file);
@@ -396,14 +410,14 @@ export class ProjectDetailComponent implements OnInit, OnDestroy {
       if (!result) {
         // Mark as error
         this.stagedFiles.update(files =>
-          files.map(sf => sf.fileType === staged.fileType
+          files.map(sf => matchesStagedFile(sf, staged)
             ? { ...sf, status: 'error' as const, error: this.fileService.error() ?? 'Upload failed' }
             : sf
           )
         );
       } else {
         // Remove from staged
-        this.stagedFiles.update(files => files.filter(sf => sf.fileType !== staged.fileType));
+        this.stagedFiles.update(files => files.filter(sf => !matchesStagedFile(sf, staged)));
       }
     }
 

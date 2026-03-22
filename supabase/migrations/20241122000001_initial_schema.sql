@@ -13,19 +13,29 @@ create table public.projects (
 );
 
 -- Serialized files table
--- file_type derived from filename: git.iglog -> git, github.json -> github, jira.json -> jira
+-- file_type derived from filename: *.iglog -> git, github.json -> github, jira.json -> jira
+-- repo_name: for git files, derived from filename stem (e.g., backend.iglog -> backend). NULL for github/jira.
 create table public.serialized_files (
   id uuid primary key default uuid_generate_v4(),
   name text not null,
   file_type text not null check (file_type in ('git', 'github', 'jira')),
+  repo_name text,
   storage_path text not null,
   size_bytes bigint not null,
   project_id uuid not null references public.projects(id) on delete cascade,
   created_at timestamp with time zone default now() not null,
-  updated_at timestamp with time zone default now() not null,
-  -- One file per type per project
-  unique (project_id, file_type)
+  updated_at timestamp with time zone default now() not null
 );
+
+-- One iglog per repo name per project (multiple iglog files allowed with different repo names)
+create unique index uq_serialized_files_with_repo
+  on public.serialized_files (project_id, file_type, repo_name)
+  where repo_name is not null;
+
+-- One github.json / jira.json per project (repo_name is null for non-git types)
+create unique index uq_serialized_files_without_repo
+  on public.serialized_files (project_id, file_type)
+  where repo_name is null;
 
 -- Enable RLS
 alter table public.projects enable row level security;
