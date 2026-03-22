@@ -5,7 +5,7 @@ from abc import ABC, abstractmethod
 from datetime import datetime, timedelta
 from enum import Enum
 from typing import Optional, Type, TypeVar, List, Collection
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from src.inspector_git.linker.registry import AccountRegistry, CommitRegistry, FileRegistry, ChangeRegistry
 from src.github_miner.linker.registries import GitHubUserRegistry, PullRequestRegistry, GitHubCommitRegistry
@@ -71,6 +71,7 @@ Account.model_rebuild()
 
 
 class GitAccountId(BaseModel):
+    model_config = ConfigDict(frozen=True)
     email: str
     name: str
 
