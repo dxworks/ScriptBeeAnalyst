@@ -44,6 +44,11 @@ export const routes: Routes = [
         loadComponent: () =>
           import('./pages/project-detail/project-detail.component').then(m => m.ProjectDetailComponent),
       },
+      {
+        path: 'data-model',
+        loadComponent: () =>
+          import('./pages/data-model/data-model.component').then(m => m.DataModelComponent),
+      },
     ],
   },
   {

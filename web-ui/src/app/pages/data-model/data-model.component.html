@@ -1,0 +1,193 @@
+<div class="data-model-container">
+  <div class="page-header">
+    <h1>Data Model</h1>
+    <p>Visual reference of the in-memory graph structure — projects, registries, entities, and cross-project links.</p>
+  </div>
+
+  <div class="legend">
+    <div class="legend-item">
+      <span class="legend-dot git"></span>
+      <span>Git Project</span>
+    </div>
+    <div class="legend-item">
+      <span class="legend-dot jira"></span>
+      <span>Jira Project</span>
+    </div>
+    <div class="legend-item">
+      <span class="legend-dot github"></span>
+      <span>GitHub Project</span>
+    </div>
+    <div class="legend-item">
+      <span class="legend-line"></span>
+      <span>Cross-project link (bidirectional)</span>
+    </div>
+  </div>
+
+  <div class="diagram-container">
+    <svg viewBox="0 0 1300 775" role="img" aria-label="Data model diagram showing GitProject, JiraProject, and GitHubProject with their registries and cross-project links">
+      <title>Data Model Architecture — Projects, Registries, and Cross-Project Links</title>
+
+      <!-- ==================== DEFS ==================== -->
+      <defs>
+        <marker id="arrow-git" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+          <path d="M 0 1 L 9 5 L 0 9 z" class="marker-git"/>
+        </marker>
+        <marker id="arrow-jira" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+          <path d="M 0 1 L 9 5 L 0 9 z" class="marker-jira"/>
+        </marker>
+        <marker id="arrow-github" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+          <path d="M 0 1 L 9 5 L 0 9 z" class="marker-github"/>
+        </marker>
+        <marker id="dot-cross" viewBox="0 0 10 10" refX="5" refY="5" markerWidth="6" markerHeight="6">
+          <circle cx="5" cy="5" r="4" class="marker-cross"/>
+        </marker>
+      </defs>
+
+      <!-- ==================== COLUMN BACKGROUNDS ==================== -->
+
+      <!-- Git column -->
+      <rect class="col-bg col-bg-git" x="30" y="45" width="380" height="610" rx="12"/>
+      <text class="col-header col-header-git" x="220" y="78" text-anchor="middle">GitProject</text>
+
+      <!-- Jira column -->
+      <rect class="col-bg col-bg-jira" x="445" y="45" width="380" height="610" rx="12"/>
+      <text class="col-header col-header-jira" x="635" y="78" text-anchor="middle">JiraProject</text>
+
+      <!-- GitHub column -->
+      <rect class="col-bg col-bg-github" x="860" y="45" width="380" height="610" rx="12"/>
+      <text class="col-header col-header-github" x="1050" y="78" text-anchor="middle">GitHubProject</text>
+
+      <!-- ==================== GIT PROJECT NODES ==================== -->
+      <g class="project-git">
+        <!-- GitAccount -->
+        <rect class="node node-git" x="100" y="110" width="240" height="66" rx="10"/>
+        <text class="node-name" x="220" y="138" text-anchor="middle">GitAccount</text>
+        <text class="node-registry" x="220" y="157" text-anchor="middle">account_registry</text>
+
+        <!-- GitCommit -->
+        <rect class="node node-git" x="100" y="265" width="240" height="66" rx="10"/>
+        <text class="node-name" x="220" y="293" text-anchor="middle">GitCommit</text>
+        <text class="node-registry" x="220" y="312" text-anchor="middle">git_commit_registry</text>
+
+        <!-- Change -->
+        <rect class="node node-git" x="100" y="405" width="240" height="66" rx="10"/>
+        <text class="node-name" x="220" y="433" text-anchor="middle">Change</text>
+        <text class="node-registry" x="220" y="452" text-anchor="middle">change_registry</text>
+
+        <!-- File -->
+        <rect class="node node-git" x="100" y="535" width="240" height="66" rx="10"/>
+        <text class="node-name" x="220" y="563" text-anchor="middle">File</text>
+        <text class="node-registry" x="220" y="582" text-anchor="middle">file_registry</text>
+
+        <!-- Intra-project arrows -->
+        <!-- GitAccount → GitCommit -->
+        <line class="arrow arrow-git" x1="220" y1="176" x2="220" y2="265" marker-end="url(#arrow-git)"/>
+        <text class="arrow-label" x="232" y="222" text-anchor="start">author / committer</text>
+
+        <!-- GitCommit → Change -->
+        <line class="arrow arrow-git" x1="220" y1="331" x2="220" y2="405" marker-end="url(#arrow-git)"/>
+        <text class="arrow-label" x="232" y="370" text-anchor="start">changes</text>
+
+        <!-- Change → File -->
+        <line class="arrow arrow-git" x1="220" y1="471" x2="220" y2="535" marker-end="url(#arrow-git)"/>
+        <text class="arrow-label" x="232" y="505" text-anchor="start">file</text>
+      </g>
+
+      <!-- ==================== JIRA PROJECT NODES ==================== -->
+      <g class="project-jira">
+        <!-- IssueStatusCategory -->
+        <rect class="node node-jira" x="515" y="100" width="240" height="66" rx="10"/>
+        <text class="node-name" x="635" y="128" text-anchor="middle">IssueStatusCategory</text>
+        <text class="node-registry" x="635" y="147" text-anchor="middle">issue_status_category_registry</text>
+
+        <!-- IssueStatus -->
+        <rect class="node node-jira" x="515" y="200" width="240" height="66" rx="10"/>
+        <text class="node-name" x="635" y="228" text-anchor="middle">IssueStatus</text>
+        <text class="node-registry" x="635" y="247" text-anchor="middle">issue_status_registry</text>
+
+        <!-- Issue -->
+        <rect class="node node-jira node-hub" x="515" y="300" width="240" height="66" rx="10"/>
+        <text class="node-name" x="635" y="328" text-anchor="middle">Issue</text>
+        <text class="node-registry" x="635" y="347" text-anchor="middle">issue_registry</text>
+
+        <!-- IssueType -->
+        <rect class="node node-jira" x="515" y="430" width="240" height="66" rx="10"/>
+        <text class="node-name" x="635" y="458" text-anchor="middle">IssueType</text>
+        <text class="node-registry" x="635" y="477" text-anchor="middle">issue_type_registry</text>
+
+        <!-- JiraUser -->
+        <rect class="node node-jira" x="515" y="555" width="240" height="66" rx="10"/>
+        <text class="node-name" x="635" y="583" text-anchor="middle">JiraUser</text>
+        <text class="node-registry" x="635" y="602" text-anchor="middle">jira_user_registry</text>
+
+        <!-- Intra-project arrows -->
+        <!-- IssueStatusCategory → IssueStatus -->
+        <line class="arrow arrow-jira" x1="635" y1="166" x2="635" y2="200" marker-end="url(#arrow-jira)"/>
+        <text class="arrow-label" x="647" y="186" text-anchor="start">statuses</text>
+
+        <!-- IssueStatus → Issue -->
+        <line class="arrow arrow-jira" x1="635" y1="266" x2="635" y2="300" marker-end="url(#arrow-jira)"/>
+        <text class="arrow-label" x="647" y="286" text-anchor="start">issues</text>
+
+        <!-- IssueType → Issue (upward arrow) -->
+        <line class="arrow arrow-jira" x1="635" y1="430" x2="635" y2="366" marker-end="url(#arrow-jira)"/>
+        <text class="arrow-label" x="647" y="400" text-anchor="start">issues</text>
+
+        <!-- JiraUser → Issue (left-side routed path) -->
+        <path class="arrow arrow-jira" d="M 515 585 L 490 585 L 490 333 L 515 333" marker-end="url(#arrow-jira)"/>
+        <text class="arrow-label arrow-label-side" x="483" y="438" text-anchor="end">creator /</text>
+        <text class="arrow-label arrow-label-side" x="483" y="450" text-anchor="end">reporter /</text>
+        <text class="arrow-label arrow-label-side" x="483" y="462" text-anchor="end">assignee</text>
+
+        <!-- Issue self-loop (parent/children) -->
+        <path class="arrow arrow-jira" d="M 755 318 C 790 308, 790 358, 755 348" marker-end="url(#arrow-jira)"/>
+        <text class="arrow-label" x="797" y="336" text-anchor="start">parent /</text>
+        <text class="arrow-label" x="797" y="348" text-anchor="start">children</text>
+      </g>
+
+      <!-- ==================== GITHUB PROJECT NODES ==================== -->
+      <g class="project-github">
+        <!-- GitHubUser -->
+        <rect class="node node-github" x="930" y="110" width="240" height="66" rx="10"/>
+        <text class="node-name" x="1050" y="138" text-anchor="middle">GitHubUser</text>
+        <text class="node-registry" x="1050" y="157" text-anchor="middle">git_hub_user_registry</text>
+
+        <!-- PullRequest -->
+        <rect class="node node-github" x="930" y="265" width="240" height="66" rx="10"/>
+        <text class="node-name" x="1050" y="293" text-anchor="middle">PullRequest</text>
+        <text class="node-registry" x="1050" y="312" text-anchor="middle">pull_request_registry</text>
+
+        <!-- GitHubCommit -->
+        <rect class="node node-github" x="930" y="405" width="240" height="66" rx="10"/>
+        <text class="node-name" x="1050" y="433" text-anchor="middle">GitHubCommit</text>
+        <text class="node-registry" x="1050" y="452" text-anchor="middle">git_hub_commit_registry</text>
+
+        <!-- Intra-project arrows -->
+        <!-- GitHubUser → PullRequest -->
+        <line class="arrow arrow-github" x1="1050" y1="176" x2="1050" y2="265" marker-end="url(#arrow-github)"/>
+        <text class="arrow-label" x="1062" y="222" text-anchor="start">creator / merged_by</text>
+
+        <!-- PullRequest → GitHubCommit -->
+        <line class="arrow arrow-github" x1="1050" y1="331" x2="1050" y2="405" marker-end="url(#arrow-github)"/>
+        <text class="arrow-label" x="1062" y="370" text-anchor="start">commits</text>
+      </g>
+
+      <!-- ==================== CROSS-PROJECT LINKS ==================== -->
+      <g class="cross-links">
+        <!-- Issue ↔ GitCommit (Jira ↔ Git) -->
+        <path class="cross-link" d="M 515 333 C 440 333, 415 298, 340 298" marker-start="url(#dot-cross)" marker-end="url(#dot-cross)"/>
+        <text class="cross-link-label" x="427" y="290" text-anchor="middle">issue key in</text>
+        <text class="cross-link-label" x="427" y="304" text-anchor="middle">commit msg</text>
+
+        <!-- Issue ↔ PullRequest (Jira ↔ GitHub) -->
+        <path class="cross-link" d="M 755 333 C 830 333, 855 298, 930 298" marker-start="url(#dot-cross)" marker-end="url(#dot-cross)"/>
+        <text class="cross-link-label" x="842" y="286" text-anchor="middle">PR title/body</text>
+        <text class="cross-link-label" x="842" y="300" text-anchor="middle">+ JIRA changelog</text>
+
+        <!-- PullRequest ↔ GitCommit (GitHub ↔ Git, U-curve below) -->
+        <path class="cross-link" d="M 220 331 C 220 870, 1050 870, 1050 331" marker-start="url(#dot-cross)" marker-end="url(#dot-cross)"/>
+        <text class="cross-link-label" x="635" y="728" text-anchor="middle">commit SHA match</text>
+      </g>
+    </svg>
+  </div>
+</div>

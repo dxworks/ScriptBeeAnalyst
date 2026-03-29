@@ -1,0 +1,184 @@
+.data-model-container {
+  max-width: 1400px;
+  margin: 0 auto;
+  padding: var(--spacing-xl);
+}
+
+.page-header {
+  margin-bottom: var(--spacing-lg);
+
+  h1 {
+    font-size: 2rem;
+    margin: 0 0 var(--spacing-sm) 0;
+  }
+
+  p {
+    margin: 0;
+    color: var(--color-text-secondary);
+  }
+}
+
+// Legend
+.legend {
+  display: flex;
+  gap: var(--spacing-lg);
+  margin-bottom: var(--spacing-xl);
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+.legend-item {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-sm);
+  font-size: 0.875rem;
+  color: var(--color-text-secondary);
+}
+
+.legend-dot {
+  width: 12px;
+  height: 12px;
+  border-radius: var(--radius-full);
+
+  &.git { background: var(--color-info); }
+  &.jira { background: var(--color-success); }
+  &.github { background: var(--color-accent); }
+}
+
+.legend-line {
+  width: 32px;
+  height: 0;
+  border-top: 3px dashed var(--color-warning);
+}
+
+// Diagram wrapper
+.diagram-container {
+  background: var(--color-surface-card);
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--color-border);
+  padding: var(--spacing-lg);
+  overflow-x: auto;
+}
+
+svg {
+  display: block;
+  width: 100%;
+  height: auto;
+  min-width: 800px;
+}
+
+// ==================== SVG STYLES ====================
+
+// Column backgrounds
+.col-bg {
+  stroke-width: 1.5;
+  rx: 12;
+}
+
+.col-bg-git {
+  fill: rgba(var(--color-info-rgb), 0.05);
+  stroke: rgba(var(--color-info-rgb), 0.2);
+}
+
+.col-bg-jira {
+  fill: rgba(var(--color-success-rgb), 0.05);
+  stroke: rgba(var(--color-success-rgb), 0.2);
+}
+
+.col-bg-github {
+  fill: rgba(var(--color-accent-rgb), 0.05);
+  stroke: rgba(var(--color-accent-rgb), 0.2);
+}
+
+// Column headers
+.col-header {
+  font-weight: 700;
+  font-size: 17px;
+}
+
+.col-header-git { fill: var(--color-info); }
+.col-header-jira { fill: var(--color-success); }
+.col-header-github { fill: var(--color-accent); }
+
+// Entity nodes
+.node {
+  stroke-width: 1.5;
+  transition: filter var(--transition-fast);
+
+  &:hover {
+    filter: brightness(1.15);
+  }
+}
+
+.node-git {
+  fill: rgba(var(--color-info-rgb), 0.12);
+  stroke: var(--color-info);
+}
+
+.node-jira {
+  fill: rgba(var(--color-success-rgb), 0.12);
+  stroke: var(--color-success);
+}
+
+.node-hub {
+  stroke-width: 2.5;
+}
+
+.node-github {
+  fill: rgba(var(--color-accent-rgb), 0.12);
+  stroke: var(--color-accent);
+}
+
+// Node text
+.node-name {
+  font-weight: 600;
+  font-size: 14px;
+  fill: var(--color-text-primary);
+  pointer-events: none;
+}
+
+.node-registry {
+  font-size: 10.5px;
+  font-family: 'Courier New', Courier, monospace;
+  fill: var(--color-text-secondary);
+  pointer-events: none;
+}
+
+// Intra-project arrows
+.arrow {
+  stroke-width: 1.5;
+  fill: none;
+}
+
+.arrow-git { stroke: rgba(var(--color-info-rgb), 0.5); }
+.arrow-jira { stroke: rgba(var(--color-success-rgb), 0.5); }
+.arrow-github { stroke: rgba(var(--color-accent-rgb), 0.5); }
+
+.arrow-label {
+  font-size: 10px;
+  fill: var(--color-text-muted);
+}
+
+.arrow-label-side {
+  font-size: 9px;
+}
+
+// Cross-project links
+.cross-link {
+  stroke: var(--color-warning);
+  stroke-width: 2.5;
+  stroke-dasharray: 8 4;
+  fill: none;
+}
+
+.cross-link-label {
+  font-size: 11px;
+  font-weight: 600;
+  fill: var(--color-warning);
+}
+
+// Marker fills
+.marker-git { fill: rgba(var(--color-info-rgb), 0.6); }
+.marker-jira { fill: rgba(var(--color-success-rgb), 0.6); }
+.marker-github { fill: rgba(var(--color-accent-rgb), 0.6); }
+.marker-cross { fill: var(--color-warning); }
