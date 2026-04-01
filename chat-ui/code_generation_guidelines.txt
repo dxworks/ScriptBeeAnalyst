@@ -110,7 +110,7 @@ Other registries:
   - files: List[File]
 
 - **GitCommit**
-  - id, message, dates, author/committer, parents, children, changes
+  - id, message, author_date, committer_date, parents, children, changes
   - issues, pull_requests
   - flags: is_merge_commit, is_split_commit
   - branch_id, repo_size
