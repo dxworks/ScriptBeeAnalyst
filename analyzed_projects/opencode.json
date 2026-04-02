@@ -10,7 +10,10 @@
     }
   },
   "instructions": [
-    "instructions/data-model.txt",
+    "instructions/guide.txt",
+    "../data-server/src/common/models.py",
+    "../data-server/src/common/registries.py",
+    "../data-server/src/common/project_linkers.py",
     "instructions/query-examples.txt",
     "instructions/plot-patterns.txt"
   ]

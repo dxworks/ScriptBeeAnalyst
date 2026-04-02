@@ -48,7 +48,12 @@ pr.git_commits         # Git commits in this PR
 
 ## Detailed Documentation
 
-See `instructions/` folder for complete reference:
-- `data-model.txt` - All domain classes, registries, and attributes
+The data model source code is in `data-server/src/common/`:
+- `models.py` - All domain classes (GitProject, JiraProject, GitHubProject, etc.)
+- `registries.py` - AbstractRegistry base class
+- `project_linkers.py` - Cross-project relationship linking
+
+See `instructions/` folder for usage guides:
+- `guide.txt` - Graph structure, cross-project links, and rules
 - `query-examples.txt` - 6 example queries with full Python code
 - `plot-patterns.txt` - Matplotlib visualization patterns

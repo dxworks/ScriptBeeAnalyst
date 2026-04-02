@@ -1,0 +1,33 @@
+# ScriptBee Data - Usage Guide
+
+You have access to an in-memory graph of a software project's development history.
+The full data model source code (models.py, registries.py, project_linkers.py) is
+included in your context - refer to it for exact class definitions, fields, and methods.
+
+## Graph Structure
+
+```python
+graph_data = {
+    "git": GitProject,       # commits, files, changes, authors
+    "jira": JiraProject,     # issues, statuses, types, users
+    "github": GitHubProject, # pull requests, users, commits
+}
+```
+
+Entities are stored in typed registries. Access via `.all` (iterate) or `.get_by_id()` (lookup).
+
+## Cross-Project Links
+
+Bidirectional references link entities across the three data sources:
+
+  Issue <-> GitCommit    (issue keys matched in commit messages)
+  Issue <-> PullRequest  (issue keys matched in PR title/body)
+  PullRequest <-> GitCommit (SHA matching between GitHub and Git commits)
+
+Navigate via list attributes: commit.issues, issue.git_commits, pr.git_commits, etc.
+
+## Rules
+
+- Use print() for output - results come from captured stdout.
+- Keep output concise: summarize, aggregate, or limit results (e.g., top 10).
+- Do NOT mutate the graph data - it is shared in-memory across executions.
