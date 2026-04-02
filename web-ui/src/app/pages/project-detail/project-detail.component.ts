@@ -74,6 +74,9 @@ export class ProjectDetailComponent implements OnInit, OnDestroy {
   // Track data server connection status
   dataServerConnected = signal<boolean>(true);
 
+  // AI agent workspace path (set after scaffold)
+  workspacePath = signal<string | null>(null);
+
   // Polling interval reference
   private pollingInterval: any = null;
 
@@ -570,6 +573,12 @@ export class ProjectDetailComponent implements OnInit, OnDestroy {
       if (result.stats) {
         this.loadedProjectStats.set(result.stats);
       }
+      // Scaffold AI agent workspace (fire-and-forget, don't block the UI)
+      this.dataServerService.scaffoldWorkspace(project.id).then(scaffoldResult => {
+        if (scaffoldResult.success && scaffoldResult.path) {
+          this.workspacePath.set(scaffoldResult.path);
+        }
+      });
       // Poll to confirm
       await this.pollServerState();
     } else {
@@ -598,6 +607,11 @@ export class ProjectDetailComponent implements OnInit, OnDestroy {
     } else {
       this.toastService.error('Failed to unload project from server');
     }
+  }
+
+  // Open OpenCode web UI in new tab
+  onOpenOpenCodeWeb(): void {
+    window.open('http://localhost:4096', '_blank');
   }
 
   // Check if current project is loaded in data server

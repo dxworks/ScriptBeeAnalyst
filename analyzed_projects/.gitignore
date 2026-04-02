@@ -1,0 +1,3 @@
+# Per-project workspaces (contain user data, chat history, outputs)
+projects/*
+!projects/.gitkeep

@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "scriptbee-data": {
+      "command": "python",
+      "args": ["analyzed_projects/mcp-server/server.py"],
+      "env": {
+        "DATA_SERVER_URL": "http://localhost:8001"
+      }
+    }
+  }
+}

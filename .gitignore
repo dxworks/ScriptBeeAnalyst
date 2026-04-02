@@ -90,3 +90,6 @@ web-ui/src/environments/environment.development.ts
 .serena
 .playwright-mcp
 /test-screenshots
+
+# Analyzed projects - track framework, ignore project data
+!analyzed_projects/CLAUDE.md

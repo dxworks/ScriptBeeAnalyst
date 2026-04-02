@@ -1,0 +1,86 @@
+# Plot Generation Patterns for ScriptBee Data Model
+
+When generating matplotlib visualizations, use the `generate_plot` MCP tool instead of `execute_code`.
+The `generate_plot` tool has both `graph_data` and `plt` (matplotlib.pyplot) pre-imported.
+
+IMPORTANT: Do NOT call plt.show() or plt.savefig() - the server captures the current figure automatically.
+
+---
+
+## Example: Commits per month bar chart
+
+```python
+from collections import Counter
+
+git_project = graph_data['git']
+
+commit_counts = Counter()
+for commit in git_project.git_commit_registry.all:
+    if commit.author_date:
+        month_label = commit.author_date.strftime('%Y-%m')
+        commit_counts[month_label] += 1
+
+months = sorted(commit_counts.keys())
+counts = [commit_counts[m] for m in months]
+
+plt.figure(figsize=(10, 5))
+plt.bar(months, counts)
+plt.title('Commits per Month')
+plt.xlabel('Month')
+plt.ylabel('Number of Commits')
+plt.xticks(rotation=45)
+plt.tight_layout()
+```
+
+## Example: Top 10 contributors horizontal bar chart
+
+```python
+from collections import Counter
+
+git_project = graph_data['git']
+
+author_counts = Counter()
+for commit in git_project.git_commit_registry.all:
+    if commit.author:
+        author_counts[commit.author.git_id.name] += 1
+
+top_authors = author_counts.most_common(10)
+names, counts = zip(*top_authors) if top_authors else ([], [])
+
+plt.figure(figsize=(10, 6))
+plt.barh(list(reversed(names)), list(reversed(counts)))
+plt.xlabel('Commits')
+plt.title('Top 10 Contributors')
+plt.tight_layout()
+```
+
+## Example: Issue types pie chart
+
+```python
+from collections import Counter
+
+jira_project = graph_data['jira']
+
+type_counts = Counter()
+for issue in jira_project.issue_registry.all:
+    for issue_type in issue.issue_types:
+        type_counts[issue_type.name] += 1
+
+labels = list(type_counts.keys())
+sizes = list(type_counts.values())
+
+plt.figure(figsize=(8, 8))
+plt.pie(sizes, labels=labels, autopct='%1.1f%%', startangle=90)
+plt.title('Issue Types Distribution')
+plt.tight_layout()
+```
+
+---
+
+## Tips
+
+- Always use `plt.figure(figsize=(w, h))` to set a reasonable size
+- Use `plt.tight_layout()` to prevent label clipping
+- For date axes, use `plt.xticks(rotation=45)` for readability
+- Standard library modules (collections, datetime) are available
+- The server returns JPEG - use clear colors with good contrast

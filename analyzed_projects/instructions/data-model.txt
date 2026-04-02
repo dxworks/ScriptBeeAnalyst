@@ -1,0 +1,246 @@
+# ScriptBee Data Model Reference
+
+This describes the in-memory graph data model available via the `execute_code` MCP tool.
+The graph contains information about the evolution and development of a software project
+tracked from three sources: Git, GitHub, and Jira.
+
+Use print() for output - results come from captured stdout.
+Keep output concise: summarize, aggregate, or limit results (e.g., top 10).
+Do NOT mutate the graph data - it is shared in-memory across executions.
+
+---
+
+## Graph Structure
+
+```python
+graph_data = {
+    "git": git_project,      # GitProject
+    "jira": jira_project,    # JiraProject
+    "github": github_project, # GitHubProject
+}
+```
+
+Each project exposes typed registries for fast entity lookup.
+
+---
+
+## Project Types & Registries
+
+### GitProject (extends Project)
+  - name: str
+  - account_registry    -> AccountRegistry[GitAccount, str]
+  - git_commit_registry -> CommitRegistry[GitCommit, str]
+  - file_registry       -> FileRegistry[File, UUID]
+  - change_registry     -> ChangeRegistry[Change, str]
+
+### JiraProject (extends Project)
+  - name: str
+  - issue_status_category_registry -> IssueStatusCategoryRegistry
+  - issue_status_registry          -> IssueStatusRegistry
+  - issue_type_registry            -> IssueTypeRegistry
+  - issue_registry                 -> IssueRegistry[Issue, str]
+  - jira_user_registry             -> JiraUserRegistry[JiraUser, str]
+
+### GitHubProject (extends Project)
+  - name: str
+  - git_hub_user_registry   -> GitHubUserRegistry[GitHubUser, str]
+  - pull_request_registry   -> PullRequestRegistry[PullRequest, int]
+  - git_hub_commit_registry -> GitHubCommitRegistry[GitHubCommit, str]
+
+---
+
+## Registry Interface
+
+```python
+AbstractRegistry[TYPE, ID]
+    - _map: Dict[ID, TYPE]
+    - all: Collection[TYPE]          # All entities
+    - all_ids: Set[ID]               # All IDs
+    - get_by_id(id) -> Optional[TYPE]
+    - contains(id) -> bool
+    - add(entity, id=None) -> Optional[TYPE]
+    - add_all(entities)
+    - remove(id) -> Optional[TYPE]
+    - is_empty() -> bool
+    - get_id(entity) -> ID (abstract)
+```
+
+### Specialized Registries
+- GitHubUserRegistry: id = GitHubUser.url
+- PullRequestRegistry: id = PullRequest.number
+- GitHubCommitRegistry: id = GitHubCommit.id
+- AccountRegistry: id = Account.id
+- CommitRegistry: id = GitCommit.id
+  - Supports prefix lookup: `get_by_id("^<prefix>")`
+- FileRegistry, ChangeRegistry
+- IssueStatusCategoryRegistry, IssueStatusRegistry, IssueTypeRegistry
+- IssueRegistry: id = Issue.key
+- JiraUserRegistry: id = JiraUser.key
+
+---
+
+## Domain Classes
+
+### Git Model
+
+**GitAccountId**
+  - email: str
+  - name: str
+  - str() -> "name <email>"
+
+**GitAccount (extends Account)**
+  - git_id: GitAccountId
+  - commits: List[GitCommit]
+  - id: str (from git_id)
+  - changes: List[Change]
+  - files: List[File]
+
+**GitCommit**
+  - id: str (SHA)
+  - message: str
+  - author: GitAccount
+  - committer: GitAccount
+  - author_date: datetime
+  - committer_date: datetime
+  - parents: List[GitCommit]
+  - children: List[GitCommit]
+  - changes: List[Change]
+  - issues: List[Issue]              (cross-project link)
+  - pull_requests: List[PullRequest] (cross-project link)
+  - branch_id: int
+  - repo_size: int
+  - is_merge_commit: bool   (len(parents) > 1)
+  - is_split_commit: bool   (len(children) > 1)
+
+**File**
+  - id: uuid.UUID
+  - is_binary: bool
+  - project: GitProject
+  - changes: List[Change]
+  - Methods:
+    - is_alive() -> bool          (False if file was deleted)
+    - file_name() -> str          (just the filename)
+    - relative_path() -> str      (repo-prefixed path, e.g. "backend/src/main.py")
+    - full_path() -> str          ("{project.name}/{relative_path}")
+    - last_existing_name() -> str (current name, or last name before deletion)
+
+  NOTE on multi-repository projects: File paths are always prefixed with the
+  repository name. For example, relative_path() returns "backend/src/main.py"
+  (not "src/main.py"). When a project spans multiple repositories, all files
+  are stored in the same GitProject with their repo prefix for disambiguation.
+
+**Change**
+  - id: str
+  - commit: GitCommit
+  - file: File
+  - change_type: ChangeType (ADD, DELETE, RENAME, MODIFY)
+  - old_file_name: str
+  - new_file_name: str
+  - hunks: List[Hunk]
+  - parent_commit: Optional[GitCommit]
+  - parent_change: Optional[Change]
+  - annotated_lines: List[GitCommit] (blame info)
+  - Properties:
+    - line_changes: List[LineChange]
+    - added_lines: List[LineChange]
+    - deleted_lines: List[LineChange]
+
+**Hunk**
+  - line_changes: List[LineChange]
+  - added_lines: derived
+  - deleted_lines: derived
+
+**LineChange**
+  - operation: LineOperation (ADD, DELETE)
+  - line_number: int
+  - commit: GitCommit
+
+### Jira Model
+
+**IssueStatusCategory**
+  - key: str
+  - name: str (e.g. "To Do", "In Progress", "Done")
+  - issue_statuses: List[IssueStatus]
+
+**IssueStatus**
+  - id: str
+  - name: str (e.g. "Open", "In Progress", "Resolved")
+  - issue_status_categories: List[IssueStatusCategory]
+  - issues: List[Issue]
+
+**IssueType**
+  - id: str
+  - name: str (e.g. "Bug", "Story", "Task")
+  - description: str
+  - isSubTask: bool
+  - issues: List[Issue]
+
+**Issue**
+  - id: int
+  - key: str (e.g. "ZEPPELIN-123")
+  - summary: str
+  - createdAt: datetime
+  - updatedAt: datetime
+  - creator: JiraUser
+  - reporter: JiraUser
+  - jira_users_as_assignee: List[JiraUser]
+  - issue_statuses: List[IssueStatus]
+  - issue_types: List[IssueType]
+  - parent: Optional[Issue]
+  - children: List[Issue]
+  - git_commits: List[GitCommit]      (cross-project link)
+  - pull_requests: List[PullRequest]   (cross-project link)
+
+**JiraUser**
+  - key: str
+  - name: str
+  - link: str
+  - issues_as_reporter: List[Issue]
+  - issues_as_creator: List[Issue]
+  - issues_as_assignee: List[Issue]
+
+### GitHub Model
+
+**GitHubUser**
+  - url: str
+  - login: str
+  - name: Optional[str]
+  - pull_requests_as_creator: List[PullRequest]
+  - pull_requests_as_merged_by: List[PullRequest]
+  - pull_requests_as_assignee: List[PullRequest]
+
+**PullRequest**
+  - number: int
+  - title: str
+  - state: str ("open" or "closed")
+  - body: str
+  - changedFiles: int
+  - createdAt: datetime
+  - mergedAt: Optional[datetime]
+  - closedAt: Optional[datetime]
+  - updatedAt: datetime
+  - createdBy: GitHubUser
+  - mergedBy: Optional[GitHubUser]
+  - assignees: List[GitHubUser]
+  - git_hub_commits: List[GitHubCommit]
+  - issues: List[Issue]           (cross-project link)
+  - git_commits: List[GitCommit]  (cross-project link)
+
+**GitHubCommit**
+  - id: str (SHA - matches GitCommit.id)
+  - date: datetime
+  - message: str
+  - changedFiles: int
+  - pull_requests: List[PullRequest]
+
+---
+
+## Cross-Project Connections
+
+The link between Git, GitHub, and Jira is established through bidirectional references:
+
+  Issue <-> GitCommit    (issue keys matched in commit messages)
+  Issue <-> PullRequest  (issue keys matched in PR title/body)
+  PullRequest <-> GitCommit (SHA matching between GitHub and Git commits)
+
+Navigate these via the corresponding list attributes on each entity.

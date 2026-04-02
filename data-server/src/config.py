@@ -28,6 +28,9 @@ JWT_SECRET = os.getenv("JWT_SECRET", "")
 # Default is 1000, increased to 50000 for deep object graphs
 RECURSION_LIMIT = int(os.getenv("RECURSION_LIMIT", "50000"))
 
+# Workspace configuration for AI agent project folders
+WORKSPACE_ROOT = os.getenv("WORKSPACE_ROOT", str(project_root / "analyzed_projects" / "projects"))
+
 # Validate critical settings
 if not JWT_SECRET:
     raise ValueError("JWT_SECRET must be set (via .env file or environment variable)")

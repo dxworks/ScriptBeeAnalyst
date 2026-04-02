@@ -16,9 +16,13 @@ services:
       - JWT_SECRET=${JWT_SECRET}
       # Logging configuration
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      # Workspace for AI agent project folders
+      - WORKSPACE_ROOT=/workspace/projects
     volumes:
       # Mount source for development (hot reload)
       - ./src:/app/src:ro
+      # Mount workspace for AI agent scaffolding
+      - ../analyzed_projects/projects:/workspace/projects
     command: uvicorn src.server:app --host 0.0.0.0 --port 8001 --reload
     restart: unless-stopped
 

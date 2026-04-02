@@ -432,13 +432,13 @@
                     <p class="text-secondary">Loading project into server memory...</p>
                   </div>
                 } @else if (isCurrentProjectLoaded()) {
-                  <!-- Current project is loaded - ready for chat -->
+                  <!-- Current project is loaded - agent workspace instructions -->
                   <div class="chat-placeholder">
                     <svg width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" class="text-success">
                       <circle cx="12" cy="12" r="10"/>
                       <path d="M9 12l2 2 4-4"/>
                     </svg>
-                    <h2>Project Loaded</h2>
+                    <h2>Project Loaded - Ready for AI Analysis</h2>
                     @if (loadedProjectStats()) {
                       <div class="loaded-stats">
                         <div class="stat-item">
@@ -455,12 +455,64 @@
                         </div>
                       </div>
                     }
-                    <p class="text-secondary">AI-powered chat will be integrated here.</p>
-                    <p class="text-muted">This area will connect to Chainlit for natural language queries about your project data.</p>
+
+                    <!-- Agent Workspace Instructions -->
+                    <div class="agent-workspace-card">
+                      <h3>Open your AI Agent</h3>
+                      <p class="text-secondary">Use any MCP-compatible AI agent to analyze this project's data.</p>
+
+                      @if (workspacePath()) {
+                        <div class="workspace-info">
+                          <label class="text-muted">Workspace path:</label>
+                          <code class="workspace-path">{{ workspacePath() }}</code>
+                        </div>
+                      }
+
+                      <div class="workspace-info">
+                        <label class="text-muted">Project UUID:</label>
+                        <code class="workspace-path">{{ selectedProject()?.id }}</code>
+                      </div>
+
+                      <div class="agent-steps">
+                        <div class="step">
+                          <span class="step-number">1</span>
+                          <span>Start OpenCode web: <code>cd analyzed_projects && opencode web --port 4096</code></span>
+                        </div>
+                        <div class="step">
+                          <span class="step-number">2</span>
+                          <span>Click the button below to open the web UI, or use the terminal agent</span>
+                        </div>
+                        <div class="step">
+                          <span class="step-number">3</span>
+                          <span>Start asking questions about your project data</span>
+                        </div>
+                      </div>
+
+                      <details class="example-questions">
+                        <summary>Example questions</summary>
+                        <ul>
+                          <li>How many commits are in this project?</li>
+                          <li>Who are the top 10 contributors?</li>
+                          <li>Show me the most modified files</li>
+                          <li>Create a chart of commits per month</li>
+                        </ul>
+                      </details>
+                    </div>
+
                     @if (!dataServerConnected()) {
                       <p class="text-error">Data server is offline. Connection lost.</p>
                     }
-                    <button class="btn btn-secondary" (click)="onUnloadFromDataServer()" [disabled]="!dataServerConnected()">Unload from Server</button>
+                    <div class="chat-actions">
+                      <button class="btn btn-primary" (click)="onOpenOpenCodeWeb()">
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                          <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/>
+                          <polyline points="15 3 21 3 21 9"/>
+                          <line x1="10" y1="14" x2="21" y2="3"/>
+                        </svg>
+                        Open OpenCode Web
+                      </button>
+                      <button class="btn btn-secondary" (click)="onUnloadFromDataServer()" [disabled]="!dataServerConnected()">Unload from Server</button>
+                    </div>
                   </div>
                 } @else if (isDifferentProjectLoaded()) {
                   <!-- Different project is loaded -->

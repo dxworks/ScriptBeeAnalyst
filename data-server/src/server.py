@@ -11,8 +11,11 @@ from fastapi.responses import JSONResponse, Response
 from contextlib import asynccontextmanager
 import matplotlib.pyplot as plt
 
+import re
+from datetime import datetime
+
 from supabase import create_client, Client
-from src.config import SUPABASE_URL, SUPABASE_SERVICE_KEY
+from src.config import SUPABASE_URL, SUPABASE_SERVICE_KEY, WORKSPACE_ROOT
 from src.logger import get_logger
 
 logger = get_logger("data-server")
@@ -317,6 +320,79 @@ async def unload_project(project_id: str):
     logger.info("Project unloaded successfully")
 
     return {"message": "Project unloaded successfully"}
+
+
+@app.post("/projects/{project_id}/scaffold-workspace")
+async def scaffold_workspace(project_id: str):
+    """
+    Create the per-project workspace folder for AI agent analysis.
+
+    Creates a directory under WORKSPACE_ROOT with a README containing
+    project info, stats, and UUID. Also creates outputs/ and scripts/ subdirs.
+    """
+    supabase: Client = create_client(SUPABASE_URL, SUPABASE_SERVICE_KEY)
+
+    try:
+        response = supabase.table("projects").select("name").eq("id", project_id).single().execute()
+        project = response.data
+        if not project:
+            return JSONResponse({"error": f"Project {project_id} not found"}, status_code=404)
+        project_name = project["name"]
+    except Exception as e:
+        logger.error(f"Failed to fetch project for scaffolding: {e}")
+        return JSONResponse({"error": f"Failed to fetch project: {str(e)}"}, status_code=500)
+
+    # Sanitize name for directory
+    folder_name = re.sub(r'[^a-z0-9-]', '', project_name.lower().replace(' ', '-'))
+    if not folder_name:
+        folder_name = project_id[:8]
+
+    workspace_path = Path(WORKSPACE_ROOT) / folder_name
+
+    # Create directory structure
+    workspace_path.mkdir(parents=True, exist_ok=True)
+    (workspace_path / "outputs").mkdir(exist_ok=True)
+    (workspace_path / "scripts").mkdir(exist_ok=True)
+
+    # Gather stats if project is loaded
+    stats_text = ""
+    if current_project_id == project_id and graph_data:
+        git_commits = len(graph_data.get("git", {}).git_commit_registry.all) if graph_data else 0
+        jira_issues = len(graph_data.get("jira", {}).issue_registry.all) if graph_data else 0
+        github_prs = len(graph_data.get("github", {}).pull_request_registry.all) if graph_data else 0
+        stats_text = (
+            f"\n## Statistics\n\n"
+            f"- Git commits: {git_commits}\n"
+            f"- JIRA issues: {jira_issues}\n"
+            f"- GitHub PRs: {github_prs}\n"
+        )
+
+    # Generate README
+    readme_content = (
+        f"# {project_name}\n\n"
+        f"- **Project UUID:** `{project_id}`\n"
+        f"- **Workspace created:** {datetime.now().strftime('%Y-%m-%d %H:%M')}\n"
+        f"{stats_text}\n"
+        f"## Usage\n\n"
+        f"Open your AI agent in this directory to analyze this project:\n\n"
+        f"```bash\n"
+        f"cd analyzed_projects/projects/{folder_name}\n"
+        f"opencode   # or: claude\n"
+        f"```\n\n"
+        f"The agent has MCP tools to query the data-server.\n"
+        f"See `analyzed_projects/instructions/` for data model documentation.\n"
+    )
+    (workspace_path / "README.md").write_text(readme_content)
+
+    relative_path = f"analyzed_projects/projects/{folder_name}"
+    logger.info(f"Workspace scaffolded for project '{project_name}' at {relative_path}")
+
+    return {
+        "path": relative_path,
+        "project_name": project_name,
+        "folder_name": folder_name,
+    }
+
 
 
 @app.post("/execute")

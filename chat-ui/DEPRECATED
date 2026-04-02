@@ -1,0 +1,13 @@
+DEPRECATED - 2026-04-01
+
+The Chainlit chat UI has been replaced by the MCP server approach.
+
+Users should use an MCP-compatible AI agent (OpenCode, Claude Code, Cursor, etc.)
+with the MCP tools defined in analyzed_projects/mcp-server/.
+
+Key files from this directory have been extracted to:
+  - analyzed_projects/instructions/data-model.txt    (from code_generation_guidelines.txt)
+  - analyzed_projects/instructions/query-examples.txt (from code_generation_guidelines.txt)
+  - analyzed_projects/instructions/plot-patterns.txt  (from plot_generation_guidelines.md)
+
+This directory is kept for reference only. Do not use it for new development.

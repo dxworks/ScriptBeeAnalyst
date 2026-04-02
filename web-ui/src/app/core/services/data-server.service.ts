@@ -23,6 +23,14 @@ export interface LoadProjectResult {
   error?: string;
 }
 
+export interface ScaffoldWorkspaceResult {
+  success: boolean;
+  path?: string;
+  project_name?: string;
+  folder_name?: string;
+  error?: string;
+}
+
 export interface HealthResponse {
   status: string;
   loaded_projects: string[];
@@ -147,6 +155,42 @@ export class DataServerService {
     } catch (err) {
       console.error('Failed to unload project:', err);
       return false;
+    }
+  }
+
+  /**
+   * Scaffold AI agent workspace folder for a project (no auth required)
+   * Creates directory structure with README under analyzed_projects/projects/
+   * @param projectId - UUID of the project
+   * @returns ScaffoldWorkspaceResult with workspace path
+   */
+  async scaffoldWorkspace(projectId: string): Promise<ScaffoldWorkspaceResult> {
+    try {
+      const response = await firstValueFrom(
+        this.http.post<{
+          path: string;
+          project_name: string;
+          folder_name: string;
+        }>(
+          `${this.baseUrl}/projects/${projectId}/scaffold-workspace`,
+          {}
+        )
+      );
+
+      return {
+        success: true,
+        path: response.path,
+        project_name: response.project_name,
+        folder_name: response.folder_name,
+      };
+    } catch (err) {
+      console.error('Failed to scaffold workspace:', err);
+      return {
+        success: false,
+        error: err instanceof HttpErrorResponse
+          ? (err.error?.error || 'Failed to create workspace')
+          : 'Unexpected error',
+      };
     }
   }
 

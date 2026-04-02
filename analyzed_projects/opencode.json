@@ -1,0 +1,17 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "mcp": {
+    "scriptbee-data": {
+      "type": "local",
+      "command": ["python", "mcp-server/server.py"],
+      "environment": {
+        "DATA_SERVER_URL": "http://localhost:8001"
+      }
+    }
+  },
+  "instructions": [
+    "instructions/data-model.txt",
+    "instructions/query-examples.txt",
+    "instructions/plot-patterns.txt"
+  ]
+}

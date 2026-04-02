@@ -1,0 +1,117 @@
+# Query Examples for ScriptBee Data Model
+
+These examples demonstrate how to query the in-memory graph via the `execute_code` MCP tool.
+The `graph_data` dict is pre-initialized - just use it directly in your code.
+
+---
+
+## 1. Project overview: name and commit count
+
+```python
+git_project = graph_data["git"]
+num_commits = len(git_project.git_commit_registry.all)
+project_name = git_project.name
+
+print(f"Project '{project_name}' has {num_commits} commits.")
+```
+
+## 2. Top 5 most modified files
+
+```python
+from collections import Counter
+
+git_project = graph_data["git"]
+file_counter = Counter()
+
+for file in git_project.file_registry.all:
+    fname = file.last_existing_name()
+    file_counter[fname] = len(file.changes)
+
+top_5_files = file_counter.most_common(5)
+print("The 5 most modified files (with number of modifications):")
+for fname, count in top_5_files:
+    print(f"  {fname}: {count} modifications")
+```
+
+## 3. Which user contributed to the most Jira issues?
+
+```python
+from collections import defaultdict
+
+git_project = graph_data["git"]
+user_issue_count = defaultdict(set)
+
+for account in git_project.account_registry.all:
+    for commit in account.commits:
+        for issue in commit.issues:
+            user_issue_count[account].add(issue)
+
+most_contributing_user = max(user_issue_count.items(), key=lambda x: len(x[1]), default=None)
+
+if most_contributing_user:
+    user, issues = most_contributing_user
+    print(f"User {user.git_id} contributed to {len(issues)} Jira issues (the most).")
+else:
+    print("No user found with associated issues.")
+```
+
+## 4. Top 5 "bug magnet" files (cross-project query)
+
+```python
+from collections import Counter
+
+jira_project = graph_data["jira"]
+bug_file_counter = Counter()
+
+for issue in jira_project.issue_registry.all:
+    for issue_type in issue.issue_types:
+        if issue_type.name.lower() == "bug":
+            for commit in issue.git_commits:
+                for change in commit.changes:
+                    bug_file_counter[change.file.relative_path()] += 1
+
+top_5_bug_magnets = bug_file_counter.most_common(5)
+
+print("Top 5 bug magnet files:")
+for fname, count in top_5_bug_magnets:
+    print(f"  {fname}: {count} occurrences in bug-related commits")
+```
+
+## 5. Pull requests with linked JIRA issues
+
+```python
+github_project = graph_data["github"]
+
+for pr in github_project.pull_request_registry.all:
+    if pr.issues:
+        issue_keys = ", ".join(i.key for i in pr.issues)
+        print(f"PR #{pr.number} '{pr.title[:50]}' -> Issues: {issue_keys}")
+```
+
+## 6. Commits per author (top 10)
+
+```python
+from collections import Counter
+
+git_project = graph_data["git"]
+author_counts = Counter()
+
+for commit in git_project.git_commit_registry.all:
+    if commit.author:
+        author_counts[commit.author.git_id.name] += 1
+
+print("Top 10 contributors by commit count:")
+for name, count in author_counts.most_common(10):
+    print(f"  {name}: {count} commits")
+```
+
+---
+
+## Usage Notes
+
+- `graph_data` is pre-initialized. Do not re-declare it.
+- Do NOT mutate the graph data - it is shared in-memory across executions.
+- Use print() for all output. The result is captured stdout.
+- Keep output concise: summarize, aggregate, or limit to top N.
+- Standard library modules (collections, datetime, etc.) are available.
+- Access registries via `.all` for iteration, `.get_by_id()` for lookup.
