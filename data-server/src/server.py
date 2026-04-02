@@ -169,6 +169,7 @@ app.add_middleware(
 
 # Track currently loaded project
 current_project_id = None
+current_project_name = None
 current_user_id = None
 
 
@@ -199,6 +200,7 @@ async def get_current_project():
 
     return {
         "project_id": current_project_id,
+        "project_name": current_project_name,
         "user_id": current_user_id,
         "stats": {
             "git_commits": len(graph_data.get("git", {}).git_commit_registry.all) if graph_data else 0,
@@ -220,7 +222,7 @@ async def load_project(project_id: str):
 
     Returns project stats on success.
     """
-    global graph_data, current_project_id, current_user_id
+    global graph_data, current_project_id, current_project_name, current_user_id
 
     logger.info(f"Loading project: {project_id}")
 
@@ -266,6 +268,7 @@ async def load_project(project_id: str):
         graph_data.clear()
         graph_data.update(loaded_graph)
         current_project_id = project_id
+        current_project_name = project_name
         current_user_id = user_id
 
         logger.info(f"Project {project_id} loaded into memory")
@@ -303,7 +306,7 @@ async def unload_project(project_id: str):
 
     If the specified project is currently loaded, clears it from memory.
     """
-    global graph_data, current_project_id, current_user_id
+    global graph_data, current_project_id, current_project_name, current_user_id
 
     if current_project_id != project_id:
         return JSONResponse(
@@ -315,6 +318,7 @@ async def unload_project(project_id: str):
 
     graph_data.clear()
     current_project_id = None
+    current_project_name = None
     current_user_id = None
 
     logger.info("Project unloaded successfully")

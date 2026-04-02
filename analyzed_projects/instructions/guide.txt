@@ -30,4 +30,3 @@ Navigate via list attributes: commit.issues, issue.git_commits, pr.git_commits, 
 
 - Use print() for output - results come from captured stdout.
 - Keep output concise: summarize, aggregate, or limit results (e.g., top 10).
-- Do NOT mutate the graph data - it is shared in-memory across executions.

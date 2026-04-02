@@ -35,8 +35,7 @@ analyzed_projects/
 │       ├── outputs/     # Saved plots and exports
 │       └── scripts/     # User-saved analysis scripts
 ├── opencode.json        # OpenCode configuration
-├── CLAUDE.md            # Claude Code context
-└── setup-project.sh     # Manual workspace scaffolding
+└── CLAUDE.md            # Claude Code context
 ```
 
 ## Quick Start
@@ -56,9 +55,8 @@ pip install -r analyzed_projects/mcp-server/requirements.txt
 ### Using with OpenCode
 
 ```bash
-cd analyzed_projects
-opencode
-# Ask: "How many commits are in this project?"
+# From project root - automatically detects loaded project
+./analyze.sh
 ```
 
 ### Using with Claude Code
@@ -68,13 +66,6 @@ Claude Code automatically picks up the `.mcp.json` config at the repo root.
 ```bash
 claude
 # The scriptbee-data MCP tools are available automatically
-```
-
-### Manual workspace setup
-
-```bash
-# From project root
-./analyzed_projects/setup-project.sh <project-uuid> [project-name]
 ```
 
 ## MCP Tools
