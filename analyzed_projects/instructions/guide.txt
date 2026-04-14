@@ -1,8 +1,9 @@
 # ScriptBee Data - Usage Guide
 
 You have access to an in-memory graph of a software project's development history.
-The full data model source code (models.py, registries.py, project_linkers.py) is
-included in your context - refer to it for exact class definitions, fields, and methods.
+The full data model source code (base_models.py, git_models.py, jira_models.py,
+github_models.py, registries.py, project_linkers.py) is included in your context -
+refer to it for exact class definitions, fields, and methods.
 
 ## Graph Structure
 

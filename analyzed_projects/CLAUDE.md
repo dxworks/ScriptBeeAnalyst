@@ -49,7 +49,10 @@ pr.git_commits         # Git commits in this PR
 ## Detailed Documentation
 
 The data model source code is in `data-server/src/common/`:
-- `models.py` - All domain classes (GitProject, JiraProject, GitHubProject, etc.)
+- `base_models.py` - Base classes (Project, Account, Developer)
+- `git_models.py` - Git domain (GitProject, GitCommit, File, Change, etc.)
+- `jira_models.py` - JIRA domain (JiraProject, Issue, IssueStatus, etc.)
+- `github_models.py` - GitHub domain (GitHubProject, PullRequest, GitHubCommit, etc.)
 - `registries.py` - AbstractRegistry base class
 - `project_linkers.py` - Cross-project relationship linking
 

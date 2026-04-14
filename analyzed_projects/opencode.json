@@ -11,7 +11,10 @@
   },
   "instructions": [
     "instructions/guide.txt",
-    "../data-server/src/common/models.py",
+    "../data-server/src/common/base_models.py",
+    "../data-server/src/common/git_models.py",
+    "../data-server/src/common/jira_models.py",
+    "../data-server/src/common/github_models.py",
     "../data-server/src/common/registries.py",
     "../data-server/src/common/project_linkers.py",
     "instructions/query-examples.txt",

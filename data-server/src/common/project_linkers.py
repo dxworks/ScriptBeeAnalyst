@@ -1,47 +1,53 @@
+from __future__ import annotations
+
 import re
+
 from src.common.models import Project, GitProject, JiraProject, GitHubProject
 from src.jira_miner.reader_dto.models import JsonFileFormatJira
 from src.logger import get_logger
 
 LOG = get_logger(__name__)
 
-def get_or_add(container: list, element):
+
+def _get_or_add(container: list, element):
     if element not in container:
         container.append(element)
     return element
 
+
+def _build_issue_pattern(jira_project: JiraProject):
+    """Build a compiled regex matching any issue key from the project."""
+    issue_keys = [re.escape(issue.key) for issue in jira_project.issue_registry.all]
+    if not issue_keys:
+        return None
+    return re.compile(r'\b(' + '|'.join(issue_keys) + r')\b', re.IGNORECASE)
+
+
 class ProjectLinker:
     @classmethod
-    def link_projects(cls, p1: Project, p2: Project, additional_data:JsonFileFormatJira = None) -> None:
-        if isinstance(p1, JiraProject) and isinstance(p2, GitProject):
-            cls.link_issues_with_git_commits(p1, p2)
-            p1.link(p2)
-        elif isinstance(p2, JiraProject) and isinstance(p1, GitProject):
-            cls.link_issues_with_git_commits(p2, p1)
-            p2.link(p1)
-        elif isinstance(p1, JiraProject) and isinstance(p2, GitHubProject):
-            cls.link_pull_requests_with_issues(p1, p2, additional_data)
-            p1.link(p2)
-        elif isinstance(p2, JiraProject) and isinstance(p1, GitHubProject):
-            cls.link_pull_requests_with_issues(p2, p1, additional_data)
-            p2.link(p1)
-        elif isinstance(p1, GitHubProject) and isinstance(p2, GitProject):
-            cls.link_pull_requests_with_git_commits(p1, p2)
-            p1.link(p2)
-        elif isinstance(p2, GitHubProject) and isinstance(p1, GitProject):
-            cls.link_pull_requests_with_git_commits(p2, p1)
-            p2.link(p1)
+    def link_projects(cls, p1: Project, p2: Project, additional_data: JsonFileFormatJira = None) -> None:
+        jira = next((p for p in (p1, p2) if isinstance(p, JiraProject)), None)
+        git = next((p for p in (p1, p2) if isinstance(p, GitProject)), None)
+        github = next((p for p in (p1, p2) if isinstance(p, GitHubProject)), None)
+
+        if jira and git:
+            cls.link_issues_with_git_commits(jira, git)
+            jira.link(git)
+        elif jira and github:
+            cls.link_pull_requests_with_issues(jira, github, additional_data)
+            jira.link(github)
+        elif github and git:
+            cls.link_pull_requests_with_git_commits(github, git)
+            github.link(git)
         else:
-            print(f"[Linker] Unhandled linking case: {type(p1)} ↔ {type(p2)}")
+            LOG.warning(f"Unhandled linking case: {type(p1).__name__} <-> {type(p2).__name__}")
 
     @classmethod
     def link_issues_with_git_commits(cls, jira_project: JiraProject, git_project: GitProject) -> None:
         """Link Jira issues to Git commits based on commit messages."""
-        issue_keys = [re.escape(issue.key) for issue in jira_project.issue_registry.all]
-        if not issue_keys:
+        issue_pattern = _build_issue_pattern(jira_project)
+        if issue_pattern is None:
             return
-
-        issue_pattern = re.compile(r'\b(' + '|'.join(issue_keys) + r')\b', re.IGNORECASE)
 
         links = 0
         commits_linked_with_issues = 0
@@ -59,8 +65,8 @@ class ProjectLinker:
                 issue = jira_project.issue_registry.get_by_id(match.upper())
                 if not issue:
                     continue
-                get_or_add(issue.git_commits, commit)
-                get_or_add(commit.issues, issue)
+                _get_or_add(issue.git_commits, commit)
+                _get_or_add(commit.issues, issue)
 
                 links += 1
 
@@ -69,11 +75,9 @@ class ProjectLinker:
 
     @classmethod
     def link_pull_requests_with_issues(cls, jira_project: JiraProject, gh_project: GitHubProject, jira_data: JsonFileFormatJira) -> None:
-        issue_keys = [re.escape(issue.key) for issue in jira_project.issue_registry.all]
-        if not issue_keys:
+        issue_pattern = _build_issue_pattern(jira_project)
+        if issue_pattern is None:
             return
-
-        issue_pattern = re.compile(r'\b(' + '|'.join(issue_keys) + r')\b', re.IGNORECASE)
 
         prs_with_issues = 0
 
@@ -89,8 +93,8 @@ class ProjectLinker:
                 issue = jira_project.issue_registry.get_by_id(match.upper())
                 if not issue:
                     continue
-                get_or_add(pr.issues, issue)
-                get_or_add(issue.pull_requests, pr)
+                _get_or_add(pr.issues, issue)
+                _get_or_add(issue.pull_requests, pr)
 
         def extract_pr_number(text: str) -> int | None:
             match = re.search(r'#(\d+)', text)
@@ -109,8 +113,8 @@ class ProjectLinker:
                 for link in issues_pr_links:
                     for pr in gh_project.pull_request_registry.all:
                         if extract_pr_number(link) == pr.number:
-                            get_or_add(i.pull_requests, pr)
-                            get_or_add(pr.issues, i)
+                            _get_or_add(i.pull_requests, pr)
+                            _get_or_add(pr.issues, i)
                             break
 
         LOG.debug(f"[Linker] {prs_with_issues} PRs associated with issues")
@@ -125,8 +129,8 @@ class ProjectLinker:
                 if not git_commit:
                     continue
 
-                get_or_add(git_commit.pull_requests, pr)
-                get_or_add(pr.git_commits, git_commit)
+                _get_or_add(git_commit.pull_requests, pr)
+                _get_or_add(pr.git_commits, git_commit)
 
                 direct_links += 1
 
