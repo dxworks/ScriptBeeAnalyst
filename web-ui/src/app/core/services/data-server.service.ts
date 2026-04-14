@@ -3,6 +3,13 @@ import { HttpClient, HttpHeaders, HttpErrorResponse } from '@angular/common/http
 import { firstValueFrom } from 'rxjs';
 import { AuthService } from './auth.service';
 import { environment } from '../../../environments/environment';
+import {
+  SuggestionsResponse,
+  ApplySuggestionRequest,
+  RejectSuggestionRequest,
+  UnifiedUserDto,
+  UnifiedUsersResponse,
+} from '../models/author-merge.model';
 
 export interface BuildResult {
   success: boolean;
@@ -278,6 +285,63 @@ export class DataServerService {
       success: false,
       error: `Unexpected error: ${err instanceof Error ? err.message : 'Unknown error'}`,
     };
+  }
+
+  // ── Author Smart Merge Methods ──────────────────────────────────────────────
+
+  async getSuggestions(projectId: string): Promise<SuggestionsResponse | null> {
+    try {
+      return await firstValueFrom(
+        this.http.get<SuggestionsResponse>(
+          `${this.baseUrl}/projects/${projectId}/authors/suggestions`
+        )
+      );
+    } catch (err) {
+      console.error('Failed to get suggestions:', err);
+      return null;
+    }
+  }
+
+  async applySuggestion(projectId: string, request: ApplySuggestionRequest): Promise<UnifiedUserDto | null> {
+    try {
+      return await firstValueFrom(
+        this.http.post<UnifiedUserDto>(
+          `${this.baseUrl}/projects/${projectId}/authors/suggestions/apply`,
+          request
+        )
+      );
+    } catch (err) {
+      console.error('Failed to apply suggestion:', err);
+      return null;
+    }
+  }
+
+  async rejectSuggestion(projectId: string, identityKeys: string[]): Promise<boolean> {
+    try {
+      await firstValueFrom(
+        this.http.post(
+          `${this.baseUrl}/projects/${projectId}/authors/suggestions/reject`,
+          { identity_keys: identityKeys } as RejectSuggestionRequest
+        )
+      );
+      return true;
+    } catch (err) {
+      console.error('Failed to reject suggestion:', err);
+      return false;
+    }
+  }
+
+  async getUnifiedUsers(projectId: string): Promise<UnifiedUsersResponse | null> {
+    try {
+      return await firstValueFrom(
+        this.http.get<UnifiedUsersResponse>(
+          `${this.baseUrl}/projects/${projectId}/authors/users`
+        )
+      );
+    } catch (err) {
+      console.error('Failed to get unified users:', err);
+      return null;
+    }
   }
 
   private handleError(err: unknown, operation: string): BuildResult {

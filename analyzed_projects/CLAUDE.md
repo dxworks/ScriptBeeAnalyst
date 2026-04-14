@@ -29,6 +29,7 @@ You have 4 tools from the `scriptbee-data` MCP server:
 git_project    = graph_data['git']     # commits, files, changes, authors
 jira_project   = graph_data['jira']    # issues, statuses, types, users
 github_project = graph_data['github']  # pull requests, users, commits
+unified_users  = graph_data.get('users', [])  # merged identities (after setup)
 
 # Iterate all entities via registries
 for commit in git_project.git_commit_registry.all:

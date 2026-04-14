@@ -12,10 +12,30 @@ graph_data = {
     "git": GitProject,       # commits, files, changes, authors
     "jira": JiraProject,     # issues, statuses, types, users
     "github": GitHubProject, # pull requests, users, commits
+    "users": [UnifiedUser],  # merged identities across all sources (after setup)
 }
 ```
 
 Entities are stored in typed registries. Access via `.all` (iterate) or `.get_by_id()` (lookup).
+
+## Unified Users (cross-source identities)
+
+After the user completes author matching in the Setup tab, `graph_data['users']` contains
+`UnifiedUser` objects that merge identities across Git, GitHub, and JIRA:
+
+```python
+for user in graph_data.get('users', []):
+    print(user.display_name, user.primary_email)
+    for ga in user.git_accounts:      # live GitAccount references
+        print(f"  Git: {ga.git_id} - {len(ga.commits)} commits")
+    for gu in user.github_users:      # live GitHubUser references
+        print(f"  GitHub: {gu.login} - {len(gu.pull_requests_as_creator)} PRs")
+    for ju in user.jira_users:        # live JiraUser references
+        print(f"  JIRA: {ju.name} - {len(ju.issues_as_assignee)} issues")
+```
+
+Properties: display_name, primary_email, identities, git_accounts, github_users, jira_users,
+all_emails, all_names, all_logins, commit_count, issue_count, pr_count
 
 ## Cross-Project Links
 

@@ -15,10 +15,18 @@ import {
   getRepoNameFromFile,
   isValidSerializedFileName,
 } from '../../core/models/project.model';
+import {
+  SuggestionDto,
+  UnifiedUserDto,
+  getIdentityKey,
+  getSourceLabel,
+  getConfidenceLevel,
+  getConfidenceLabel,
+} from '../../core/models/author-merge.model';
 import { CreateProjectModalComponent } from '../../shared/components/create-project-modal/create-project-modal.component';
 import { ConfirmationModalComponent } from '../../shared/components/confirmation-modal/confirmation-modal.component';
 
-type Section = 'description' | 'files' | 'chat';
+type Section = 'description' | 'files' | 'setup' | 'chat';
 
 interface StagedFile {
   file: File;
@@ -76,6 +84,20 @@ export class ProjectDetailComponent implements OnInit, OnDestroy {
 
   // AI agent workspace path (set after scaffold)
   workspacePath = signal<string | null>(null);
+
+  // Setup / Author Matching state
+  suggestions = signal<SuggestionDto[]>([]);
+  suggestionsLoading = signal(false);
+  suggestionsTotal = signal(0);
+  totalIdentities = signal(0);
+  unifiedUsers = signal<UnifiedUserDto[]>([]);
+  setupInitialized = signal(false);
+  // Track which suggestion is being processed (apply/reject in progress)
+  processingSuggestionId = signal<string | null>(null);
+  // Editable fields per suggestion (keyed by suggestion_id)
+  suggestionEdits = signal<Record<string, { name: string; email: string }>>({});
+  // Track unchecked identities per suggestion (keyed by suggestion_id -> set of identity keys)
+  suggestionUnchecked = signal<Record<string, Set<string>>>({});
 
   // Polling interval reference
   private pollingInterval: any = null;
@@ -184,7 +206,7 @@ export class ProjectDetailComponent implements OnInit, OnDestroy {
     // Check for section query param
     this.route.queryParamMap.subscribe(params => {
       const section = params.get('section') as Section;
-      if (section && ['description', 'files', 'chat'].includes(section)) {
+      if (section && ['description', 'files', 'setup', 'chat'].includes(section)) {
         this.selectedSection.set(section);
       }
     });
@@ -668,4 +690,142 @@ export class ProjectDetailComponent implements OnInit, OnDestroy {
   cancelDeleteProject(): void {
     this.showDeleteProjectModal.set(false);
   }
+
+  // ── Setup / Author Matching ─────────────────────────────────────────────────
+
+  async loadSuggestions(): Promise<void> {
+    const project = this.selectedProject();
+    if (!project) return;
+
+    this.suggestionsLoading.set(true);
+    this.setupInitialized.set(true);
+
+    // Load suggestions and existing users in parallel
+    const [suggestionsResponse, usersResponse] = await Promise.all([
+      this.dataServerService.getSuggestions(project.id),
+      this.dataServerService.getUnifiedUsers(project.id),
+    ]);
+
+    if (suggestionsResponse) {
+      this.suggestions.set(suggestionsResponse.suggestions);
+      this.suggestionsTotal.set(suggestionsResponse.suggestions.length);
+      this.totalIdentities.set(suggestionsResponse.total_identities);
+
+      // Initialize editable fields for each suggestion
+      const edits: Record<string, { name: string; email: string }> = {};
+      for (const s of suggestionsResponse.suggestions) {
+        edits[s.suggestion_id] = { name: s.default_name, email: s.default_email };
+      }
+      this.suggestionEdits.set(edits);
+      this.suggestionUnchecked.set({});
+    } else {
+      this.toastService.error('Failed to load author suggestions');
+    }
+
+    if (usersResponse) {
+      this.unifiedUsers.set(usersResponse.users);
+    }
+
+    this.suggestionsLoading.set(false);
+  }
+
+  async onApplySuggestion(suggestion: SuggestionDto): Promise<void> {
+    const project = this.selectedProject();
+    if (!project || this.processingSuggestionId()) return;
+
+    this.processingSuggestionId.set(suggestion.suggestion_id);
+
+    const edits = this.suggestionEdits()[suggestion.suggestion_id];
+    const unchecked = this.suggestionUnchecked()[suggestion.suggestion_id] || new Set<string>();
+
+    const selectedKeys = suggestion.identities
+      .map(i => getIdentityKey(i))
+      .filter(k => !unchecked.has(k));
+
+    const unselectedKeys = suggestion.identities
+      .map(i => getIdentityKey(i))
+      .filter(k => unchecked.has(k));
+
+    if (selectedKeys.length < 2) {
+      this.toastService.warning('Select at least 2 identities to merge');
+      this.processingSuggestionId.set(null);
+      return;
+    }
+
+    const result = await this.dataServerService.applySuggestion(project.id, {
+      suggestion_id: suggestion.suggestion_id,
+      selected_identity_keys: selectedKeys,
+      unselected_identity_keys: unselectedKeys,
+      name: edits?.name || suggestion.default_name,
+      email: edits?.email || suggestion.default_email,
+    });
+
+    this.processingSuggestionId.set(null);
+
+    if (result) {
+      this.toastService.success(`Merged as "${result.display_name}"`);
+      // Remove the suggestion from the list
+      this.suggestions.update(list => list.filter(s => s.suggestion_id !== suggestion.suggestion_id));
+      // Add the new user to the list
+      this.unifiedUsers.update(users => [...users, result]);
+    } else {
+      this.toastService.error('Failed to apply suggestion');
+    }
+  }
+
+  async onRejectSuggestion(suggestion: SuggestionDto): Promise<void> {
+    const project = this.selectedProject();
+    if (!project || this.processingSuggestionId()) return;
+
+    this.processingSuggestionId.set(suggestion.suggestion_id);
+
+    const identityKeys = suggestion.identities.map(i => getIdentityKey(i));
+    const success = await this.dataServerService.rejectSuggestion(project.id, identityKeys);
+
+    this.processingSuggestionId.set(null);
+
+    if (success) {
+      this.toastService.info('Suggestion rejected');
+      this.suggestions.update(list => list.filter(s => s.suggestion_id !== suggestion.suggestion_id));
+    } else {
+      this.toastService.error('Failed to reject suggestion');
+    }
+  }
+
+  onSuggestionNameChange(suggestionId: string, name: string): void {
+    this.suggestionEdits.update(edits => ({
+      ...edits,
+      [suggestionId]: { ...edits[suggestionId], name },
+    }));
+  }
+
+  onSuggestionEmailChange(suggestionId: string, email: string): void {
+    this.suggestionEdits.update(edits => ({
+      ...edits,
+      [suggestionId]: { ...edits[suggestionId], email },
+    }));
+  }
+
+  onToggleIdentity(suggestionId: string, identityKey: string): void {
+    this.suggestionUnchecked.update(map => {
+      const current = new Set(map[suggestionId] || []);
+      if (current.has(identityKey)) {
+        current.delete(identityKey);
+      } else {
+        current.add(identityKey);
+      }
+      return { ...map, [suggestionId]: current };
+    });
+  }
+
+  isIdentityChecked(suggestionId: string, identityKey: string): boolean {
+    const unchecked = this.suggestionUnchecked()[suggestionId];
+    return !unchecked || !unchecked.has(identityKey);
+  }
+
+  // Expose helper functions to the template
+  getIdentityKey = getIdentityKey;
+  getSourceLabel = getSourceLabel;
+  getConfidenceLevel = getConfidenceLevel;
+  getConfidenceLabel = getConfidenceLabel;
 }

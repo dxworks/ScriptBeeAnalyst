@@ -4,6 +4,7 @@ import pickle
 import traceback
 import logging
 from pathlib import Path
+from typing import List, Optional
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
@@ -17,6 +18,11 @@ from datetime import datetime
 from supabase import create_client, Client
 from src.config import SUPABASE_URL, SUPABASE_SERVICE_KEY, WORKSPACE_ROOT
 from src.logger import get_logger
+from src.common.unified_author import SourceIdentity, UnifiedUser
+from src.common.author_extractor import extract_all_identities
+from src.smart_merge.engine import AuthorSmartMergeEngine
+from src.smart_merge.supabase_repository import SupabaseSmartMergeRepository
+from src.smart_merge.types import RejectedPair, UserMapping
 
 logger = get_logger("data-server")
 
@@ -35,6 +41,20 @@ logging.getLogger("uvicorn.access").addFilter(SuppressCurrentProjectLogFilter())
 class CodeRequest(BaseModel):
     """Request body for code execution endpoints."""
     code: str
+
+
+class ApplySuggestionRequest(BaseModel):
+    """Request body for applying a merge suggestion."""
+    suggestion_id: str
+    selected_identity_keys: List[str]
+    unselected_identity_keys: List[str] = []
+    name: str
+    email: str
+
+
+class RejectSuggestionRequest(BaseModel):
+    """Request body for rejecting a merge suggestion."""
+    identity_keys: List[str]
 
 
 # Global graph data - loaded at startup
@@ -129,6 +149,7 @@ graph_data = {
 - `graph_data['git'].account_registry.all` - List of all Git authors
 - `graph_data['jira'].issue_registry.all` - List of all JIRA issues
 - `graph_data['github'].pull_request_registry.all` - List of all PRs
+- `graph_data['users']` - List of UnifiedUser objects (cross-source merged identities, after setup)
 
 ## Workflow
 
@@ -185,6 +206,7 @@ async def health_check():
             "git_commits": len(graph_data.get("git", {}).git_commit_registry.all) if graph_data else 0,
             "jira_issues": len(graph_data.get("jira", {}).issue_registry.all) if graph_data else 0,
             "github_prs": len(graph_data.get("github", {}).pull_request_registry.all) if graph_data else 0,
+            "unified_users": len(graph_data.get("users", [])) if graph_data else 0,
         }
     }
 
@@ -206,6 +228,7 @@ async def get_current_project():
             "git_commits": len(graph_data.get("git", {}).git_commit_registry.all) if graph_data else 0,
             "jira_issues": len(graph_data.get("jira", {}).issue_registry.all) if graph_data else 0,
             "github_prs": len(graph_data.get("github", {}).pull_request_registry.all) if graph_data else 0,
+            "unified_users": len(graph_data.get("users", [])) if graph_data else 0,
         }
     }
 
@@ -273,6 +296,15 @@ async def load_project(project_id: str):
 
         logger.info(f"Project {project_id} loaded into memory")
 
+        # Auto-replay persisted user mappings onto the loaded graph
+        replay_result = {"users_replayed": 0, "identities_matched": 0, "identities_missing": 0}
+        try:
+            replay_result = _replay_user_mappings(project_id)
+        except Exception as e:
+            logger.warning(f"Failed to replay user mappings (non-fatal): {e}")
+
+        unified_users_count = len(graph_data.get("users", []))
+
         return {
             "message": "Project loaded successfully",
             "project_id": project_id,
@@ -282,7 +314,9 @@ async def load_project(project_id: str):
                 "git_commits": len(graph_data.get("git", {}).git_commit_registry.all) if graph_data else 0,
                 "jira_issues": len(graph_data.get("jira", {}).issue_registry.all) if graph_data else 0,
                 "github_prs": len(graph_data.get("github", {}).pull_request_registry.all) if graph_data else 0,
-            }
+                "unified_users": unified_users_count,
+            },
+            "replay": replay_result,
         }
 
     except FileNotFoundError as e:
@@ -397,6 +431,324 @@ async def scaffold_workspace(project_id: str):
         "folder_name": folder_name,
     }
 
+
+
+# =============================================================================
+# Author Smart Merge Endpoints
+# =============================================================================
+
+def _get_smart_merge_engine() -> AuthorSmartMergeEngine:
+    """Create a smart merge engine instance with Supabase persistence."""
+    return AuthorSmartMergeEngine(SupabaseSmartMergeRepository())
+
+
+def _get_activity_counts() -> dict[str, int]:
+    """Compute activity counts for all identities in the loaded graph."""
+    counts: dict[str, int] = {}
+    git_project = graph_data.get("git")
+    if git_project:
+        for account in git_project.account_registry.all:
+            key = f"git:{account.id}"
+            counts[key] = len(account.commits)
+
+    github_project = graph_data.get("github")
+    if github_project:
+        for user in github_project.git_hub_user_registry.all:
+            key = f"github:{user.url}"
+            total = (
+                len(user.pull_requests_as_creator)
+                + len(user.pull_requests_as_merged_by)
+                + len(user.pull_requests_as_assignee)
+            )
+            counts[key] = total
+
+    jira_project = graph_data.get("jira")
+    if jira_project:
+        for user in jira_project.jira_user_registry.all:
+            key = f"jira:{user.link}"
+            total = (
+                len(user.issues_as_reporter)
+                + len(user.issues_as_creator)
+                + len(user.issues_as_assignee)
+            )
+            counts[key] = total
+
+    return counts
+
+
+def _replay_user_mappings(project_id: str) -> dict:
+    """
+    Replay persisted user mappings onto the loaded graph.
+    Called automatically after project load.
+    """
+    repo = SupabaseSmartMergeRepository()
+    mappings = repo.get_user_mappings(project_id)
+
+    if not mappings:
+        graph_data["users"] = []
+        return {"users_replayed": 0, "identities_matched": 0, "identities_missing": 0}
+
+    users: list[UnifiedUser] = []
+    total_matched = 0
+    total_missing = 0
+
+    # Build a set of available identity keys from the current graph
+    all_identities = extract_all_identities(graph_data)
+    available_keys = {i.key for i in all_identities}
+
+    for mapping in mappings:
+        matched_identities = []
+        for identity in mapping.identities:
+            if identity.key in available_keys:
+                matched_identities.append(identity)
+                total_matched += 1
+            else:
+                total_missing += 1
+                logger.warning(
+                    f"Identity {identity.key} not found in current graph "
+                    f"(unified user {mapping.unified_user_id})"
+                )
+
+        user = UnifiedUser(
+            id=mapping.unified_user_id,
+            display_name=mapping.display_name,
+            primary_email=mapping.primary_email,
+            identities=matched_identities,
+        )
+        user.bind_graph(graph_data)
+        users.append(user)
+
+    graph_data["users"] = users
+    logger.info(
+        f"Replayed {len(users)} unified users "
+        f"({total_matched} matched, {total_missing} missing)"
+    )
+
+    return {
+        "users_replayed": len(users),
+        "identities_matched": total_matched,
+        "identities_missing": total_missing,
+    }
+
+
+@app.get("/projects/{project_id}/authors/suggestions")
+async def get_author_suggestions(project_id: str):
+    """
+    Compute and return author merge suggestions for the loaded project.
+
+    Uses the smart merge engine to detect likely duplicate identities
+    across Git, GitHub, and JIRA sources.
+    """
+    if not graph_data or current_project_id != project_id:
+        return JSONResponse(
+            {"error": "Project is not loaded. Load the project first."},
+            status_code=400,
+        )
+
+    try:
+        identities = extract_all_identities(graph_data)
+        existing_users: list[UnifiedUser] = graph_data.get("users", [])
+        activity_counts = _get_activity_counts()
+
+        engine = _get_smart_merge_engine()
+        suggestions = engine.compute_suggestions(
+            identities=identities,
+            project_id=project_id,
+            existing_users=existing_users,
+            activity_counts=activity_counts,
+        )
+
+        return {
+            "suggestions": [s.to_dict() for s in suggestions],
+            "total_identities": len(identities),
+            "existing_users": len(existing_users),
+        }
+    except Exception as e:
+        logger.error(f"Failed to compute suggestions: {e}", exc_info=True)
+        return JSONResponse(
+            {"error": f"Failed to compute suggestions: {str(e)}"},
+            status_code=500,
+        )
+
+
+@app.post("/projects/{project_id}/authors/suggestions/apply")
+async def apply_author_suggestion(project_id: str, request: ApplySuggestionRequest):
+    """
+    Apply a merge suggestion: create a UnifiedUser from selected identities.
+
+    Optionally rejects unselected identities from the same suggestion.
+    """
+    if not graph_data or current_project_id != project_id:
+        return JSONResponse(
+            {"error": "Project is not loaded. Load the project first."},
+            status_code=400,
+        )
+
+    try:
+        repo = SupabaseSmartMergeRepository()
+        all_identities = extract_all_identities(graph_data)
+        identity_lookup = {i.key: i for i in all_identities}
+
+        # Resolve selected identities
+        selected: list[SourceIdentity] = []
+        for key in request.selected_identity_keys:
+            identity = identity_lookup.get(key)
+            if identity:
+                selected.append(identity)
+            else:
+                logger.warning(f"Selected identity key not found: {key}")
+
+        if len(selected) < 2:
+            return JSONResponse(
+                {"error": "At least 2 valid identities are required to create a unified user."},
+                status_code=400,
+            )
+
+        # Create the unified user
+        from uuid import uuid4
+        user = UnifiedUser(
+            display_name=request.name,
+            primary_email=request.email if request.email != "unknown@unknown" else None,
+            identities=selected,
+        )
+        user.bind_graph(graph_data)
+
+        # Persist the mapping
+        mapping = UserMapping(
+            unified_user_id=user.id,
+            display_name=user.display_name,
+            primary_email=user.primary_email,
+            identities=selected,
+        )
+        repo.upsert_user_mapping(mapping, project_id)
+
+        # Update in-memory users list
+        existing_users: list[UnifiedUser] = graph_data.get("users", [])
+        existing_users.append(user)
+        graph_data["users"] = existing_users
+
+        # Handle rejected (unselected) identities
+        if request.unselected_identity_keys:
+            unselected = [
+                identity_lookup[k]
+                for k in request.unselected_identity_keys
+                if k in identity_lookup
+            ]
+            pairs = []
+            for sel in selected:
+                for unsel in unselected:
+                    pairs.append(RejectedPair(
+                        project_id=project_id,
+                        first_source=sel.source,
+                        first_source_key=sel.source_key,
+                        second_source=unsel.source,
+                        second_source_key=unsel.source_key,
+                    ))
+            if pairs:
+                repo.add_rejected_similarities(project_id, pairs)
+
+        return user.to_dict()
+
+    except Exception as e:
+        logger.error(f"Failed to apply suggestion: {e}", exc_info=True)
+        return JSONResponse(
+            {"error": f"Failed to apply suggestion: {str(e)}"},
+            status_code=500,
+        )
+
+
+@app.post("/projects/{project_id}/authors/suggestions/reject")
+async def reject_author_suggestion(project_id: str, request: RejectSuggestionRequest):
+    """
+    Reject a merge suggestion: persist rejected pairs so they don't reappear.
+    """
+    if not graph_data or current_project_id != project_id:
+        return JSONResponse(
+            {"error": "Project is not loaded. Load the project first."},
+            status_code=400,
+        )
+
+    try:
+        repo = SupabaseSmartMergeRepository()
+        all_identities = extract_all_identities(graph_data)
+        identity_lookup = {i.key: i for i in all_identities}
+
+        identities = [
+            identity_lookup[k]
+            for k in request.identity_keys
+            if k in identity_lookup
+        ]
+
+        if len(identities) < 2:
+            return JSONResponse(
+                {"error": "At least 2 valid identity keys required."},
+                status_code=400,
+            )
+
+        # Create all pairwise rejected pairs
+        pairs = []
+        for i, a in enumerate(identities):
+            for b in identities[i + 1:]:
+                pairs.append(RejectedPair(
+                    project_id=project_id,
+                    first_source=a.source,
+                    first_source_key=a.source_key,
+                    second_source=b.source,
+                    second_source_key=b.source_key,
+                ))
+
+        repo.add_rejected_similarities(project_id, pairs)
+
+        return {"ok": True, "rejected_pairs": len(pairs)}
+
+    except Exception as e:
+        logger.error(f"Failed to reject suggestion: {e}", exc_info=True)
+        return JSONResponse(
+            {"error": f"Failed to reject suggestion: {str(e)}"},
+            status_code=500,
+        )
+
+
+@app.get("/projects/{project_id}/authors/users")
+async def get_unified_users(project_id: str):
+    """
+    Get the current list of unified users for a project.
+    Returns both persisted and in-memory state.
+    """
+    if not graph_data or current_project_id != project_id:
+        return JSONResponse(
+            {"error": "Project is not loaded. Load the project first."},
+            status_code=400,
+        )
+
+    users: list[UnifiedUser] = graph_data.get("users", [])
+    return {
+        "users": [u.to_dict() for u in users],
+        "total": len(users),
+    }
+
+
+@app.post("/projects/{project_id}/authors/users/replay")
+async def replay_unified_users(project_id: str):
+    """
+    Replay persisted user mappings onto the loaded graph.
+    Called automatically on project load, but can be triggered manually.
+    """
+    if not graph_data or current_project_id != project_id:
+        return JSONResponse(
+            {"error": "Project is not loaded. Load the project first."},
+            status_code=400,
+        )
+
+    try:
+        result = _replay_user_mappings(project_id)
+        return result
+    except Exception as e:
+        logger.error(f"Failed to replay user mappings: {e}", exc_info=True)
+        return JSONResponse(
+            {"error": f"Failed to replay user mappings: {str(e)}"},
+            status_code=500,
+        )
 
 
 @app.post("/execute")
