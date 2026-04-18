@@ -519,6 +519,11 @@
                           @if (user.primary_email) {
                             <span class="unified-user-email">{{ user.primary_email }}</span>
                           }
+                          <button class="btn-remove-user" title="Remove unified user" (click)="confirmDeleteUnifiedUser(user)">
+                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                              <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
+                            </svg>
+                          </button>
                         </div>
                         <div class="unified-user-identities">
                           @for (identity of user.identities; track getIdentityKey(identity)) {
@@ -586,27 +591,69 @@
                       </div>
                     </div>
 
-                    <div class="suggestion-identities">
-                      @for (identity of suggestion.identities; track getIdentityKey(identity)) {
-                        <label class="identity-row">
-                          <input
-                            type="checkbox"
-                            [checked]="isIdentityChecked(suggestion.suggestion_id, getIdentityKey(identity))"
-                            (change)="onToggleIdentity(suggestion.suggestion_id, getIdentityKey(identity))"
-                          />
-                          <span class="source-badge" [class]="'source-' + identity.source">
-                            {{ getSourceLabel(identity.source) }}
+                    @if (isSuggestionCollapsed(suggestion)) {
+                      <div class="suggestion-oversize-warning">
+                        <strong>Large cluster:</strong>
+                        {{ suggestion.total_identities }} identities grouped together.
+                        This is often a sign the match is too broad — review carefully
+                        before accepting.
+                        <button
+                          class="btn btn-secondary btn-sm"
+                          (click)="toggleSuggestionExpanded(suggestion.suggestion_id)"
+                        >
+                          Show identities
+                        </button>
+                      </div>
+                    } @else {
+                      <div class="suggestion-identities">
+                        <div class="identities-header">
+                          <span class="identities-count">
+                            Showing {{ suggestion.identities.length }} of {{ suggestion.total_identities }}
                           </span>
-                          <span class="identity-name">{{ identity.name || 'unknown' }}</span>
-                          @if (identity.email) {
-                            <span class="identity-email">&lt;{{ identity.email }}&gt;</span>
+                          @if (isSuggestionOversize(suggestion)) {
+                            <button
+                              class="btn btn-ghost btn-sm"
+                              (click)="toggleSuggestionExpanded(suggestion.suggestion_id)"
+                            >
+                              Hide list
+                            </button>
                           }
-                          @if (identity.login) {
-                            <span class="identity-login">&#64;{{ identity.login }}</span>
-                          }
-                        </label>
-                      }
-                    </div>
+                        </div>
+                        @for (identity of suggestion.identities; track getIdentityKey(identity)) {
+                          <label class="identity-row">
+                            <input
+                              type="checkbox"
+                              [checked]="isIdentityChecked(suggestion.suggestion_id, getIdentityKey(identity))"
+                              (change)="onToggleIdentity(suggestion.suggestion_id, getIdentityKey(identity))"
+                            />
+                            <span class="source-badge" [class]="'source-' + identity.source">
+                              {{ getSourceLabel(identity.source) }}
+                            </span>
+                            <span class="identity-name">{{ identity.name || 'unknown' }}</span>
+                            @if (identity.email) {
+                              <span class="identity-email">&lt;{{ identity.email }}&gt;</span>
+                            }
+                            @if (identity.login) {
+                              <span class="identity-login">&#64;{{ identity.login }}</span>
+                            }
+                          </label>
+                        }
+                        @if (hasMoreIdentities(suggestion)) {
+                          <button
+                            class="btn btn-secondary btn-sm btn-load-more"
+                            (click)="onLoadMoreIdentities(suggestion)"
+                            [disabled]="isLoadingMore(suggestion.suggestion_id)"
+                          >
+                            @if (isLoadingMore(suggestion.suggestion_id)) {
+                              <div class="spinner-tiny"></div>
+                              Loading…
+                            } @else {
+                              Load more ({{ suggestion.total_identities - suggestion.identities.length }} remaining)
+                            }
+                          </button>
+                        }
+                      </div>
+                    }
 
                     <div class="suggestion-actions">
                       <button
@@ -643,6 +690,11 @@
                           @if (user.primary_email) {
                             <span class="unified-user-email">{{ user.primary_email }}</span>
                           }
+                          <button class="btn-remove-user" title="Remove unified user" (click)="confirmDeleteUnifiedUser(user)">
+                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                              <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
+                            </svg>
+                          </button>
                         </div>
                         <div class="unified-user-identities">
                           @for (identity of user.identities; track getIdentityKey(identity)) {
@@ -900,5 +952,18 @@
     [loading]="deletingProject()"
     (confirmed)="deleteProject()"
     (cancelled)="cancelDeleteProject()"
+  />
+}
+
+<!-- Delete Unified User Confirmation Modal -->
+@if (showDeleteUnifiedUserModal()) {
+  <app-confirmation-modal
+    title="Remove Unified User?"
+    [message]="'Are you sure you want to remove the unified user \'' + unifiedUserToDelete()!.display_name + '\'? The linked identities will become unmerged and may reappear as suggestions.'"
+    confirmText="Remove"
+    cancelText="Cancel"
+    type="warning"
+    (confirmed)="deleteUnifiedUser()"
+    (cancelled)="cancelDeleteUnifiedUser()"
   />
 }

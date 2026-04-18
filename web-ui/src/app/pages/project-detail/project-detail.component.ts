@@ -18,6 +18,7 @@ import {
 import {
   SuggestionDto,
   UnifiedUserDto,
+  OVERSIZE_CLUSTER_WARNING_THRESHOLD,
   getIdentityKey,
   getSourceLabel,
   getConfidenceLevel,
@@ -96,8 +97,18 @@ export class ProjectDetailComponent implements OnInit, OnDestroy {
   processingSuggestionId = signal<string | null>(null);
   // Editable fields per suggestion (keyed by suggestion_id)
   suggestionEdits = signal<Record<string, { name: string; email: string }>>({});
+  // Delete unified user confirmation
+  showDeleteUnifiedUserModal = signal(false);
+  unifiedUserToDelete = signal<UnifiedUserDto | null>(null);
   // Track unchecked identities per suggestion (keyed by suggestion_id -> set of identity keys)
   suggestionUnchecked = signal<Record<string, Set<string>>>({});
+  // Oversize clusters (total_identities > OVERSIZE_CLUSTER_WARNING_THRESHOLD) start collapsed.
+  // Track which ones the user has explicitly expanded.
+  suggestionExpanded = signal<Record<string, boolean>>({});
+  // Track in-flight "load more" fetches per suggestion.
+  suggestionLoadingMore = signal<Record<string, boolean>>({});
+
+  readonly oversizeThreshold = OVERSIZE_CLUSTER_WARNING_THRESHOLD;
 
   // Polling interval reference
   private pollingInterval: any = null;
@@ -821,6 +832,96 @@ export class ProjectDetailComponent implements OnInit, OnDestroy {
   isIdentityChecked(suggestionId: string, identityKey: string): boolean {
     const unchecked = this.suggestionUnchecked()[suggestionId];
     return !unchecked || !unchecked.has(identityKey);
+  }
+
+  isSuggestionOversize(suggestion: SuggestionDto): boolean {
+    return suggestion.total_identities > this.oversizeThreshold;
+  }
+
+  isSuggestionCollapsed(suggestion: SuggestionDto): boolean {
+    if (!this.isSuggestionOversize(suggestion)) return false;
+    return !this.suggestionExpanded()[suggestion.suggestion_id];
+  }
+
+  toggleSuggestionExpanded(suggestionId: string): void {
+    this.suggestionExpanded.update(map => ({
+      ...map,
+      [suggestionId]: !map[suggestionId],
+    }));
+  }
+
+  hasMoreIdentities(suggestion: SuggestionDto): boolean {
+    return suggestion.identities.length < suggestion.total_identities;
+  }
+
+  isLoadingMore(suggestionId: string): boolean {
+    return !!this.suggestionLoadingMore()[suggestionId];
+  }
+
+  async onLoadMoreIdentities(suggestion: SuggestionDto, pageSize = 50): Promise<void> {
+    const project = this.selectedProject();
+    if (!project) return;
+    if (this.isLoadingMore(suggestion.suggestion_id)) return;
+    if (!this.hasMoreIdentities(suggestion)) return;
+
+    this.suggestionLoadingMore.update(map => ({
+      ...map,
+      [suggestion.suggestion_id]: true,
+    }));
+
+    const page = await this.dataServerService.getSuggestionIdentitiesPage(
+      project.id,
+      suggestion.suggestion_id,
+      suggestion.identities.length,
+      pageSize,
+    );
+
+    this.suggestionLoadingMore.update(map => ({
+      ...map,
+      [suggestion.suggestion_id]: false,
+    }));
+
+    if (!page) {
+      this.toastService.error('Failed to load more identities');
+      return;
+    }
+
+    const existingKeys = new Set(suggestion.identities.map(i => getIdentityKey(i)));
+    const newOnes = page.identities.filter(i => !existingKeys.has(getIdentityKey(i)));
+    if (newOnes.length === 0) return;
+
+    this.suggestions.update(list => list.map(s => {
+      if (s.suggestion_id !== suggestion.suggestion_id) return s;
+      return { ...s, identities: [...s.identities, ...newOnes] };
+    }));
+  }
+
+  confirmDeleteUnifiedUser(user: UnifiedUserDto): void {
+    this.unifiedUserToDelete.set(user);
+    this.showDeleteUnifiedUserModal.set(true);
+  }
+
+  async deleteUnifiedUser(): Promise<void> {
+    const user = this.unifiedUserToDelete();
+    const project = this.selectedProject();
+    if (!user || !project) return;
+
+    this.showDeleteUnifiedUserModal.set(false);
+
+    const success = await this.dataServerService.deleteUnifiedUser(project.id, user.id);
+    if (success) {
+      this.toastService.success(`Removed unified user "${user.display_name}"`);
+      this.unifiedUsers.update(users => users.filter(u => u.id !== user.id));
+    } else {
+      this.toastService.error('Failed to delete unified user');
+    }
+
+    this.unifiedUserToDelete.set(null);
+  }
+
+  cancelDeleteUnifiedUser(): void {
+    this.showDeleteUnifiedUserModal.set(false);
+    this.unifiedUserToDelete.set(null);
   }
 
   // Expose helper functions to the template

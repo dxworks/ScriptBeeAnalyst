@@ -34,6 +34,9 @@ class SimilaritiesGraph:
     adj: Dict[str, Dict[str, Edge]] = field(default_factory=dict)
 
 
+MAX_IDENTITIES_PER_SUGGESTION = 50
+
+
 @dataclass
 class Suggestion:
     suggestion_id: str
@@ -42,12 +45,24 @@ class Suggestion:
     confidence: float
     identities: List[SourceIdentity]
 
-    def to_dict(self) -> dict:
+    def to_dict(self, activity_counts: Optional[Dict[str, int]] = None) -> dict:
+        """Serialize to a UI-safe dict.
+
+        Truncates `identities` to MAX_IDENTITIES_PER_SUGGESTION (sorted by
+        activity desc so the visible ones are the most important), and includes
+        the real `total_identities` so the UI can offer pagination.
+        """
+        counts = activity_counts or {}
+        ordered = sorted(
+            self.identities, key=lambda i: counts.get(i.key, 0), reverse=True
+        )
+        truncated = ordered[:MAX_IDENTITIES_PER_SUGGESTION]
         return {
             "suggestion_id": self.suggestion_id,
             "default_name": self.default_name,
             "default_email": self.default_email,
             "confidence": round(self.confidence, 2),
+            "total_identities": len(self.identities),
             "identities": [
                 {
                     "source": i.source,
@@ -56,7 +71,7 @@ class Suggestion:
                     "email": i.email,
                     "login": i.login,
                 }
-                for i in self.identities
+                for i in truncated
             ],
         }
 

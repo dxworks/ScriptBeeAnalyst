@@ -22,7 +22,7 @@ from src.common.unified_author import SourceIdentity, UnifiedUser
 from src.common.author_extractor import extract_all_identities
 from src.smart_merge.engine import AuthorSmartMergeEngine
 from src.smart_merge.supabase_repository import SupabaseSmartMergeRepository
-from src.smart_merge.types import RejectedPair, UserMapping
+from src.smart_merge.types import MAX_IDENTITIES_PER_SUGGESTION, RejectedPair, Suggestion, UserMapping
 
 logger = get_logger("data-server")
 
@@ -442,6 +442,12 @@ def _get_smart_merge_engine() -> AuthorSmartMergeEngine:
     return AuthorSmartMergeEngine(SupabaseSmartMergeRepository())
 
 
+def _invalidate_smart_merge_cache() -> None:
+    """Drop cached base graph and last suggestions after any merge/reject/delete."""
+    graph_data.pop("smart_merge_base_graph", None)
+    graph_data.pop("smart_merge_last_suggestions", None)
+
+
 def _get_activity_counts() -> dict[str, int]:
     """Compute activity counts for all identities in the loaded graph."""
     counts: dict[str, int] = {}
@@ -551,15 +557,21 @@ async def get_author_suggestions(project_id: str):
         activity_counts = _get_activity_counts()
 
         engine = _get_smart_merge_engine()
-        suggestions = engine.compute_suggestions(
+        cached_base = graph_data.get("smart_merge_base_graph")
+        suggestions, base_graph = engine.compute_suggestions(
             identities=identities,
             project_id=project_id,
             existing_users=existing_users,
             activity_counts=activity_counts,
+            base_graph=cached_base,
         )
+        graph_data["smart_merge_base_graph"] = base_graph
+        graph_data["smart_merge_last_suggestions"] = {
+            s.suggestion_id: s for s in suggestions
+        }
 
         return {
-            "suggestions": [s.to_dict() for s in suggestions],
+            "suggestions": [s.to_dict(activity_counts) for s in suggestions],
             "total_identities": len(identities),
             "existing_users": len(existing_users),
         }
@@ -569,6 +581,64 @@ async def get_author_suggestions(project_id: str):
             {"error": f"Failed to compute suggestions: {str(e)}"},
             status_code=500,
         )
+
+
+@app.get("/projects/{project_id}/authors/suggestions/{suggestion_id}/identities")
+async def get_suggestion_identities(
+    project_id: str,
+    suggestion_id: str,
+    offset: int = 0,
+    limit: int = MAX_IDENTITIES_PER_SUGGESTION,
+):
+    """Return a page of identities for a previously computed suggestion.
+
+    The suggestions endpoint caches the full list in memory keyed by
+    suggestion_id. The UI calls this endpoint to page through clusters
+    larger than MAX_IDENTITIES_PER_SUGGESTION.
+    """
+    if not graph_data or current_project_id != project_id:
+        return JSONResponse(
+            {"error": "Project is not loaded. Load the project first."},
+            status_code=400,
+        )
+
+    cache: dict[str, Suggestion] = graph_data.get("smart_merge_last_suggestions", {})
+    suggestion = cache.get(suggestion_id)
+    if suggestion is None:
+        return JSONResponse(
+            {"error": "Suggestion not found. Recompute suggestions and try again."},
+            status_code=404,
+        )
+
+    if offset < 0:
+        offset = 0
+    if limit <= 0:
+        limit = MAX_IDENTITIES_PER_SUGGESTION
+
+    activity_counts = _get_activity_counts()
+    ordered = sorted(
+        suggestion.identities,
+        key=lambda i: activity_counts.get(i.key, 0),
+        reverse=True,
+    )
+    page = ordered[offset: offset + limit]
+
+    return {
+        "suggestion_id": suggestion_id,
+        "total_identities": len(suggestion.identities),
+        "offset": offset,
+        "limit": limit,
+        "identities": [
+            {
+                "source": i.source,
+                "source_key": i.source_key,
+                "name": i.name,
+                "email": i.email,
+                "login": i.login,
+            }
+            for i in page
+        ],
+    }
 
 
 @app.post("/projects/{project_id}/authors/suggestions/apply")
@@ -626,6 +696,7 @@ async def apply_author_suggestion(project_id: str, request: ApplySuggestionReque
         existing_users: list[UnifiedUser] = graph_data.get("users", [])
         existing_users.append(user)
         graph_data["users"] = existing_users
+        _invalidate_smart_merge_cache()
 
         # Handle rejected (unselected) identities
         if request.unselected_identity_keys:
@@ -698,6 +769,7 @@ async def reject_author_suggestion(project_id: str, request: RejectSuggestionReq
                 ))
 
         repo.add_rejected_similarities(project_id, pairs)
+        _invalidate_smart_merge_cache()
 
         return {"ok": True, "rejected_pairs": len(pairs)}
 
@@ -726,6 +798,39 @@ async def get_unified_users(project_id: str):
         "users": [u.to_dict() for u in users],
         "total": len(users),
     }
+
+
+@app.delete("/projects/{project_id}/authors/users/{unified_user_id}")
+async def delete_unified_user(project_id: str, unified_user_id: str):
+    """
+    Delete a unified user and its identity mappings.
+
+    Removes the unified user from both database (cascade-deletes identity mappings)
+    and in-memory graph state.
+    """
+    if not graph_data or current_project_id != project_id:
+        return JSONResponse(
+            {"error": "Project is not loaded. Load the project first."},
+            status_code=400,
+        )
+
+    try:
+        repo = SupabaseSmartMergeRepository()
+        repo.delete_user_mapping(project_id, unified_user_id)
+
+        # Remove from in-memory users list
+        existing_users: list[UnifiedUser] = graph_data.get("users", [])
+        graph_data["users"] = [u for u in existing_users if u.id != unified_user_id]
+        _invalidate_smart_merge_cache()
+
+        return {"ok": True, "deleted_id": unified_user_id}
+
+    except Exception as e:
+        logger.error(f"Failed to delete unified user: {e}", exc_info=True)
+        return JSONResponse(
+            {"error": f"Failed to delete unified user: {str(e)}"},
+            status_code=500,
+        )
 
 
 @app.post("/projects/{project_id}/authors/users/replay")

@@ -5,6 +5,7 @@ import { AuthService } from './auth.service';
 import { environment } from '../../../environments/environment';
 import {
   SuggestionsResponse,
+  SuggestionIdentitiesPage,
   ApplySuggestionRequest,
   RejectSuggestionRequest,
   UnifiedUserDto,
@@ -302,6 +303,25 @@ export class DataServerService {
     }
   }
 
+  async getSuggestionIdentitiesPage(
+    projectId: string,
+    suggestionId: string,
+    offset: number,
+    limit: number
+  ): Promise<SuggestionIdentitiesPage | null> {
+    try {
+      const params = `offset=${offset}&limit=${limit}`;
+      return await firstValueFrom(
+        this.http.get<SuggestionIdentitiesPage>(
+          `${this.baseUrl}/projects/${projectId}/authors/suggestions/${suggestionId}/identities?${params}`
+        )
+      );
+    } catch (err) {
+      console.error('Failed to get suggestion identities page:', err);
+      return null;
+    }
+  }
+
   async applySuggestion(projectId: string, request: ApplySuggestionRequest): Promise<UnifiedUserDto | null> {
     try {
       return await firstValueFrom(
@@ -327,6 +347,20 @@ export class DataServerService {
       return true;
     } catch (err) {
       console.error('Failed to reject suggestion:', err);
+      return false;
+    }
+  }
+
+  async deleteUnifiedUser(projectId: string, unifiedUserId: string): Promise<boolean> {
+    try {
+      await firstValueFrom(
+        this.http.delete(
+          `${this.baseUrl}/projects/${projectId}/authors/users/${unifiedUserId}`
+        )
+      );
+      return true;
+    } catch (err) {
+      console.error('Failed to delete unified user:', err);
       return false;
     }
   }

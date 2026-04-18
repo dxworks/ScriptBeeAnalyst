@@ -4,7 +4,7 @@ Similarity graph operations: build, clone, mutate, and extract connected compone
 from __future__ import annotations
 
 from copy import deepcopy
-from typing import List, Optional, Set
+from typing import Iterable, List, Optional, Set, Tuple
 
 from src.common.unified_author import SourceIdentity
 from src.smart_merge.types import Edge, SimilaritiesGraph, SimilarityType
@@ -74,3 +74,56 @@ def connected_components(graph: SimilaritiesGraph) -> List[List[str]]:
         out.append(comp)
 
     return out
+
+
+def subgraph_edges(graph: SimilaritiesGraph, nodes: Iterable[str]) -> List[Edge]:
+    """Return distinct edges where both endpoints are in nodes."""
+    node_set = set(nodes)
+    seen: set[Tuple[str, str]] = set()
+    edges: List[Edge] = []
+    for a in node_set:
+        for b, e in graph.adj.get(a, {}).items():
+            if b in node_set:
+                key = (a, b) if a < b else (b, a)
+                if key in seen:
+                    continue
+                seen.add(key)
+                edges.append(e)
+    return edges
+
+
+def component_density(graph: SimilaritiesGraph, nodes: List[str]) -> float:
+    """Edge density of a component: edges / max-possible-undirected-edges.
+    Returns 1.0 for components of size <= 1 (no edges possible)."""
+    n = len(nodes)
+    if n < 2:
+        return 1.0
+    max_edges = n * (n - 1) // 2
+    return len(subgraph_edges(graph, nodes)) / max_edges
+
+
+def component_avg_strength(graph: SimilaritiesGraph, nodes: List[str]) -> float:
+    """Average edge strength in the component. 0.0 if no edges."""
+    edges = subgraph_edges(graph, nodes)
+    if not edges:
+        return 0.0
+    return sum(e.strength for e in edges) / len(edges)
+
+
+def weakest_non_same_author_edge(
+    graph: SimilaritiesGraph, nodes: List[str]
+) -> Optional[Edge]:
+    """Find the lowest-strength edge in the component that isn't SAME_AUTHOR.
+    Ties broken by (type rank DIFFERENT<SIMILAR<IDENTICAL<SAME_AUTHOR) so we
+    prefer dropping SIMILAR over IDENTICAL at equal strength.
+    Returns None if every edge is SAME_AUTHOR."""
+    rank = {
+        SimilarityType.SIMILAR: 0,
+        SimilarityType.IDENTICAL: 1,
+        SimilarityType.SAME_AUTHOR: 2,
+    }
+    candidates = [e for e in subgraph_edges(graph, nodes)
+                  if e.type != SimilarityType.SAME_AUTHOR]
+    if not candidates:
+        return None
+    return min(candidates, key=lambda e: (e.strength, rank.get(e.type, 99)))

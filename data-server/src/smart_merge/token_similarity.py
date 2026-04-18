@@ -62,6 +62,12 @@ def email_address_without_domain(email: str) -> str:
     return email[:last_at]
 
 
+def _is_single_token(name: str) -> bool:
+    """Check if a name has only one token (e.g., just a first name)."""
+    tokens = [t for t in SPLIT_RE.split(name.strip()) if t]
+    return len(tokens) <= 1
+
+
 def compute_best_similarity(
     name_a: str,
     email_a: Optional[str],
@@ -72,33 +78,83 @@ def compute_best_similarity(
 ) -> Similarity:
     """
     Compute the best similarity between two identities using all available fields.
-    Handles nullable emails/logins gracefully.
-    """
-    best = check_name_similarity(name_a, name_b)
 
-    # Email vs email comparison
+    Tracks per-field agreement and requires corroboration from a DIFFERENT
+    field before letting weak matches through. A field cannot corroborate
+    itself — if the best signal came from name matching, only a non-name
+    signal (email, login, cross) counts as corroboration.
+
+    Final guard:
+    - SIMILAR → require corroboration from a different field.
+    - IDENTICAL with ≤ 2 tokens → require corroboration from a different field.
+    - IDENTICAL with ≥ 3 tokens → allowed (truly distinctive names).
+    - Single-token name with SIMILAR type → always DIFFERENT (partial
+      overlap of single tokens is noise).
+    """
+    # Source-field tags so we know which field produced the best signal
+    FIELD_NAME = "name"
+    FIELD_EMAIL = "email"
+    FIELD_LOGIN = "login"
+    FIELD_CROSS = "cross"
+
+    name_sim = check_name_similarity(name_a, name_b)
+    best = name_sim
+    best_field = FIELD_NAME
+
+    # Single-token name with SIMILAR is noise — block immediately.
+    if best.type == SimilarityType.SIMILAR and (
+        _is_single_token(name_a) or _is_single_token(name_b)
+    ):
+        name_sim = Similarity(SimilarityType.DIFFERENT, 0)
+        best = name_sim
+
+    # Track which fields positively agree (SIMILAR or IDENTICAL).
+    agreeing_fields: set[str] = set()
+    if name_sim.type in (SimilarityType.SIMILAR, SimilarityType.IDENTICAL):
+        agreeing_fields.add(FIELD_NAME)
+
+    def _consider(sim: Similarity, field: str) -> None:
+        nonlocal best, best_field
+        if sim.type in (SimilarityType.SIMILAR, SimilarityType.IDENTICAL):
+            agreeing_fields.add(field)
+        new_best = most_powerful_similarity(best, sim)
+        if new_best is not best:
+            best = new_best
+            best_field = field
+
+    # Email vs email
     if email_a and email_b:
         email_sim = check_email_similarity(
             email_address_without_domain(email_a),
             email_address_without_domain(email_b),
         )
-        best = most_powerful_similarity(best, email_sim)
+        _consider(email_sim, FIELD_EMAIL)
 
-    # Login vs login comparison
+    # Login vs login
     if login_a and login_b:
         login_sim = check_login_similarity(login_a, login_b)
-        best = most_powerful_similarity(best, login_sim)
+        _consider(login_sim, FIELD_LOGIN)
 
-    # Cross-field: login vs email prefix (strong signal for cross-source matching)
+    # Cross-field: login vs email prefix
     if login_a and email_b:
         prefix_b = email_address_without_domain(email_b)
-        cross_sim = check_name_similarity(login_a, prefix_b)
-        best = most_powerful_similarity(best, cross_sim)
+        _consider(check_name_similarity(login_a, prefix_b), FIELD_CROSS)
 
     if login_b and email_a:
         prefix_a = email_address_without_domain(email_a)
-        cross_sim = check_name_similarity(login_b, prefix_a)
-        best = most_powerful_similarity(best, cross_sim)
+        _consider(check_name_similarity(login_b, prefix_a), FIELD_CROSS)
+
+    # Corroboration must come from a DIFFERENT field than best_field.
+    corroborated = any(f != best_field for f in agreeing_fields)
+
+    if best.type == SimilarityType.SIMILAR and not corroborated:
+        return Similarity(SimilarityType.DIFFERENT, 0)
+    if (
+        best.type == SimilarityType.IDENTICAL
+        and best.strength <= 2
+        and not corroborated
+    ):
+        return Similarity(SimilarityType.DIFFERENT, 0)
 
     return best
 

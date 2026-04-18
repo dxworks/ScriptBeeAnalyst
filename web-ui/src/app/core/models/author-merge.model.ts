@@ -11,8 +11,19 @@ export interface SuggestionDto {
   default_name: string;
   default_email: string;
   confidence: number;
+  total_identities: number;
   identities: SourceIdentityDto[];
 }
+
+export interface SuggestionIdentitiesPage {
+  suggestion_id: string;
+  total_identities: number;
+  offset: number;
+  limit: number;
+  identities: SourceIdentityDto[];
+}
+
+export const OVERSIZE_CLUSTER_WARNING_THRESHOLD = 200;
 
 export interface SuggestionsResponse {
   suggestions: SuggestionDto[];
