@@ -365,6 +365,21 @@ export class DataServerService {
     }
   }
 
+  async deleteAllUnifiedUsers(
+    projectId: string
+  ): Promise<{ deleted_users: number; deleted_rejected: number } | null> {
+    try {
+      return await firstValueFrom(
+        this.http.delete<{ ok: true; deleted_users: number; deleted_rejected: number }>(
+          `${this.baseUrl}/projects/${projectId}/authors/users`
+        )
+      );
+    } catch (err) {
+      console.error('Failed to reset author matching:', err);
+      return null;
+    }
+  }
+
   async getUnifiedUsers(projectId: string): Promise<UnifiedUsersResponse | null> {
     try {
       return await firstValueFrom(
@@ -374,6 +389,38 @@ export class DataServerService {
       );
     } catch (err) {
       console.error('Failed to get unified users:', err);
+      return null;
+    }
+  }
+
+  async applyAllSuggestions(
+    projectId: string
+  ): Promise<{ created: number; failed: { suggestion_id: string; error: string }[]; users: UnifiedUserDto[] } | null> {
+    try {
+      return await firstValueFrom(
+        this.http.post<{ created: number; failed: { suggestion_id: string; error: string }[]; users: UnifiedUserDto[] }>(
+          `${this.baseUrl}/projects/${projectId}/authors/suggestions/apply-batch`,
+          {}
+        )
+      );
+    } catch (err) {
+      console.error('Failed to apply all suggestions:', err);
+      return null;
+    }
+  }
+
+  async saveGraphState(
+    projectId: string
+  ): Promise<{ ok: true; size_mb: number; user_count: number } | null> {
+    try {
+      return await firstValueFrom(
+        this.http.post<{ ok: true; size_mb: number; user_count: number }>(
+          `${this.baseUrl}/projects/${projectId}/save-graph-state`,
+          {}
+        )
+      );
+    } catch (err) {
+      console.error('Failed to save graph state:', err);
       return null;
     }
   }

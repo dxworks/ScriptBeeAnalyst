@@ -1,6 +1,8 @@
 import io
 import sys
 import pickle
+import tempfile
+import threading
 import traceback
 import logging
 from pathlib import Path
@@ -59,6 +61,9 @@ class RejectSuggestionRequest(BaseModel):
 
 # Global graph data - loaded at startup
 graph_data = {}
+
+# Serializes full-graph snapshot saves against concurrent mutations.
+_save_lock = threading.Lock()
 
 
 def load_graph_from_supabase(user_id: str, project_id: str):
@@ -552,16 +557,33 @@ async def get_author_suggestions(project_id: str):
         )
 
     try:
-        identities = extract_all_identities(graph_data)
+        all_identities = extract_all_identities(graph_data)
         existing_users: list[UnifiedUser] = graph_data.get("users", [])
         activity_counts = _get_activity_counts()
 
-        engine = _get_smart_merge_engine()
+        # Exclude identities already bound to a unified user. Re-scans should
+        # only propose merges among the still-unmerged identities — otherwise
+        # apply would violate uq_identity_mapping.
+        mapped_keys = {
+            identity.key
+            for user in existing_users
+            for identity in user.identities
+        }
+        unmapped_identities = [i for i in all_identities if i.key not in mapped_keys]
+
+        # Invalidate the cached base graph if the unmapped set changed (e.g. a
+        # user was deleted, freeing identities back into the pool).
         cached_base = graph_data.get("smart_merge_base_graph")
+        if cached_base is not None and set(cached_base.nodes.keys()) != {
+            i.key for i in unmapped_identities
+        }:
+            cached_base = None
+
+        engine = _get_smart_merge_engine()
         suggestions, base_graph = engine.compute_suggestions(
-            identities=identities,
+            identities=unmapped_identities,
             project_id=project_id,
-            existing_users=existing_users,
+            existing_users=[],
             activity_counts=activity_counts,
             base_graph=cached_base,
         )
@@ -572,7 +594,7 @@ async def get_author_suggestions(project_id: str):
 
         return {
             "suggestions": [s.to_dict(activity_counts) for s in suggestions],
-            "total_identities": len(identities),
+            "total_identities": len(all_identities),
             "existing_users": len(existing_users),
         }
     except Exception as e:
@@ -728,6 +750,84 @@ async def apply_author_suggestion(project_id: str, request: ApplySuggestionReque
         )
 
 
+@app.post("/projects/{project_id}/authors/suggestions/apply-batch")
+async def apply_author_suggestions_batch(project_id: str):
+    """
+    Bulk-apply every cached suggestion using its default name/email and all identities.
+
+    Expects the caller to have just fetched suggestions (so the cache is populated).
+    Partial failures are reported but do not abort the loop.
+    """
+    if not graph_data or current_project_id != project_id:
+        return JSONResponse(
+            {"error": "Project is not loaded. Load the project first."},
+            status_code=400,
+        )
+
+    cache: dict[str, Suggestion] = graph_data.get("smart_merge_last_suggestions", {})
+    if not cache:
+        return JSONResponse(
+            {"error": "No cached suggestions. Compute suggestions first."},
+            status_code=400,
+        )
+
+    suggestions = list(cache.values())
+    repo = SupabaseSmartMergeRepository()
+    existing_users: list[UnifiedUser] = graph_data.get("users", [])
+
+    created_dtos: list[dict] = []
+    failures: list[dict] = []
+
+    for suggestion in suggestions:
+        try:
+            if len(suggestion.identities) < 2:
+                failures.append({
+                    "suggestion_id": suggestion.suggestion_id,
+                    "error": "Suggestion has fewer than 2 identities.",
+                })
+                continue
+
+            email = suggestion.default_email
+            primary_email = email if email and email != "unknown@unknown" else None
+
+            user = UnifiedUser(
+                display_name=suggestion.default_name,
+                primary_email=primary_email,
+                identities=list(suggestion.identities),
+            )
+            user.bind_graph(graph_data)
+
+            mapping = UserMapping(
+                unified_user_id=user.id,
+                display_name=user.display_name,
+                primary_email=user.primary_email,
+                identities=user.identities,
+            )
+            repo.upsert_user_mapping(mapping, project_id)
+
+            existing_users.append(user)
+            created_dtos.append(user.to_dict())
+
+        except Exception as e:
+            logger.error(
+                f"Failed to apply suggestion {suggestion.suggestion_id} in batch: {e}",
+                exc_info=True,
+            )
+            failures.append({
+                "suggestion_id": suggestion.suggestion_id,
+                "error": str(e),
+            })
+
+    graph_data["users"] = existing_users
+    _invalidate_smart_merge_cache()
+
+    return {
+        "created": len(created_dtos),
+        "failed": failures,
+        "users": created_dtos,
+    }
+
+
 @app.post("/projects/{project_id}/authors/suggestions/reject")
 async def reject_author_suggestion(project_id: str, request: RejectSuggestionRequest):
     """
@@ -831,6 +931,140 @@ async def delete_unified_user(project_id: str, unified_user_id: str):
             {"error": f"Failed to delete unified user: {str(e)}"},
             status_code=500,
         )
+
+
+@app.delete("/projects/{project_id}/authors/users")
+async def delete_all_unified_users(project_id: str):
+    """
+    Reset author matching for a project as if it was freshly created.
+
+    Wipes unified users + identity mappings + rejected-pair history in Supabase,
+    clears the in-memory users list, invalidates the smart-merge cache, and
+    re-saves the on-disk pickle so the snapshot reflects the cleared state.
+    Project files in storage are untouched.
+    """
+    if not graph_data or current_project_id != project_id:
+        return JSONResponse(
+            {"error": "Project is not loaded. Load the project first."},
+            status_code=400,
+        )
+
+    if not current_user_id:
+        return JSONResponse(
+            {"error": "No user context for the loaded project."},
+            status_code=400,
+        )
+
+    try:
+        repo = SupabaseSmartMergeRepository()
+        deleted_users = repo.delete_all_user_mappings(project_id)
+        deleted_rejected = repo.delete_all_rejected_similarities(project_id)
+
+        graph_data["users"] = []
+        _invalidate_smart_merge_cache()
+
+        with _save_lock:
+            _persist_project_pickle(project_id)
+
+        return {
+            "ok": True,
+            "deleted_users": deleted_users,
+            "deleted_rejected": deleted_rejected,
+        }
+
+    except Exception as e:
+        logger.error(f"Failed to reset author matching: {e}", exc_info=True)
+        return JSONResponse(
+            {"error": f"Failed to reset author matching: {str(e)}"},
+            status_code=500,
+        )
+
+
+def _persist_project_pickle(project_id: str) -> tuple[int, int]:
+    """
+    Snapshot the current in-memory graph (including unified users) to a pickle
+    and upload it to Supabase Storage.
+
+    Returns (size_bytes, user_count). Raises on failure — callers translate to
+    HTTP responses. Caller must hold _save_lock.
+    """
+    from src.processor import upload_pickle_to_supabase
+
+    users: list[UnifiedUser] = graph_data.get("users", [])
+    to_pickle = {
+        "git": graph_data.get("git"),
+        "jira": graph_data.get("jira"),
+        "github": graph_data.get("github"),
+        "users": users,
+    }
+
+    # Break the user -> graph_data back-reference so we don't serialize the
+    # whole live dict (caches, etc.) through the user objects.
+    for user in users:
+        user.bind_graph(None)
+
+    tmp_path: Optional[Path] = None
+    # Large project graphs have deep bidirectional refs (commits <-> parents,
+    # issues <-> PRs <-> commits). Python's default recursion limit of ~1000
+    # isn't enough for pickle to walk them.
+    previous_recursion_limit = sys.getrecursionlimit()
+    try:
+        sys.setrecursionlimit(50000)
+        with tempfile.NamedTemporaryFile(suffix=".pkl", delete=False) as tmp:
+            pickle.dump(to_pickle, tmp, protocol=pickle.HIGHEST_PROTOCOL)
+            tmp_path = Path(tmp.name)
+
+        upload_pickle_to_supabase(tmp_path, current_user_id, project_id)
+        size_bytes = tmp_path.stat().st_size
+        return size_bytes, len(users)
+    finally:
+        sys.setrecursionlimit(previous_recursion_limit)
+        # Always restore live bindings, even on failure.
+        for user in users:
+            user.bind_graph(graph_data)
+        if tmp_path and tmp_path.exists():
+            try:
+                tmp_path.unlink()
+            except Exception as e:
+                logger.warning(f"Failed to remove temp pickle {tmp_path}: {e}")
+
+
+@app.post("/projects/{project_id}/save-graph-state")
+async def save_graph_state(project_id: str):
+    """
+    Snapshot the current in-memory graph (including unified users) to a pickle
+    and upload it to Supabase Storage, replacing the project's existing pickle.
+
+    The pickle becomes a self-contained state snapshot. Supabase merge tables
+    are left intact so subsequent merges/unmerges continue to work normally.
+    """
+    if not graph_data or current_project_id != project_id:
+        return JSONResponse(
+            {"error": "Project is not loaded. Load the project first."},
+            status_code=400,
+        )
+
+    if not current_user_id:
+        return JSONResponse(
+            {"error": "No user context for the loaded project."},
+            status_code=400,
+        )
+
+    with _save_lock:
+        try:
+            size_bytes, user_count = _persist_project_pickle(project_id)
+        except Exception as e:
+            logger.error(f"Failed to save graph state: {e}", exc_info=True)
+            return JSONResponse(
+                {"error": f"Failed to save graph state: {str(e)}"},
+                status_code=500,
+            )
+
+        return {
+            "ok": True,
+            "size_mb": round(size_bytes / (1024 * 1024), 2),
+            "user_count": user_count,
+        }
 
 
 @app.post("/projects/{project_id}/authors/users/replay")

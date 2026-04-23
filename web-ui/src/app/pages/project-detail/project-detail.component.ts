@@ -107,6 +107,14 @@ export class ProjectDetailComponent implements OnInit, OnDestroy {
   suggestionExpanded = signal<Record<string, boolean>>({});
   // Track in-flight "load more" fetches per suggestion.
   suggestionLoadingMore = signal<Record<string, boolean>>({});
+  // Bulk-accept flow
+  applyingAll = signal(false);
+  showApplyAllModal = signal(false);
+  // Save-graph-state flow
+  savingGraphState = signal(false);
+  // Delete-all-links (reset author matching) flow
+  deletingAllLinks = signal(false);
+  showDeleteAllLinksModal = signal(false);
 
   readonly oversizeThreshold = OVERSIZE_CLUSTER_WARNING_THRESHOLD;
 
@@ -922,6 +930,105 @@ export class ProjectDetailComponent implements OnInit, OnDestroy {
   cancelDeleteUnifiedUser(): void {
     this.showDeleteUnifiedUserModal.set(false);
     this.unifiedUserToDelete.set(null);
+  }
+
+  requestApplyAllSuggestions(): void {
+    if (this.applyingAll()) return;
+    if (this.suggestions().length === 0) return;
+    this.showApplyAllModal.set(true);
+  }
+
+  cancelApplyAllSuggestions(): void {
+    this.showApplyAllModal.set(false);
+  }
+
+  async applyAllSuggestions(): Promise<void> {
+    const project = this.selectedProject();
+    if (!project || this.applyingAll()) return;
+
+    this.showApplyAllModal.set(false);
+    this.applyingAll.set(true);
+
+    const result = await this.dataServerService.applyAllSuggestions(project.id);
+
+    this.applyingAll.set(false);
+
+    if (!result) {
+      this.toastService.error('Failed to apply all suggestions');
+      return;
+    }
+
+    this.suggestions.set([]);
+    this.suggestionEdits.set({});
+    this.suggestionUnchecked.set({});
+    this.suggestionExpanded.set({});
+    if (result.users.length > 0) {
+      this.unifiedUsers.update(users => [...users, ...result.users]);
+    }
+
+    const failedCount = result.failed.length;
+    if (failedCount === 0) {
+      this.toastService.success(`Created ${result.created} unified users`);
+    } else {
+      this.toastService.warning(
+        `Created ${result.created} unified users (${failedCount} failed)`
+      );
+    }
+  }
+
+  confirmDeleteAllLinks(): void {
+    if (this.deletingAllLinks()) return;
+    this.showDeleteAllLinksModal.set(true);
+  }
+
+  cancelDeleteAllLinks(): void {
+    this.showDeleteAllLinksModal.set(false);
+  }
+
+  async deleteAllLinks(): Promise<void> {
+    const project = this.selectedProject();
+    if (!project || this.deletingAllLinks()) return;
+
+    this.showDeleteAllLinksModal.set(false);
+    this.deletingAllLinks.set(true);
+    const result = await this.dataServerService.deleteAllUnifiedUsers(project.id);
+    this.deletingAllLinks.set(false);
+
+    if (!result) {
+      this.toastService.error('Failed to reset author matching');
+      return;
+    }
+
+    this.unifiedUsers.set([]);
+    this.suggestions.set([]);
+    this.suggestionsTotal.set(0);
+    this.suggestionEdits.set({});
+    this.suggestionUnchecked.set({});
+    this.suggestionExpanded.set({});
+    this.suggestionLoadingMore.set({});
+    this.setupInitialized.set(false);
+
+    this.toastService.success(
+      `Author matching reset (${result.deleted_users} user(s), ${result.deleted_rejected} rejected pair(s) cleared)`
+    );
+  }
+
+  async onSaveGraphState(): Promise<void> {
+    const project = this.selectedProject();
+    if (!project || this.savingGraphState()) return;
+
+    this.savingGraphState.set(true);
+    const result = await this.dataServerService.saveGraphState(project.id);
+    this.savingGraphState.set(false);
+
+    if (!result) {
+      this.toastService.error('Failed to save graph state');
+      return;
+    }
+
+    this.toastService.success(
+      `Graph state saved (${result.size_mb.toFixed(2)} MB, ${result.user_count} unified users)`
+    );
   }
 
   // Expose helper functions to the template

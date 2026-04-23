@@ -430,6 +430,60 @@
                 {{ suggestionsTotal() - suggestions().length }} of {{ suggestionsTotal() }} resolved
               </span>
             }
+            @if (isCurrentProjectLoaded()) {
+              @if (setupInitialized()) {
+                <button
+                  class="btn btn-secondary btn-sm"
+                  (click)="loadSuggestions()"
+                  [disabled]="suggestionsLoading() || processingSuggestionId() !== null"
+                  title="Recompute suggestions against the current graph. Accepts from partial merges will resurface remaining identities as fresh clusters."
+                >
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <polyline points="23 4 23 10 17 10"/>
+                    <path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/>
+                  </svg>
+                  Re-scan for Matches
+                </button>
+              }
+              <button
+                class="btn btn-secondary btn-sm"
+                (click)="onSaveGraphState()"
+                [disabled]="savingGraphState()"
+                title="Snapshot the current graph (including unified users) back into the project's pickle."
+              >
+                @if (savingGraphState()) {
+                  <div class="spinner-tiny"></div>
+                  Saving…
+                } @else {
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/>
+                    <polyline points="17 21 17 13 7 13 7 21"/>
+                    <polyline points="7 3 7 8 15 8"/>
+                  </svg>
+                  Save graph state
+                }
+              </button>
+              <button
+                class="btn btn-danger btn-sm"
+                (click)="confirmDeleteAllLinks()"
+                [disabled]="deletingAllLinks() || (unifiedUsers().length === 0 && !setupInitialized())"
+                title="Reset author matching for this project: wipe all unified users and rejected-pair history, and re-save the snapshot. Files in storage are not touched."
+              >
+                @if (deletingAllLinks()) {
+                  <div class="spinner-tiny"></div>
+                  Resetting…
+                } @else {
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <polyline points="3 6 5 6 21 6"/>
+                    <path d="M19 6l-2 14a2 2 0 0 1-2 2H9a2 2 0 0 1-2-2L5 6"/>
+                    <path d="M10 11v6"/>
+                    <path d="M14 11v6"/>
+                    <path d="M9 6V4a2 2 0 0 1 2-2h2a2 2 0 0 1 2 2v2"/>
+                  </svg>
+                  Delete all links
+                }
+              </button>
+            }
           </div>
           <div class="content-body">
             @if (!isCurrentProjectLoaded()) {
@@ -557,6 +611,19 @@
                   </div>
                 </div>
                 <span class="progress-text">{{ suggestions().length }} suggestion(s) remaining</span>
+                <button
+                  class="btn btn-success btn-sm"
+                  (click)="requestApplyAllSuggestions()"
+                  [disabled]="applyingAll() || processingSuggestionId() !== null"
+                  title="Accept every remaining suggestion using its default name and email."
+                >
+                  @if (applyingAll()) {
+                    <div class="spinner-tiny"></div>
+                    Applying all…
+                  } @else {
+                    Accept all ({{ suggestions().length }})
+                  }
+                </button>
               </div>
 
               <div class="suggestion-cards">
@@ -659,7 +726,7 @@
                       <button
                         class="btn btn-success btn-sm"
                         (click)="onApplySuggestion(suggestion)"
-                        [disabled]="processingSuggestionId() !== null"
+                        [disabled]="processingSuggestionId() !== null || applyingAll()"
                       >
                         @if (processingSuggestionId() === suggestion.suggestion_id) {
                           <div class="spinner-tiny"></div>
@@ -669,7 +736,7 @@
                       <button
                         class="btn btn-danger btn-sm"
                         (click)="onRejectSuggestion(suggestion)"
-                        [disabled]="processingSuggestionId() !== null"
+                        [disabled]="processingSuggestionId() !== null || applyingAll()"
                       >
                         Reject
                       </button>
@@ -965,5 +1032,31 @@
     type="warning"
     (confirmed)="deleteUnifiedUser()"
     (cancelled)="cancelDeleteUnifiedUser()"
+  />
+}
+
+<!-- Delete All Links Confirmation Modal -->
+@if (showDeleteAllLinksModal()) {
+  <app-confirmation-modal
+    title="Reset author matching?"
+    [message]="'This wipes all ' + unifiedUsers().length + ' unified user(s) and previous reject decisions for this project. The on-disk snapshot will be re-saved with no merges. Files in storage are not touched.'"
+    confirmText="Reset"
+    cancelText="Cancel"
+    type="danger"
+    (confirmed)="deleteAllLinks()"
+    (cancelled)="cancelDeleteAllLinks()"
+  />
+}
+
+<!-- Apply All Suggestions Confirmation Modal -->
+@if (showApplyAllModal()) {
+  <app-confirmation-modal
+    title="Accept all suggestions?"
+    [message]="'Create ' + suggestions().length + ' unified user(s) from the remaining suggestions. Each uses its default name and email. You can still unlink any of them afterwards.'"
+    confirmText="Accept all"
+    cancelText="Cancel"
+    type="info"
+    (confirmed)="applyAllSuggestions()"
+    (cancelled)="cancelApplyAllSuggestions()"
   />
 }

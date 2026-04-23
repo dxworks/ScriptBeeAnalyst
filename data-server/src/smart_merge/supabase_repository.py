@@ -62,13 +62,29 @@ class SupabaseSmartMergeRepository(SmartMergeRepository):
                 "second_source_key": second_key,
             })
 
-        if rows:
-            # Use upsert to handle duplicates gracefully
-            client.table("rejected_similarities").upsert(
-                rows,
-                on_conflict="project_id,least(first_source || ':' || first_source_key, second_source || ':' || second_source_key),greatest(first_source || ':' || first_source_key, second_source || ':' || second_source_key)",
-            ).execute()
-            LOG.info(f"Persisted {len(rows)} rejected similarity pairs for project {project_id}")
+        if not rows:
+            return
+
+        # The DB's uq_rejected_similarity is a functional index over
+        # least()/greatest(), which PostgREST can't target via on_conflict.
+        # Rows are already in canonical order, so filter out existing pairs
+        # and insert only the new ones.
+        existing = self.get_rejected_similarities(project_id)
+        existing_keys = {
+            (p.first_source, p.first_source_key, p.second_source, p.second_source_key)
+            for p in existing
+        }
+        new_rows = [
+            r for r in rows
+            if (r["first_source"], r["first_source_key"], r["second_source"], r["second_source_key"])
+            not in existing_keys
+        ]
+        if new_rows:
+            client.table("rejected_similarities").insert(new_rows).execute()
+        LOG.info(
+            f"Persisted {len(new_rows)} new rejected similarity pairs "
+            f"(skipped {len(rows) - len(new_rows)} duplicates) for project {project_id}"
+        )
 
     def get_user_mappings(self, project_id: str) -> List[UserMapping]:
         client = get_service_client()
@@ -162,3 +178,27 @@ class SupabaseSmartMergeRepository(SmartMergeRepository):
         # Identity mappings are cascade-deleted when unified_user is deleted
         client.table("unified_users").delete().eq("id", unified_user_id).execute()
         LOG.info(f"Deleted unified user {unified_user_id} from project {project_id}")
+
+    def delete_all_user_mappings(self, project_id: str) -> int:
+        client = get_service_client()
+        response = (
+            client.table("unified_users")
+            .delete()
+            .eq("project_id", project_id)
+            .execute()
+        )
+        count = len(response.data or [])
+        LOG.info(f"Deleted {count} unified users from project {project_id}")
+        return count
+
+    def delete_all_rejected_similarities(self, project_id: str) -> int:
+        client = get_service_client()
+        response = (
+            client.table("rejected_similarities")
+            .delete()
+            .eq("project_id", project_id)
+            .execute()
+        )
+        count = len(response.data or [])
+        LOG.info(f"Deleted {count} rejected similarity pairs from project {project_id}")
+        return count

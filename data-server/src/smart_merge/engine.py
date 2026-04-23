@@ -296,7 +296,7 @@ class AuthorSmartMergeEngine:
                 identities=cluster_identities,
             ))
 
-        suggestions.sort(key=lambda s: s.confidence, reverse=True)
+        suggestions.sort(key=lambda s: ((s.default_name or "").casefold(), (s.default_email or "").casefold()))
         if dropped_oversize:
             LOG.warning(f"Dropped {dropped_oversize} oversize clusters")
         LOG.info(f"Generated {len(suggestions)} merge suggestions")
