@@ -1325,6 +1325,9 @@ _REENRICH_ALLOWED_OVERRIDES: frozenset[str] = frozenset({
     "pr_size_s_max",
     "pr_size_m_max",
     "pr_size_l_max",
+    "supernova_net_churn_min",
+    "test_orphan_max_cochange_test_count",
+    "test_orphan_min_commits",
 })
 
 

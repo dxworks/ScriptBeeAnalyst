@@ -13,6 +13,7 @@ from __future__ import annotations
 from collections import defaultdict
 from typing import Iterable
 
+from src.enrichment.components.resolver import top_folder_of
 from src.enrichment.models import OverviewCell, OverviewRow, OverviewTable
 from src.enrichment.overview.builder import (
     rate_cell,
@@ -146,9 +147,9 @@ def _bucket_commits_by_top_folder(commits: list) -> dict[str, list]:
             if f is None:
                 continue
             fid = _file_id(f)
-            if not fid:
+            top = top_folder_of(fid)
+            if top is None:
                 continue
-            top = fid.split("/", 1)[0] if "/" in fid else fid
             folders.add(top)
         for folder in folders:
             out[folder].append(commit)

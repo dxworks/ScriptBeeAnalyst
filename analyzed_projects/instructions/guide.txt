@@ -84,17 +84,44 @@ After load, the server attaches a derived analytics layer keyed at
 - anomaly.cohesion.coordination.Bazaar    - many distinct authors recently
 - anomaly.cohesion.coordination.Cathedral - one author dominates recent window
 - anomaly.cohesion.coordination.Pulsar    - bursty inter-commit timing
+- anomaly.cohesion.size.Supernova         - PROXY: net-churn lifetime above threshold (no LOC available)
 - anomaly.structuring.PivotFile           - high co-change degree
 - anomaly.structuring.TasksBottleneck     - issue open beyond threshold OR author with too many in-flight
 - anomaly.testing.BugMagnet               - high share of bugfix commits
+- anomaly.testing.TestOrphan              - PROXY: production file with little/no commit-cochange to tests
 
 Each trait has `evidence` showing the metric + threshold that triggered it.
+Proxy traits set `evidence['proxy'] = True` and a `note` so the agent can
+caveat findings derived from heuristics rather than direct measurement.
+
+### Components (graph_data['enrichments'].components)
+
+A list of Component(name, path_prefix, file_paths). Folder-based by default
+(top-folder of each file path); an optional components.mapping.json per project
+overrides the grouping. Use this to slice metrics by area of code without
+hand-listing files.
 
 ### Convenience helpers (already in /execute scope - do not import)
 
 - find_files_with_trait(trait_name) -> list[str]
 - cochange_neighbors(file_id, window="lifetime", limit=10) -> list[(str, float)]
-- overview_as_dict(name) -> dict     # name in {"pace", "authorship", "testing"}
+- overview_as_dict(name) -> dict     # name in {"pace", "authorship", "testing", "components", "intent_impact"}
+
+### Phase 3 relations and overviews
+
+Relations available via `enrichments.relation_file(kind, window)`:
+  - cochange.file-file, ownership.author-file, issue.file
+  - coauthor.author-author, pr.file, pr.reviewer
+  - cochange.component-component, issue.issue
+
+Overviews available via `enrichments.overview(name)` or `overview_as_dict(name)`:
+  - pace, authorship, testing, components, intent_impact
+
+### MCP tool wrappers (call directly without /execute)
+
+- list_anomalies(trait_name=None, entity_kind=None) -> list[dict]
+- get_overview_table(name) -> dict
+- get_relation_edges(kind, window="lifetime", limit=100) -> list[dict]
 
 ### Idiomatic queries
 

@@ -1,8 +1,10 @@
-"""anomaly.cohesion.coordination.* — Bazaar, Cathedral, Pulsar.
+"""anomaly.cohesion.* — Bazaar, Cathedral, Pulsar (coordination) + Supernova (size).
 
   - Bazaar: many distinct authors in the recent window.
   - Cathedral: one author dominates the recent window (counterpart).
   - Pulsar: bursty inter-commit interval distribution (lifetime CV >= threshold).
+  - Supernova (Phase 3, proxy): net-churn lifetime above a threshold; flagged
+    in `evidence` because we don't ingest absolute LOC.
 """
 from __future__ import annotations
 
@@ -75,6 +77,20 @@ class CohesionAnomalyTagger:
                     commits=commits_count,
                 ))
 
+            # Supernova (proxy): net-churn over lifetime above threshold. We
+            # cannot measure absolute LOC; sustained churn is the best stand-in.
+            net_churn = _net_churn(file_)
+            if net_churn >= cfg.supernova_net_churn_min:
+                traits.append(make_trait(
+                    "anomaly.cohesion.size.Supernova",
+                    family="cohesion",
+                    severity=float(net_churn),
+                    proxy=True,
+                    note="net-churn proxy, not absolute LOC",
+                    net_churn=int(net_churn),
+                    threshold=cfg.supernova_net_churn_min,
+                ))
+
             if traits:
                 out.append(EntityTags(
                     entity_kind="file",
@@ -111,6 +127,15 @@ def _author_counts(changes: Iterable) -> dict[str, int]:
         aid = getattr(a, "id", None) or str(a)
         counts[aid] = counts.get(aid, 0) + 1
     return counts
+
+
+def _net_churn(file_) -> int:
+    total = 0
+    for ch in file_.changes or []:
+        for h in getattr(ch, "hunks", None) or []:
+            total += len(getattr(h, "added_lines", []) or [])
+            total += len(getattr(h, "deleted_lines", []) or [])
+    return total
 
 
 def _inter_commit_cv(file_, min_intervals: int) -> Optional[float]:

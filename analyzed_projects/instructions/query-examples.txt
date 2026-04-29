@@ -129,6 +129,45 @@ weekend_bugfixes = [
 print(f"{len(weekend_bugfixes)} weekend bugfix commits")
 ```
 
+## 10a. Components and their file counts
+
+```python
+e = graph_data["enrichments"]
+for comp in e.components:
+    print(f"{comp.name} ({comp.path_prefix}): {len(comp.file_paths)} files")
+```
+
+## 10b. Issue type impact (intent_impact overview)
+
+```python
+table = overview_as_dict("intent_impact")
+for entity, cells in table["rows"].items():
+    issues = cells.get("issue_count", {}).get("lifetime_value")
+    churn = cells.get("linked_churn", {}).get("lifetime_value")
+    print(f"{entity:20s} issues={issues} linked_churn={churn}")
+```
+
+## 10c. PR -> reviewer (proxy fallback) edges
+
+```python
+e = graph_data["enrichments"]
+rf = e.relation_file("pr.reviewer", "lifetime")
+if rf:
+    for r in rf.relations[:10]:
+        proxy = "PROXY" if r.extras.get("proxy") else "explicit"
+        print(f"PR #{r.source_id} -> {r.target_id} ({r.strength}, {proxy})")
+```
+
+## 10d. Component-to-component co-change (cross-area churn coupling)
+
+```python
+e = graph_data["enrichments"]
+rf = e.relation_file("cochange.component-component", "lifetime")
+if rf:
+    for r in rf.relations[:10]:
+        print(f"{r.source_id} <-> {r.target_id}: {r.strength}")
+```
+
 ## 10. Commits per author (top 10)
 
 ```python

@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
-from typing import Pattern
+from typing import Optional, Pattern
 
 
 # ── Regexes (commit message classification) ─────────────────────────────────────
@@ -107,6 +107,20 @@ class EnrichmentConfig:
     pr_size_s_max: int = 200
     pr_size_m_max: int = 600
     pr_size_l_max: int = 2000
+
+    # Phase 3 proxy traits — flagged as proxy in evidence per plan §B-#5.
+    # Net-churn floor for Supernova; chosen at 5k so only files with sustained
+    # heavy contribution flag (median project files churn <500 over their life).
+    supernova_net_churn_min: int = 5000
+    # Max number of commits on a production file that ALSO touch a test-role
+    # file before TestOrphan stops firing. 1 leaves room for ad-hoc smoke tests.
+    test_orphan_max_cochange_test_count: int = 1
+    # Min commits a production file needs before TestOrphan even applies (avoid
+    # flagging brand-new untested-yet code as orphaned).
+    test_orphan_min_commits: int = 3
+
+    # Phase 3 components — optional mapping JSON path; missing file = heuristic.
+    components_mapping_path: Optional[str] = None
 
     # Issue age buckets — boundaries in days; first match wins.
     issue_age_buckets: list[tuple[str, int]] = field(default_factory=lambda: [

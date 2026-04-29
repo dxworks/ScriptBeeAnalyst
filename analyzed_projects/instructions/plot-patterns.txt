@@ -106,6 +106,56 @@ plt.title("Top 10 BugMagnet Files")
 plt.tight_layout()
 ```
 
+## Example: Components churn comparison
+
+```python
+table = overview_as_dict("components")
+labels = []
+churn = []
+for entity, cells in table["rows"].items():
+    if entity == "(project)":
+        continue
+    v = cells.get("total_churn", {}).get("lifetime_value")
+    if v in (None, "", 0):
+        continue
+    labels.append(entity)
+    churn.append(float(v))
+
+# Top 10 most-churning components.
+order = sorted(range(len(labels)), key=lambda i: -churn[i])[:10]
+labels = [labels[i] for i in order]
+churn = [churn[i] for i in order]
+
+plt.figure(figsize=(10, 5))
+plt.barh(list(reversed(labels)), list(reversed(churn)))
+plt.xlabel("Lifetime Churn")
+plt.title("Top 10 Components by Churn")
+plt.tight_layout()
+```
+
+## Example: Issue type impact (intent_impact)
+
+```python
+table = overview_as_dict("intent_impact")
+labels, churn = [], []
+for entity, cells in table["rows"].items():
+    if entity == "(project)":
+        continue
+    v = cells.get("linked_churn", {}).get("lifetime_value")
+    if v in (None, "", 0):
+        continue
+    labels.append(entity)
+    churn.append(float(v))
+
+plt.figure(figsize=(10, 5))
+plt.bar(labels, churn)
+plt.xlabel("Issue Type")
+plt.ylabel("Linked Churn")
+plt.title("Code Impact per Issue Type")
+plt.xticks(rotation=30)
+plt.tight_layout()
+```
+
 ## Tips
 
 - Always use `plt.figure(figsize=(w, h))` to set a reasonable size
@@ -113,3 +163,6 @@ plt.tight_layout()
 - For date axes, use `plt.xticks(rotation=45)` for readability
 - Standard library modules (collections, datetime) are available
 - The server returns JPEG - use clear colors with good contrast
+- Phase 3 MCP wrappers (list_anomalies, get_overview_table,
+  get_relation_edges) can fetch data directly without writing /execute code,
+  for quick read-only chart inputs.
