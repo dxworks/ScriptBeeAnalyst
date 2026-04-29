@@ -49,6 +49,18 @@ async def execute_code(code: str) -> str:
       - graph_data['git']    -> GitProject (commits, files, changes, authors)
       - graph_data['jira']   -> JiraProject (issues, statuses, types, users)
       - graph_data['github'] -> GitHubProject (pull requests, users, commits)
+      - graph_data['enrichments'] -> Enrichments (classifiers + traits + relations + overviews)
+
+    Pre-injected helpers (no import needed):
+      - find_files_with_trait(trait_name) -> list[str]
+      - cochange_neighbors(file_id, window="lifetime", limit=10) -> list[tuple[str, float]]
+      - overview_as_dict(name) -> dict   # name in {"pace", "authorship", "testing"}
+
+    Trait names follow the dx taxonomy:
+      anomaly.knowledge.{Orphan,BusFactor1,SharedKnowledge}
+      anomaly.cohesion.coordination.{Bazaar,Cathedral,Pulsar}
+      anomaly.structuring.{PivotFile,TasksBottleneck}
+      anomaly.testing.BugMagnet
 
     Use print() to produce output - results come from captured stdout.
     Keep output concise (summarize, aggregate, limit to top N).
@@ -80,8 +92,10 @@ async def execute_code(code: str) -> str:
 async def generate_plot(code: str) -> str:
     """Execute Python code that generates a matplotlib plot.
 
-    Same sandbox as execute_code, but also has `plt` (matplotlib.pyplot) available.
-    Do NOT call plt.show() or plt.savefig() - the server captures the current figure.
+    Same sandbox as execute_code (graph_data, enrichments, find_files_with_trait,
+    cochange_neighbors, overview_as_dict), but also has `plt` (matplotlib.pyplot)
+    available. Do NOT call plt.show() or plt.savefig() - the server captures
+    the current figure.
 
     The resulting plot is saved as a JPEG file and the path is returned.
 

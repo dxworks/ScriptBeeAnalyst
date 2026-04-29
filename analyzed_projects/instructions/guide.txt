@@ -47,7 +47,77 @@ Bidirectional references link entities across the three data sources:
 
 Navigate via list attributes: commit.issues, issue.git_commits, pr.git_commits, etc.
 
+## Enrichment Layer (graph_data['enrichments'])
+
+After load, the server attaches a derived analytics layer keyed at
+`graph_data['enrichments']` (an `Enrichments` Pydantic object). It contains:
+
+- `tags_by_entity` - dict[f"{kind}:{id}"] -> EntityTags(classifiers, traits)
+- `relations`      - list[RelationFile] (file-file, author-file, issue-file)
+- `overviews`      - list[OverviewTable] (pace, authorship, testing)
+
+### Classifiers you can query (slot -> values)
+
+- commit.message.nature: bugfix | feature | refactor | docs | test | chore | merge | revert
+- commit.volume.churn:   focused | medium | bulk
+- commit.volume.spread:  narrow | wide
+- commit.daytime:        night | morning | afternoon | evening
+- commit.weekday:        mon..sun
+- commit.message.smartness: smart | dumb (smart = linked to an issue)
+- file.status:           active | idle
+- file.role:             production | test | config | doc | build
+- file.creationYear:     "<year>"
+- author.activity:       active | idle
+- author.seniority:      newcomer | established | senior | veteran
+- issue.status:          native JIRA status name (e.g. "In Progress", "Done")
+- issue.type:            native JIRA type name (e.g. "Bug", "Story")
+- issue.resolution:      open | resolved
+- issue.age_bucket:      <1w | 1-4w | 1-3m | 3-12m | >1y
+- pr.state:              native (open | merged | closed)
+- pr.size:               XS | S | M | L | XL
+
+### Anomaly traits (file/issue/author level)
+
+- anomaly.knowledge.Orphan        - single author + last touch outside the recent window
+- anomaly.knowledge.BusFactor1    - one author owns >=80% of churn (alias: Hermit)
+- anomaly.knowledge.SharedKnowledge - high entropy of author-churn distribution
+- anomaly.cohesion.coordination.Bazaar    - many distinct authors recently
+- anomaly.cohesion.coordination.Cathedral - one author dominates recent window
+- anomaly.cohesion.coordination.Pulsar    - bursty inter-commit timing
+- anomaly.structuring.PivotFile           - high co-change degree
+- anomaly.structuring.TasksBottleneck     - issue open beyond threshold OR author with too many in-flight
+- anomaly.testing.BugMagnet               - high share of bugfix commits
+
+Each trait has `evidence` showing the metric + threshold that triggered it.
+
+### Convenience helpers (already in /execute scope - do not import)
+
+- find_files_with_trait(trait_name) -> list[str]
+- cochange_neighbors(file_id, window="lifetime", limit=10) -> list[(str, float)]
+- overview_as_dict(name) -> dict     # name in {"pace", "authorship", "testing"}
+
+### Idiomatic queries
+
+```python
+# top BugMagnet files
+print(find_files_with_trait("anomaly.testing.BugMagnet")[:10])
+
+# co-change neighbours of a known file (recent window)
+for other, strength in cochange_neighbors("src/server.py", window="recent", limit=5):
+    print(strength, other)
+
+# tag lookup
+e = graph_data["enrichments"]
+tags = e.find_tags("file", "src/server.py")
+print(tags.classifiers, [t.name for t in tags.traits])
+
+# overview table cell
+authorship = overview_as_dict("authorship")
+print(authorship["rows"]["(project)"]["bus_factor_1_files"])
+```
+
 ## Rules
 
 - Use print() for output - results come from captured stdout.
 - Keep output concise: summarize, aggregate, or limit results (e.g., top 10).
+- Do NOT mutate graph_data or graph_data['enrichments'] - both are shared state.

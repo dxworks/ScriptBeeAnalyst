@@ -25,6 +25,13 @@ from src.common.author_extractor import extract_all_identities
 from src.smart_merge.engine import AuthorSmartMergeEngine
 from src.smart_merge.supabase_repository import SupabaseSmartMergeRepository
 from src.smart_merge.types import MAX_IDENTITIES_PER_SUGGESTION, RejectedPair, Suggestion, UserMapping
+from src.enrichment import compute_enrichments
+from src.enrichment.config import DEFAULT_CONFIG, EnrichmentConfig
+from src.enrichment.models import Enrichments
+from src.enrichment.relations.writer import to_csv_bytes as relations_to_csv
+from src.enrichment.overview.writer import to_csv_bytes as overview_to_csv
+from src.enrichment.repository import SupabaseEnrichmentRepository
+from dataclasses import replace as dc_replace
 
 logger = get_logger("data-server")
 
@@ -307,6 +314,31 @@ async def load_project(project_id: str):
             replay_result = _replay_user_mappings(project_id)
         except Exception as e:
             logger.warning(f"Failed to replay user mappings (non-fatal): {e}")
+
+        # Build (or restore) the enrichment layer. Cache hit on Supabase skips
+        # recompute; fresh compute is persisted for the next load. Non-fatal.
+        try:
+            repo = SupabaseEnrichmentRepository()
+            cached = None
+            try:
+                cached = repo.load(project_id)
+            except Exception as e:
+                logger.warning(f"Could not read cached enrichments (will recompute): {e}")
+            if cached is not None:
+                graph_data["enrichments"] = cached
+                logger.info(
+                    f"Restored cached enrichments for {project_id} "
+                    f"(generated_at={cached.generated_at.isoformat()})"
+                )
+            else:
+                fresh = compute_enrichments(graph_data)
+                graph_data["enrichments"] = fresh
+                try:
+                    repo.save(project_id, fresh)
+                except Exception as e:
+                    logger.warning(f"Failed to persist enrichments (non-fatal): {e}")
+        except Exception as e:
+            logger.warning(f"Failed to compute enrichments (non-fatal): {e}", exc_info=True)
 
         unified_users_count = len(graph_data.get("users", []))
 
@@ -1090,6 +1122,288 @@ async def replay_unified_users(project_id: str):
         )
 
 
+# =============================================================================
+# Enrichment Endpoints (tags, relations, overview tables)
+# =============================================================================
+
+def _require_enrichments() -> Optional[Enrichments]:
+    """Return loaded Enrichments or None if the graph isn't ready."""
+    if not graph_data:
+        return None
+    return graph_data.get("enrichments")
+
+
+@app.get("/enrichments/tags")
+async def get_enrichment_tags(
+    entity_kind: Optional[str] = None,
+    classifier: Optional[str] = None,
+    value: Optional[str] = None,
+    trait: Optional[str] = None,
+):
+    """Return enrichment tags, optionally filtered.
+
+    Query params:
+    - `entity_kind` (file/commit/author/issue/pr/component)
+    - `classifier=status&value=active` — mandatory classifier match
+    - `trait=anomaly.knowledge.Orphan` — optional concern match
+    """
+    enrichments = _require_enrichments()
+    if enrichments is None:
+        return JSONResponse({"error": "No enrichments loaded. Load a project first."}, status_code=400)
+
+    results = list(enrichments.tags_by_entity.values())
+
+    if entity_kind:
+        results = [t for t in results if t.entity_kind == entity_kind]
+    if classifier:
+        results = [t for t in results if classifier in t.classifiers and (value is None or t.classifiers[classifier] == value)]
+    if trait:
+        results = [t for t in results if any(tr.name == trait for tr in t.traits)]
+
+    return {
+        "generated_at": enrichments.generated_at.isoformat(),
+        "recent_window_days": enrichments.recent_window_days,
+        "count": len(results),
+        "tags": [t.model_dump() for t in results],
+    }
+
+
+@app.get("/enrichments/relations/{kind}.csv")
+async def get_enrichment_relations_csv(kind: str, window: str = "lifetime"):
+    """Stream a relation file as CSV. Shape: source,target,strength.
+
+    `window` is `lifetime` (default) or `recent`.
+    """
+    enrichments = _require_enrichments()
+    if enrichments is None:
+        return JSONResponse({"error": "No enrichments loaded. Load a project first."}, status_code=400)
+
+    if window not in ("lifetime", "recent"):
+        return JSONResponse({"error": f"window must be 'lifetime' or 'recent', got {window!r}"}, status_code=400)
+
+    rel_file = enrichments.relation_file(kind, window)
+    if rel_file is None:
+        return JSONResponse({"error": f"Unknown relation kind {kind!r} for window {window!r}"}, status_code=404)
+
+    return Response(
+        content=relations_to_csv(rel_file),
+        media_type="text/csv",
+        headers={"Content-Disposition": f'attachment; filename="{kind}.{window}.csv"'},
+    )
+
+
+@app.get("/enrichments/overviews/{name}.csv")
+async def get_enrichment_overview_csv(name: str):
+    """Stream an overview table as CSV (lifetime/recent/trend% triples per column)."""
+    enrichments = _require_enrichments()
+    if enrichments is None:
+        return JSONResponse({"error": "No enrichments loaded. Load a project first."}, status_code=400)
+
+    table = enrichments.overview(name)
+    if table is None:
+        return JSONResponse({"error": f"Unknown overview table {name!r}"}, status_code=404)
+
+    return Response(
+        content=overview_to_csv(table),
+        media_type="text/csv",
+        headers={"Content-Disposition": f'attachment; filename="{name}.csv"'},
+    )
+
+
+@app.get("/enrichments/summary")
+async def get_enrichment_summary():
+    """JSON summary of what's in the enrichment layer (counts only, no payload)."""
+    enrichments = _require_enrichments()
+    if enrichments is None:
+        return JSONResponse({"error": "No enrichments loaded. Load a project first."}, status_code=400)
+
+    return {
+        "generated_at": enrichments.generated_at.isoformat(),
+        "recent_window_days": enrichments.recent_window_days,
+        "entity_tags_count": len(enrichments.tags_by_entity),
+        "relation_files": [
+            {"kind": r.kind, "window": r.window, "edges": len(r.relations)}
+            for r in enrichments.relations
+        ],
+        "overviews": [
+            {"name": o.name, "entity_kind": o.entity_kind, "rows": len(o.rows), "columns": o.columns}
+            for o in enrichments.overviews
+        ],
+    }
+
+
+class ReenrichRequest(BaseModel):
+    """Optional EnrichmentConfig field overrides for a re-run."""
+    overrides: Optional[dict] = None
+
+
+@app.post("/projects/{project_id}/reenrich")
+async def reenrich_project(project_id: str, body: Optional[ReenrichRequest] = None):
+    """Recompute enrichments with optional threshold overrides; persist + return summary.
+
+    Body: {"overrides": {"bugmagnet_ratio_min": 0.5, ...}} — keys must match
+    EnrichmentConfig fields. Unknown keys are rejected so typos surface early.
+    """
+    if not graph_data or current_project_id != project_id:
+        return JSONResponse(
+            {"error": f"Project {project_id} is not currently loaded"},
+            status_code=400,
+        )
+
+    overrides = (body.overrides if body else None) or {}
+    try:
+        cfg = _merged_enrichment_config(overrides)
+    except ValueError as e:
+        return JSONResponse({"error": str(e)}, status_code=400)
+
+    try:
+        fresh = compute_enrichments(graph_data, cfg)
+    except Exception as e:
+        logger.exception("Re-enrichment failed")
+        return JSONResponse({"error": f"Re-enrichment failed: {e}"}, status_code=500)
+
+    graph_data["enrichments"] = fresh
+
+    persisted = True
+    try:
+        SupabaseEnrichmentRepository().save(project_id, fresh)
+    except Exception as e:
+        logger.warning(f"Failed to persist re-enrichments (non-fatal): {e}")
+        persisted = False
+
+    return {
+        "project_id": project_id,
+        "persisted": persisted,
+        "applied_overrides": overrides,
+        "summary": {
+            "generated_at": fresh.generated_at.isoformat(),
+            "recent_window_days": fresh.recent_window_days,
+            "entity_tags_count": len(fresh.tags_by_entity),
+            "relation_files": [
+                {"kind": r.kind, "window": r.window, "edges": len(r.relations)}
+                for r in fresh.relations
+            ],
+            "overviews": [
+                {"name": o.name, "entity_kind": o.entity_kind, "rows": len(o.rows), "columns": o.columns}
+                for o in fresh.overviews
+            ],
+        },
+    }
+
+
+# Only scalar threshold fields are overridable via `/reenrich`.
+# Pattern fields (nature_patterns, *_patterns) and structured fields
+# (daytime_buckets, issue_age_buckets, resolved_status_categories) are excluded
+# to prevent ReDoS and to keep the JSON wire format simple.
+_REENRICH_ALLOWED_OVERRIDES: frozenset[str] = frozenset({
+    "recent_window_days",
+    "idle_threshold_days",
+    "churn_focused_max",
+    "churn_medium_max",
+    "spread_narrow_max",
+    "cochange_max_files_per_commit",
+    "newcomer_max_days",
+    "established_max_days",
+    "senior_max_days",
+    "bugmagnet_min_bugfix_commits",
+    "bugmagnet_ratio_min",
+    "orphan_min_commits",
+    "hermit_dominance_ratio",
+    "busfactor1_min_distinct_authors",
+    "shared_knowledge_entropy_min",
+    "shared_knowledge_min_distinct_authors",
+    "bazaar_distinct_authors_min",
+    "cathedral_dominance_ratio",
+    "cathedral_min_recent_commits",
+    "pulsar_cv_min",
+    "pulsar_min_commits",
+    "pulsar_min_intervals",
+    "pivotfile_cochange_degree_min",
+    "tasksbottleneck_open_age_days",
+    "tasksbottleneck_min_in_flight",
+    "pr_size_xs_max",
+    "pr_size_s_max",
+    "pr_size_m_max",
+    "pr_size_l_max",
+})
+
+
+def _merged_enrichment_config(overrides: dict) -> EnrichmentConfig:
+    """Apply override dict onto a fresh EnrichmentConfig copy, validating keys.
+
+    Only scalar threshold fields listed in ``_REENRICH_ALLOWED_OVERRIDES`` may
+    be overridden. Unknown keys, regex/pattern fields, and structured fields
+    (buckets, tuples) are rejected with ValueError so the caller sees a 400.
+    """
+    base = EnrichmentConfig()
+    if not overrides:
+        return base
+    valid_fields = {f for f in base.__dataclass_fields__}
+    unknown = [k for k in overrides if k not in valid_fields]
+    if unknown:
+        raise ValueError(f"Unknown EnrichmentConfig fields: {unknown}")
+    forbidden = [k for k in overrides if k not in _REENRICH_ALLOWED_OVERRIDES]
+    if forbidden:
+        raise ValueError(
+            f"EnrichmentConfig fields not overridable via /reenrich: {forbidden}"
+        )
+    return dc_replace(base, **overrides)
+
+
+# ── /execute helpers ─────────────────────────────────────────────────────────
+
+def _helper_find_files_with_trait(trait_name: str):
+    """List file_ids carrying `trait_name` in the loaded enrichments."""
+    enrichments = graph_data.get("enrichments")
+    if enrichments is None:
+        return []
+    return [
+        t.entity_id for t in enrichments.entities_with_trait(trait_name)
+        if t.entity_kind == "file"
+    ]
+
+
+def _helper_cochange_neighbors(file_id: str, window: str = "lifetime", limit: int = 10):
+    """Return up to `limit` strongest co-change neighbours of `file_id`."""
+    enrichments = graph_data.get("enrichments")
+    if enrichments is None:
+        return []
+    rel_file = enrichments.relation_file("cochange.file-file", window)
+    if rel_file is None:
+        return []
+    out = []
+    for r in rel_file.relations:
+        other = None
+        if r.source_id == file_id:
+            other = r.target_id
+        elif r.target_id == file_id:
+            other = r.source_id
+        if other is not None:
+            out.append((other, r.strength))
+    out.sort(key=lambda x: -x[1])
+    return out[:limit]
+
+
+def _helper_overview_as_dict(name: str):
+    """Return an OverviewTable as plain dicts for easy Python consumption."""
+    enrichments = graph_data.get("enrichments")
+    if enrichments is None:
+        return None
+    table = enrichments.overview(name)
+    if table is None:
+        return None
+    return {
+        "name": table.name,
+        "columns": table.columns,
+        "rows": {
+            row.entity_id: {
+                col: cell.model_dump() for col, cell in row.cells.items()
+            }
+            for row in table.rows
+        },
+    }
+
+
 @app.post("/execute")
 async def execute_code(request: CodeRequest):
     """
@@ -1114,8 +1428,14 @@ async def execute_code(request: CodeRequest):
         sys_stdout = sys.stdout
         sys.stdout = stdout
 
-        # Execute code with limited scope
-        exec_globals = {"graph_data": graph_data}
+        # Execute code with limited scope. Enrichment helpers exposed so
+        # agents don't have to walk the Enrichments model manually.
+        exec_globals = {
+            "graph_data": graph_data,
+            "find_files_with_trait": _helper_find_files_with_trait,
+            "cochange_neighbors": _helper_cochange_neighbors,
+            "overview_as_dict": _helper_overview_as_dict,
+        }
         exec(code, exec_globals)
 
         output = stdout.getvalue()

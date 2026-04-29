@@ -88,7 +88,48 @@ for pr in github_project.pull_request_registry.all:
         print(f"PR #{pr.number} '{pr.title[:50]}' -> Issues: {issue_keys}")
 ```
 
-## 6. Commits per author (top 10)
+## 6. BugMagnet files (using the enrichment layer)
+
+```python
+# `find_files_with_trait` is pre-injected into /execute scope.
+files = find_files_with_trait("anomaly.testing.BugMagnet")
+print(f"{len(files)} BugMagnet files")
+for fid in files[:10]:
+    print(f"  {fid}")
+```
+
+## 7. Co-change neighbours of a file
+
+```python
+neighbours = cochange_neighbors("src/server.py", window="lifetime", limit=10)
+for fid, strength in neighbours:
+    print(f"{strength:>5.0f}  {fid}")
+```
+
+## 8. Authorship table (project + per-folder rollup)
+
+```python
+authorship = overview_as_dict("authorship")
+for entity, cells in authorship["rows"].items():
+    bf1 = cells.get("bus_factor_1_files", {}).get("lifetime_value")
+    total = cells.get("total_authors", {}).get("lifetime_value")
+    print(f"{entity:30s} authors={total} bus_factor_1_files={bf1}")
+```
+
+## 9. Filter classifiers (e.g. weekend bugfixes)
+
+```python
+e = graph_data["enrichments"]
+weekend_bugfixes = [
+    t for t in e.tags_by_entity.values()
+    if t.entity_kind == "commit"
+    and t.classifiers.get("message.nature") == "bugfix"
+    and t.classifiers.get("weekday") in ("sat", "sun")
+]
+print(f"{len(weekend_bugfixes)} weekend bugfix commits")
+```
+
+## 10. Commits per author (top 10)
 
 ```python
 from collections import Counter

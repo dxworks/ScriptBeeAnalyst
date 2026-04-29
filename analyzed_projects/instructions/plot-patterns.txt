@@ -77,6 +77,35 @@ plt.tight_layout()
 
 ---
 
+## Example: BugMagnet files bar chart (using enrichment layer)
+
+```python
+from collections import Counter
+
+files = find_files_with_trait("anomaly.testing.BugMagnet")
+e = graph_data["enrichments"]
+
+# severity = bugfix ratio for BugMagnet
+top = []
+for fid in files:
+    tags = e.find_tags("file", fid)
+    if tags is None:
+        continue
+    bm = next((t for t in tags.traits if t.name == "anomaly.testing.BugMagnet"), None)
+    if bm is None:
+        continue
+    top.append((fid, bm.evidence.get("bugfix_ratio", 0.0)))
+top.sort(key=lambda x: -x[1])
+top = top[:10]
+
+names, values = zip(*top) if top else ([], [])
+plt.figure(figsize=(10, 5))
+plt.barh(list(reversed(names)), list(reversed(values)))
+plt.xlabel("Bugfix Ratio")
+plt.title("Top 10 BugMagnet Files")
+plt.tight_layout()
+```
+
 ## Tips
 
 - Always use `plt.figure(figsize=(w, h))` to set a reasonable size
