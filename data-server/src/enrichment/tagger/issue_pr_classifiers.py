@@ -14,6 +14,23 @@ from src.enrichment.tagger.base import TaggingContext
 
 
 class IssueClassifiersTagger:
+    """Per-issue mandatory classifiers: status, type, resolution, age_bucket.
+
+    `status` and `type` carry the native JIRA values (last status / last type
+    in the change history) — vocabulary varies per project. `resolution` collapses
+    statuses into open/resolved using `cfg.resolved_status_categories`.
+    `age_bucket` groups (anchor − createdAt) days using `cfg.issue_age_buckets`;
+    for resolved issues the upper bound is `updatedAt`, not the anchor.
+    """
+
+    CLASSIFIERS = [
+        # status / type vocabulary is project-specific (native JIRA names).
+        {"slot": "status",     "entity": "issue", "values": []},
+        {"slot": "type",       "entity": "issue", "values": []},
+        {"slot": "resolution", "entity": "issue", "values": ["open", "resolved"]},
+        {"slot": "age_bucket", "entity": "issue",
+         "values": ["<1w", "1-4w", "1-3m", "3-12m", ">1y"]},
+    ]
 
     def tag(self, ctx: TaggingContext) -> Iterable[EntityTags]:
         jira = ctx.graph_data.get("jira")
@@ -51,6 +68,24 @@ class IssueClassifiersTagger:
 
 
 class PullRequestClassifiersTagger:
+    """Per-PR mandatory classifiers: state, size, review_intensity.
+
+    `state` carries the native GitHub value (open / merged / closed). `size`
+    buckets `(changedFiles + linked-commit churn)` using the four `cfg.pr_size_*_max`
+    thresholds (XS through XL). `review_intensity` counts review submissions in
+    {APPROVED, COMMENTED, CHANGES_REQUESTED, PENDING} (DISMISSED excluded) and
+    buckets via `cfg.review_intensity_light_max` and `cfg.review_intensity_heavy_min`.
+    """
+
+    CLASSIFIERS = [
+        {"slot": "state",            "entity": "pr",
+         # Native GitHub vocabulary; the canonical three are listed for reference.
+         "values": ["open", "merged", "closed"]},
+        {"slot": "size",             "entity": "pr",
+         "values": ["XS", "S", "M", "L", "XL"]},
+        {"slot": "review_intensity", "entity": "pr",
+         "values": ["none", "light", "moderate", "heavy"]},
+    ]
 
     def tag(self, ctx: TaggingContext) -> Iterable[EntityTags]:
         github = ctx.graph_data.get("github")
@@ -67,6 +102,7 @@ class PullRequestClassifiersTagger:
                 classifiers["state"] = pr.state
 
             classifiers["size"] = _pr_size(pr, cfg)
+            classifiers["review_intensity"] = _review_intensity(pr, cfg)
 
             out.append(EntityTags(
                 entity_kind="pr",
@@ -130,6 +166,26 @@ def _age_bucket(age_days: int, buckets: list[tuple[str, int]]) -> str:
         if age_days <= max_days:
             return label
     return buckets[-1][0] if buckets else "unknown"
+
+
+# Review states that count toward review_intensity. DISMISSED is excluded
+# because a dismissed review no longer represents reviewer engagement.
+_REVIEW_INTENSITY_COUNTED_STATES = {"APPROVED", "COMMENTED", "CHANGES_REQUESTED", "PENDING"}
+
+
+def _review_intensity(pr, cfg) -> str:
+    reviews = getattr(pr, "reviews", None) or []
+    count = sum(
+        1 for r in reviews
+        if (getattr(r, "state", None) or "").upper() in _REVIEW_INTENSITY_COUNTED_STATES
+    )
+    if count == 0:
+        return "none"
+    if count <= cfg.review_intensity_light_max:
+        return "light"
+    if count < cfg.review_intensity_heavy_min:
+        return "moderate"
+    return "heavy"
 
 
 def _pr_size(pr, cfg) -> str:

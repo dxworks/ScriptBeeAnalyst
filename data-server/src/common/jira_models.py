@@ -45,6 +45,33 @@ class IssueType(BaseModel):
     issues: List[Issue] = Field(default_factory=list)
 
 
+@identity_fields("field", "from_", "fromString", "to", "toString")
+class ChangeItem(BaseModel):
+    field: str
+    from_: Optional[str] = None
+    fromString: Optional[str] = None
+    to: Optional[str] = None
+    toString: Optional[str] = None
+
+
+@identity_fields("id", "created")
+class Change(BaseModel):
+    id: int
+    created: datetime
+    changedFields: List[str] = Field(default_factory=list)
+    items: List[ChangeItem] = Field(default_factory=list)
+    user: Optional[JiraUser] = None
+
+
+@identity_fields("body", "created", "updated")
+class Comment(BaseModel):
+    body: str
+    created: datetime
+    updated: datetime
+    author: Optional[JiraUser] = None
+    updatedBy: Optional[JiraUser] = None
+
+
 @identity_fields("id", "key", "summary", "createdAt", "updatedAt")
 class Issue(BaseModel):
     id: int
@@ -60,6 +87,10 @@ class Issue(BaseModel):
     reporter: Optional[JiraUser] = None
     parent: Optional[Issue] = None
     children: List[Issue] = Field(default_factory=list)
+
+    comments: List[Comment] = Field(default_factory=list)
+    # Promoted from DTO `changes` — full transition history, previously consumed by the linker and dropped.
+    transitions: List[Change] = Field(default_factory=list)
 
     git_commits: List[GitCommit] = Field(default_factory=list)
     pull_requests: List[PullRequest] = Field(default_factory=list)

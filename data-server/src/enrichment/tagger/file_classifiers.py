@@ -13,6 +13,22 @@ from src.enrichment.tagger.base import Tagger, TaggingContext
 
 
 class FileClassifiersTagger:
+    """Per-file mandatory classifiers: status, role, creationYear.
+
+    `status` derives from `last_change_date` vs `ctx.recent_cutoff` (governed by
+    `cfg.recent_window_days`). `role` priority order: build → test → doc → config
+    → production fallback (regex catalogs in `cfg.{build,test,doc,config}_patterns`).
+    `creationYear` is the year of the file's first observed change.
+    """
+
+    CLASSIFIERS = [
+        {"slot": "status",       "entity": "file",
+         "values": ["active", "idle"]},
+        {"slot": "role",         "entity": "file",
+         "values": ["production", "test", "config", "doc", "build"]},
+        # creationYear is dynamic (year string of first change) — no fixed vocabulary.
+        {"slot": "creationYear", "entity": "file", "values": []},
+    ]
 
     def tag(self, ctx: TaggingContext) -> Iterable[EntityTags]:
         git = ctx.graph_data.get("git")

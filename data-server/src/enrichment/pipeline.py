@@ -18,8 +18,14 @@ from src.enrichment.config import DEFAULT_CONFIG, EnrichmentConfig
 from src.enrichment.models import Enrichments
 from src.enrichment.overview.authorship_table import AuthorshipTableBuilder
 from src.enrichment.overview.components_table import ComponentsTableBuilder
+from src.enrichment.overview.feature_traceability_table import (
+    FeatureTraceabilityTableBuilder,
+)
 from src.enrichment.overview.intent_impact_table import IntentImpactTableBuilder
+from src.enrichment.overview.knowledge_table import KnowledgeTableBuilder
+from src.enrichment.overview.nature_table import NatureTableBuilder
 from src.enrichment.overview.pace_table import PaceTableBuilder
+from src.enrichment.overview.pr_lifecycle_table import PullRequestLifecycleTableBuilder
 from src.enrichment.overview.testing_table import TestingTableBuilder
 from src.enrichment.recent_window import (
     ensure_aware,
@@ -28,12 +34,39 @@ from src.enrichment.recent_window import (
 )
 from src.enrichment.relations.coauthor import CoAuthorExtractor
 from src.enrichment.relations.cochange import FileCoChangeExtractor
+from src.enrichment.relations.cochange_author_shared_task_prefixes import (
+    AuthorSharedTaskPrefixesExtractor,
+)
+from src.enrichment.relations.cochange_author_time_windowed import (
+    AuthorTimeWindowedExtractor,
+)
 from src.enrichment.relations.cochange_component import ComponentCoChangeExtractor
+from src.enrichment.relations.cochange_component_shared_devs import (
+    ComponentSharedDevsCoChangeExtractor,
+)
+from src.enrichment.relations.cochange_component_shared_task_prefixes import (
+    ComponentSharedTaskPrefixesExtractor,
+)
+from src.enrichment.relations.cochange_component_time_windowed import (
+    ComponentTimeWindowedExtractor,
+)
+from src.enrichment.relations.cochange_file_shared_devs import (
+    FileSharedDevsCoChangeExtractor,
+)
+from src.enrichment.relations.cochange_file_shared_task_prefixes import (
+    FileSharedTaskPrefixesCoChangeExtractor,
+)
+from src.enrichment.relations.cochange_file_time_windowed import (
+    FileTimeWindowedCoChangeExtractor,
+)
 from src.enrichment.relations.issue_file import IssueFileExtractor
 from src.enrichment.relations.issue_issue import IssueIssueExtractor
 from src.enrichment.relations.ownership import OwnershipExtractor
 from src.enrichment.relations.pr_file import PullRequestFileExtractor
 from src.enrichment.relations.pr_reviewer import PullRequestReviewerExtractor
+from src.enrichment.relations.similarity_file_names import (
+    FileNameSimilarityExtractor,
+)
 from src.enrichment.tagger.anomaly_cohesion import CohesionAnomalyTagger
 from src.enrichment.tagger.anomaly_knowledge import KnowledgeAnomalyTagger
 from src.enrichment.tagger.anomaly_structuring import StructuringAnomalyTagger
@@ -46,6 +79,7 @@ from src.enrichment.tagger.issue_pr_classifiers import (
     IssueClassifiersTagger,
     PullRequestClassifiersTagger,
 )
+from src.enrichment.tagger.pr_traits import StalledReviewTagger
 from src.logger import get_logger
 
 LOG = get_logger(__name__)
@@ -86,10 +120,11 @@ def compute_enrichments(
 
     # Pass 2: anomaly traits (BugMagnet/TestOrphan/Supernova read pass-1 output).
     trait_taggers = [
-        KnowledgeAnomalyTagger(),
+        KnowledgeAnomalyTagger(tags_by_entity),
         CohesionAnomalyTagger(),
         StructuringAnomalyTagger(),
         TestingAnomalyTagger(tags_by_entity),
+        StalledReviewTagger(),
     ]
     trait_results = compose_tags(trait_taggers, ctx)
     for key, value in trait_results.items():
@@ -106,14 +141,42 @@ def compute_enrichments(
     relations.extend(file_cochange)
     relations.extend(OwnershipExtractor().extract(ctx))
     relations.extend(IssueFileExtractor().extract(ctx))
+    # `coauthor.author-author` (strength = files both authors changed) covers
+    # the dx-named `cochange.author-author.shared-files` signal — we keep the
+    # existing kind name and skip a duplicate extractor (A2.3).
     relations.extend(CoAuthorExtractor().extract(ctx))
     relations.extend(PullRequestFileExtractor().extract(ctx))
     relations.extend(PullRequestReviewerExtractor().extract(ctx))
     relations.extend(IssueIssueExtractor().extract(ctx))
+
+    # A2.3 — file-file family.
+    file_shared_devs = FileSharedDevsCoChangeExtractor().extract(ctx)
+    file_shared_prefixes = FileSharedTaskPrefixesCoChangeExtractor().extract(ctx)
+    file_time_windowed = FileTimeWindowedCoChangeExtractor().extract(ctx)
+    relations.extend(file_shared_devs)
+    relations.extend(file_shared_prefixes)
+    relations.extend(file_time_windowed)
+    relations.extend(FileNameSimilarityExtractor().extract(ctx))
+
+    # A2.3 — author-author family (shared-files duplicate skipped — see above).
+    relations.extend(AuthorSharedTaskPrefixesExtractor().extract(ctx))
+    relations.extend(AuthorTimeWindowedExtractor().extract(ctx))
+
     # Component-component cochange aggregates the file-file edges; depends on
     # `resolver` and `file_cochange` so it runs after both exist.
     relations.extend(
         ComponentCoChangeExtractor(resolver, file_cochange).extract(ctx)
+    )
+    # A2.3 — component aggregations MUST run after the file-file extractors
+    # they depend on (file_shared_devs / file_shared_prefixes / file_time_windowed).
+    relations.extend(
+        ComponentSharedDevsCoChangeExtractor(resolver, file_shared_devs).extract(ctx)
+    )
+    relations.extend(
+        ComponentSharedTaskPrefixesExtractor(resolver, file_shared_prefixes).extract(ctx)
+    )
+    relations.extend(
+        ComponentTimeWindowedExtractor(resolver, file_time_windowed).extract(ctx)
     )
 
     # Overview tables
@@ -123,6 +186,10 @@ def compute_enrichments(
         TestingTableBuilder().build(ctx, tags_by_entity),
         ComponentsTableBuilder().build(ctx, tags_by_entity, components, resolver),
         IntentImpactTableBuilder().build(ctx, tags_by_entity),
+        KnowledgeTableBuilder().build(ctx, tags_by_entity),
+        NatureTableBuilder().build(ctx, tags_by_entity),
+        FeatureTraceabilityTableBuilder().build(ctx, tags_by_entity),
+        PullRequestLifecycleTableBuilder().build(ctx, tags_by_entity),
     ]
 
     LOG.info(

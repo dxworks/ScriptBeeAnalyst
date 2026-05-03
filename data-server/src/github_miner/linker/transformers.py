@@ -1,5 +1,5 @@
 from src.github_miner import JsonFileFormatGithub
-from src.common.models import GitHubUser, PullRequest, GitHubCommit, GitHubProject
+from src.common.models import GitHubUser, PullRequest, GitHubCommit, GitHubProject, Review, ReviewComment
 
 
 class GitHubProjectTransformer:
@@ -74,5 +74,52 @@ class GitHubProjectTransformer:
                     pull_request.git_hub_commits.append(commit)
                 if pull_request not in commit.pull_requests:
                     commit.pull_requests.append(pull_request)
+
+            for review_dto in pr.reviews:
+                review_user = None
+                if review_dto.user:
+                    review_user = GitHubUser(
+                        url=review_dto.user.url,
+                        login=review_dto.user.login,
+                        name=review_dto.user.name,
+                    )
+                    review_user = project.git_hub_user_registry.add(review_user)
+
+                review = Review(
+                    state=review_dto.state,
+                    submittedAt=review_dto.submittedAt,
+                    body=review_dto.body or "",
+                    user=review_user,
+                )
+                pull_request.reviews.append(review)
+
+                for rc_dto in review_dto.comments:
+                    rc_author = None
+                    if rc_dto.author:
+                        rc_author = GitHubUser(
+                            url=rc_dto.author.url,
+                            login=rc_dto.author.login,
+                            name=rc_dto.author.name,
+                        )
+                        rc_author = project.git_hub_user_registry.add(rc_author)
+
+                    review_comment = ReviewComment(
+                        url=rc_dto.url,
+                        body=rc_dto.body,
+                        createdAt=rc_dto.createdAt,
+                        updatedAt=rc_dto.updatedAt,
+                        author=rc_author,
+                    )
+                    pull_request.reviewComments.append(review_comment)
+
+            for rr_dto in pr.reviewRequests:
+                requested = GitHubUser(
+                    url=rr_dto.requestedReviewer.url,
+                    login=rr_dto.requestedReviewer.login,
+                    name=rr_dto.requestedReviewer.name,
+                )
+                requested = project.git_hub_user_registry.add(requested)
+                if requested not in pull_request.requestedReviewers:
+                    pull_request.requestedReviewers.append(requested)
 
         return project

@@ -34,6 +34,9 @@ mcp = FastMCP(
     "scriptbee-data",
     instructions=(
         "ScriptBee Data Server tools for querying software project analytics data. "
+        "Call list_metrics() once per session to discover the live catalog of "
+        "classifiers, traits, relations, and overview tables — the catalog reflects "
+        "the source code, so every metric (including newly-added ones) is listed. "
         "Use execute_code to run Python against the loaded project graph. "
         "Use generate_plot for matplotlib visualizations. "
         "Always check get_project_status first to see if a project is loaded."
@@ -54,13 +57,10 @@ async def execute_code(code: str) -> str:
     Pre-injected helpers (no import needed):
       - find_files_with_trait(trait_name) -> list[str]
       - cochange_neighbors(file_id, window="lifetime", limit=10) -> list[tuple[str, float]]
-      - overview_as_dict(name) -> dict   # name in {"pace", "authorship", "testing"}
+      - overview_as_dict(name) -> dict
 
-    Trait names follow the dx taxonomy:
-      anomaly.knowledge.{Orphan,BusFactor1,SharedKnowledge}
-      anomaly.cohesion.coordination.{Bazaar,Cathedral,Pulsar}
-      anomaly.structuring.{PivotFile,TasksBottleneck}
-      anomaly.testing.BugMagnet
+    Trait, classifier, overview, and relation names are project-versioned —
+    call list_metrics() to get the live catalog (no hardcoded list here).
 
     Use print() to produce output - results come from captured stdout.
     Keep output concise (summarize, aggregate, limit to top N).
@@ -204,7 +204,9 @@ async def get_overview_table(name: str) -> dict:
     Calls `GET /enrichments/overviews/{name}.csv`, parses the CSV, and returns
     `{"name": ..., "columns": [...], "rows": [{"entity_id": ..., col: value, ...}]}`.
 
-    Available names: `pace`, `authorship`, `testing`, `components`, `intent_impact`.
+    Call list_metrics() to get the current overview names — the catalog reflects
+    source code, so it always includes the latest tables (e.g. `knowledge`,
+    `nature`, `feature_traceability`, `pr_lifecycle` etc. as they're added).
     Each logical column expands to three CSV cells: `<col>_lifetime`,
     `<col>_recent`, `<col>_trend_percent` — preserved verbatim in the rows.
 
@@ -260,9 +262,9 @@ async def get_relation_edges(
     Calls `GET /enrichments/relations/{kind}.csv?window={window}` and parses
     the 3-column CSV (`source,target,strength`).
 
-    Available kinds: `cochange.file-file`, `ownership.author-file`, `issue.file`,
-    `coauthor.author-author`, `pr.file`, `pr.reviewer`,
-    `cochange.component-component`, `issue.issue`.
+    Call list_metrics() to get the current relation kinds — the catalog
+    includes new kinds as they're added (e.g. `cochange.file-file.shared-devs`,
+    `cochange.author-author.time-windowed`, `similarity.file-file.names`).
 
     Args:
         kind: Relation kind.
@@ -301,6 +303,42 @@ async def get_relation_edges(
         if len(edges) >= limit:
             break
     return edges
+
+
+@mcp.tool()
+async def list_metrics() -> dict:
+    """List every classifier, anomaly trait, relation kind, and overview table.
+
+    Reflects on the data-server's enrichment subpackages and returns the live
+    catalog. Source of truth: the running code — call this at the start of a
+    session to discover what's available rather than relying on potentially
+    stale documentation. Does NOT require a project to be loaded.
+
+    Returns a dict with keys:
+      - `classifiers`: [{slot, entity, values, tagger, source_file, docstring}]
+      - `traits`:      [{name, entity, family, tagger, source_file, docstring,
+                         config_fields}]
+      - `relations`:   [{kind, source_kind, target_kind, extractor, source_file,
+                         docstring}]
+      - `overviews`:   [{name, entity_kind, builder, source_file, docstring,
+                         columns}]
+      - `helpers`:     [{name, signature, purpose}] — sandbox helpers in execute_code
+      - `source_roots`: dict pointing at the canonical code locations
+      - `counts`:       per-category totals
+
+    `source_file` paths are relative to data-server/. Read those files for
+    the computational rule of any metric. `config_fields` (traits only) lists
+    matching `EnrichmentConfig` fields where the thresholds live.
+    """
+    async with httpx.AsyncClient(timeout=TIMEOUT) as client:
+        try:
+            resp = await client.get(f"{DATA_SERVER_URL}/enrichments/catalog")
+        except httpx.ConnectError:
+            return {"error": f"Cannot connect to data-server at {DATA_SERVER_URL}"}
+
+    if resp.status_code != 200:
+        return {"error": f"HTTP {resp.status_code}: {resp.text}"}
+    return resp.json()
 
 
 @mcp.tool()

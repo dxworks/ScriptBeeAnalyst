@@ -24,10 +24,60 @@ from src.enrichment.tagger.file_classifiers import _file_id
 
 class StructuringAnomalyTagger:
 
+    TRAITS = [
+        {"name": "anomaly.structuring.PivotFile",          "entity": "file",   "family": "structuring"},
+        {"name": "anomaly.structuring.IdenticalFilenames", "entity": "file",   "family": "structuring"},
+        # TasksBottleneck fires on both issues (open longer than threshold) and
+        # authors (too many in-flight assigned issues) — same trait name, two scopes.
+        {"name": "anomaly.structuring.TasksBottleneck",    "entity": "issue",  "family": "structuring"},
+        {"name": "anomaly.structuring.TasksBottleneck",    "entity": "author", "family": "structuring"},
+    ]
+
     def tag(self, ctx: TaggingContext) -> Iterable[EntityTags]:
         out: list[EntityTags] = []
         out.extend(self._pivot_files(ctx))
+        out.extend(self._identical_filenames(ctx))
         out.extend(self._task_bottlenecks(ctx))
+        return out
+
+    def _identical_filenames(self, ctx: TaggingContext) -> Iterable[EntityTags]:
+        git = ctx.graph_data.get("git")
+        if git is None:
+            return []
+        cfg = ctx.config
+
+        # Project-wide group by basename (everything after the last slash).
+        groups: dict[str, list[str]] = defaultdict(list)
+        for file_ in git.file_registry.all:
+            fid = _file_id(file_)
+            if not fid:
+                continue
+            idx = fid.rfind("/")
+            base = fid if idx == -1 else fid[idx + 1:]
+            groups[base].append(fid)
+
+        out: list[EntityTags] = []
+        for base, members in groups.items():
+            if len(members) < cfg.identical_filenames_min_count:
+                continue
+            for fid in members:
+                peers = [m for m in members if m != fid]
+                peer_count = len(peers)
+                trimmed = peers[: cfg.identical_filenames_peer_cap]
+                out.append(EntityTags(
+                    entity_kind="file",
+                    entity_id=fid,
+                    traits=[make_trait(
+                        "anomaly.structuring.IdenticalFilenames",
+                        family="structuring",
+                        severity=float(peer_count),
+                        basename=base,
+                        peer_count=peer_count,
+                        peer_file_ids=trimmed,
+                        peer_cap=cfg.identical_filenames_peer_cap,
+                        threshold=cfg.identical_filenames_min_count,
+                    )],
+                ))
         return out
 
     def _pivot_files(self, ctx: TaggingContext) -> Iterable[EntityTags]:

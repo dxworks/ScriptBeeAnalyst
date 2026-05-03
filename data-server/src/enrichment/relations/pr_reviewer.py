@@ -1,13 +1,23 @@
 """PR ↔ Reviewer.
 
-The current github_models.PullRequest does not carry an explicit `reviewers`
-list. Per plan §B-#5 we fall back to `mergedBy` + `assignees` and stamp
-`extras={"proxy": True, "source": "mergedBy+assignees"}` on each emitted Relation.
-If a future schema grows a `reviewers` attribute, the explicit path is preferred
-and proxy=False is set.
+Preferred path: explicit `Review.user` entries on `pr.reviews`. Per A1 the
+GitHub miner now hydrates the `reviews` array on PullRequest, so for any PR
+that has at least one APPROVED or CHANGES_REQUESTED review we emit edges
+straight from `Review.user` and stamp `extras={"proxy": False, "source":
+"Review.user"}`.
 
-Strength = participation count: 1 per appearance (so a reviewer that's also
-the merger gets weight 2 if both fields fire).
+Fallback path (no qualifying reviews on the PR): we keep the original Phase-3
+proxy — `mergedBy` + `assignees` — and stamp `extras={"proxy": True, "source":
+"mergedBy+assignees"}`. The fallback is only consulted when the explicit-review
+path produced no edges for that PR, so a PR with one APPROVED review never
+re-fires the proxy fallback.
+
+COMMENTED and PENDING reviews are intentionally excluded from this relation
+(they don't constitute a review verdict). They DO still count toward
+`pr.review_intensity` — see `issue_pr_classifiers.py`.
+
+Strength = participation count (one per qualifying review/appearance), so a
+reviewer who APPROVED twice gets weight 2 on that PR.
 """
 from __future__ import annotations
 
@@ -15,6 +25,9 @@ from collections import defaultdict
 
 from src.enrichment.models import Relation, RelationFile
 from src.enrichment.tagger.base import TaggingContext
+
+
+_RELATION_QUALIFYING_STATES = {"APPROVED", "CHANGES_REQUESTED"}
 
 
 class PullRequestReviewerExtractor:
@@ -26,20 +39,30 @@ class PullRequestReviewerExtractor:
         if github is None:
             return []
 
-        # Lifetime only — reviewer membership doesn't have a temporal axis we
-        # can split (no per-review timestamp on the PR model).
+        # Lifetime only — reviewer membership has no temporal axis we can split
+        # cleanly per-PR (we'd need per-edge submittedAt and a recent cutoff).
         weights: dict[tuple[str, str], float] = defaultdict(float)
+        # Track which path produced each edge so the fallback never overrides
+        # explicit-review edges.
         proxy_pairs: set[tuple[str, str]] = set()
+        explicit_pairs: set[tuple[str, str]] = set()
 
         for pr in github.pull_request_registry.all:
             pr_id = str(pr.number)
-            explicit = getattr(pr, "reviewers", None) or []
-            if explicit:
-                for u in explicit:
-                    uid = _user_id(u)
-                    if uid is None:
-                        continue
-                    weights[(pr_id, uid)] += 1.0
+
+            explicit_emitted_for_pr = False
+            for review in getattr(pr, "reviews", None) or []:
+                state = (getattr(review, "state", None) or "").upper()
+                if state not in _RELATION_QUALIFYING_STATES:
+                    continue
+                uid = _user_id(getattr(review, "user", None))
+                if uid is None:
+                    continue
+                weights[(pr_id, uid)] += 1.0
+                explicit_pairs.add((pr_id, uid))
+                explicit_emitted_for_pr = True
+
+            if explicit_emitted_for_pr:
                 continue
 
             merged_by = getattr(pr, "mergedBy", None)
@@ -57,9 +80,12 @@ class PullRequestReviewerExtractor:
 
         relations = []
         for (pr_id, uid), strength in sorted(weights.items(), key=lambda kv: -kv[1]):
-            extras = {}
-            if (pr_id, uid) in proxy_pairs:
+            if (pr_id, uid) in explicit_pairs:
+                extras = {"proxy": False, "source": "Review.user"}
+            elif (pr_id, uid) in proxy_pairs:
                 extras = {"proxy": True, "source": "mergedBy+assignees"}
+            else:
+                extras = {}
             relations.append(Relation(
                 source_kind="pr",
                 source_id=pr_id,

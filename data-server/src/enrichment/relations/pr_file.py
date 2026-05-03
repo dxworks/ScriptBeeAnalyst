@@ -1,4 +1,11 @@
-"""PR ↔ File — strength = number of linked Git commits in the PR that touch the file."""
+"""PR ↔ File — strength = number of linked Git commits in the PR that touch the file.
+
+Source = PR number (string), target = file path. Per-(pr, file, commit) dedup
+prevents rename+edit in the same commit from double-counting. Emits two
+RelationFiles: lifetime (every linked commit) and recent (linked commits whose
+author_date falls inside `ctx.recent_cutoff`). Depends on `pr.git_commits` being
+populated by the project linker — empty when no GitHub project is loaded.
+"""
 from __future__ import annotations
 
 from collections import defaultdict

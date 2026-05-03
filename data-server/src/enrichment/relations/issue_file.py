@@ -1,6 +1,12 @@
 """Issue ↔ File relation: issues already linked to commits → commit.changes → files.
 
-Strength = number of distinct linked commits that touch the file.
+Strength = number of distinct linked commits that touch the file (per
+(issue, file, commit) triple, so a rename+edit in the same commit doesn't
+double-count). Emits two RelationFiles: lifetime (every linked commit) and
+recent (linked commits whose author_date falls inside `ctx.recent_cutoff`).
+
+Depends on the project linker having populated `issue.git_commits` —
+returns empty when no Jira project is loaded.
 """
 from __future__ import annotations
 

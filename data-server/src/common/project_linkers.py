@@ -74,7 +74,7 @@ class ProjectLinker:
         LOG.debug(f"[Linker] {commits_linked_with_issues} commits associated with issues")
 
     @classmethod
-    def link_pull_requests_with_issues(cls, jira_project: JiraProject, gh_project: GitHubProject, jira_data: JsonFileFormatJira) -> None:
+    def link_pull_requests_with_issues(cls, jira_project: JiraProject, gh_project: GitHubProject, jira_data: JsonFileFormatJira = None) -> None:
         issue_pattern = _build_issue_pattern(jira_project)
         if issue_pattern is None:
             return
@@ -102,19 +102,18 @@ class ProjectLinker:
                 return int(match.group(1))
             return None
 
-        for issue in jira_data.issues:
+        for issue in jira_project.issue_registry.all:
             issues_pr_links = set()
-            for change in issue.changes:
+            for change in issue.transitions:
                 for item in change.items:
                     if item.toString and "Pull Request #" in item.toString:
                         issues_pr_links.add(item.toString)
             if len(issues_pr_links) > 0:
-                i = jira_project.issue_registry.get_by_id(issue.key)
                 for link in issues_pr_links:
                     for pr in gh_project.pull_request_registry.all:
                         if extract_pr_number(link) == pr.number:
-                            _get_or_add(i.pull_requests, pr)
-                            _get_or_add(pr.issues, i)
+                            _get_or_add(issue.pull_requests, pr)
+                            _get_or_add(pr.issues, issue)
                             break
 
         LOG.debug(f"[Linker] {prs_with_issues} PRs associated with issues")

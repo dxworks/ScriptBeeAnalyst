@@ -5,6 +5,12 @@ The `generate_plot` tool has both `graph_data` and `plt` (matplotlib.pyplot) pre
 
 IMPORTANT: Do NOT call plt.show() or plt.savefig() - the server captures the current figure automatically.
 
+NOTE on metric names: examples below use concrete trait/overview/relation names
+(`anomaly.testing.BugMagnet`, `components`, `intent_impact`, etc.). These are
+illustrations — for the current catalog of names call `list_metrics()`. If an
+example references a name that no longer appears there, the metric was renamed;
+re-use the pattern with the new name.
+
 ---
 
 ## Example: Commits per month bar chart
@@ -163,6 +169,7 @@ plt.tight_layout()
 - For date axes, use `plt.xticks(rotation=45)` for readability
 - Standard library modules (collections, datetime) are available
 - The server returns JPEG - use clear colors with good contrast
-- Phase 3 MCP wrappers (list_anomalies, get_overview_table,
-  get_relation_edges) can fetch data directly without writing /execute code,
-  for quick read-only chart inputs.
+- Read-only MCP wrappers (`list_anomalies`, `get_overview_table`,
+  `get_relation_edges`) fetch data directly without writing /execute code,
+  for quick chart inputs. Call `list_metrics()` first to know the right
+  trait_name / overview_name / relation_kind to pass.

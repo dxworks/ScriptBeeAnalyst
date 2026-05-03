@@ -1133,6 +1133,20 @@ def _require_enrichments() -> Optional[Enrichments]:
     return graph_data.get("enrichments")
 
 
+@app.get("/enrichments/catalog")
+async def get_enrichment_catalog():
+    """Live catalog of every classifier slot, anomaly trait, relation kind, and
+    overview table the enrichment layer can compute.
+
+    Built by reflecting on `src/enrichment/{tagger,relations,overview}` — does
+    NOT require a project to be loaded. Use this to discover what exists; use
+    each entry's `source_file` to learn what a metric *means* and its
+    `config_fields` (traits only) to find threshold values in EnrichmentConfig.
+    """
+    from src.enrichment.registry import build_metric_catalog
+    return build_metric_catalog()
+
+
 @app.get("/enrichments/tags")
 async def get_enrichment_tags(
     entity_kind: Optional[str] = None,

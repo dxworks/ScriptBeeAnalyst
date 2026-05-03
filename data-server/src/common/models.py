@@ -30,12 +30,17 @@ from src.common.jira_models import (  # noqa: F401
     Issue,
     JiraUser,
     JiraProject,
+    Comment as JiraComment,
+    Change as JiraChange,
+    ChangeItem as JiraChangeItem,
 )
 from src.common.github_models import (  # noqa: F401
     GitHubUser,
     PullRequest,
     GitHubCommit,
     GitHubProject,
+    Review,
+    ReviewComment,
 )
 
 # ── Forward Reference Resolution ────────────────────────────────────────────────
@@ -65,11 +70,16 @@ GitProject.model_rebuild(_types_namespace=_ns)
 IssueStatusCategory.model_rebuild(_types_namespace=_ns)
 IssueStatus.model_rebuild(_types_namespace=_ns)
 IssueType.model_rebuild(_types_namespace=_ns)
+JiraChangeItem.model_rebuild(_types_namespace=_ns)
+JiraChange.model_rebuild(_types_namespace=_ns)
+JiraComment.model_rebuild(_types_namespace=_ns)
 Issue.model_rebuild(_types_namespace=_ns)
 JiraUser.model_rebuild(_types_namespace=_ns)
 
 # GitHub models referencing Git/JIRA types
 GitHubUser.model_rebuild(_types_namespace=_ns)
+ReviewComment.model_rebuild(_types_namespace=_ns)
+Review.model_rebuild(_types_namespace=_ns)
 PullRequest.model_rebuild(_types_namespace=_ns)
 GitHubCommit.model_rebuild(_types_namespace=_ns)
 GitHubProject.model_rebuild(_types_namespace=_ns)

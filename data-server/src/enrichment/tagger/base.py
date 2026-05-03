@@ -24,7 +24,14 @@ class TaggingContext:
 
 
 class Tagger(Protocol):
-    """Runs over the graph and yields EntityTags rows to merge."""
+    """Runs over the graph and yields EntityTags rows to merge.
+
+    Concrete taggers must also declare their identity as a class attribute so
+    the enrichment registry (`src/enrichment/registry.py`) can introspect them:
+      - Anomaly tagger: `TRAITS = [{"name", "entity", "family"}, ...]`
+      - Classifier tagger: `CLASSIFIERS = [{"slot", "entity", "values"}, ...]`
+    See `src/enrichment/claude.md` for the full contract.
+    """
 
     def tag(self, ctx: TaggingContext) -> Iterable[EntityTags]: ...
 

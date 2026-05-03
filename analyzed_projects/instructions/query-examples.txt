@@ -3,6 +3,13 @@
 These examples demonstrate how to query the in-memory graph via the `execute_code` MCP tool.
 The `graph_data` dict is pre-initialized - just use it directly in your code.
 
+NOTE on metric names: trait names like `anomaly.testing.BugMagnet`, overview names
+like `authorship`, and relation kinds like `cochange.component-component` are shown
+as concrete strings here for clarity, but the canonical list lives in code. Call
+`list_metrics()` once per session to see the current catalog — new metrics show up
+there automatically. If a name in this file no longer appears in `list_metrics()`,
+the metric was renamed; treat the example as a pattern template.
+
 ---
 
 ## 1. Project overview: name and commit count

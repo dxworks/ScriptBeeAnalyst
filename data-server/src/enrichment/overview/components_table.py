@@ -40,6 +40,7 @@ COLUMNS = [
 class ComponentsTableBuilder:
 
     NAME = "components"
+    ENTITY_KIND = "component"
 
     def build(
         self,

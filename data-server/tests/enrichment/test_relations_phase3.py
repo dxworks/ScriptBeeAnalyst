@@ -7,6 +7,7 @@ from src.common.models import (
     GitHubProject, GitHubUser, PullRequest, GitHubCommit,
     Issue, IssueStatus, IssueStatusCategory, IssueType, JiraProject, JiraUser,
 )
+from src.common.github_models import Review
 from src.enrichment.config import EnrichmentConfig
 from src.enrichment.pipeline import compute_enrichments
 from tests.enrichment.fixtures import build_synthetic_graph
@@ -83,26 +84,24 @@ def test_pr_reviewer_proxy_when_no_explicit_reviewers():
         assert r.extras.get("source") == "mergedBy+assignees"
 
 
-def test_pr_reviewer_explicit_reviewers_branch():
-    """When PullRequest carries an explicit `reviewers` list, the extractor must
-    use it and NOT stamp the proxy/fallback marker on those edges."""
-    # Subclass adds the field locally so the extractor's `getattr(pr, "reviewers", ...)`
-    # branch fires. We don't touch the production model.
-    class _PRWithReviewers(PullRequest):
-        reviewers: list = []
-
+def test_pr_reviewer_explicit_reviews_branch():
+    """When PullRequest carries `reviews` with APPROVED/CHANGES_REQUESTED states,
+    the extractor must use them and NOT fall back to mergedBy+assignees."""
     g = build_synthetic_graph()
     gh = GitHubProject(name="gh")
     rev1 = GitHubUser(url="u1", login="rev1", name="Rev1")
     rev2 = GitHubUser(url="u2", login="rev2", name="Rev2")
     merger = GitHubUser(url="u3", login="merger", name="Merger")
     assignee = GitHubUser(url="u4", login="aly", name="Aly")
-    pr = _PRWithReviewers(
+    pr = PullRequest(
         number=11, title="t", state="merged", changedFiles=1, body="",
         createdAt=datetime.now(UTC), mergedAt=datetime.now(UTC),
         closedAt=datetime.now(UTC), updatedAt=datetime.now(UTC),
         mergedBy=merger, assignees=[assignee],
-        reviewers=[rev1, rev2],
+        reviews=[
+            Review(state="APPROVED", submittedAt=datetime.now(UTC), body="lgtm", user=rev1),
+            Review(state="CHANGES_REQUESTED", submittedAt=datetime.now(UTC), body="nit", user=rev2),
+        ],
     )
     gh.pull_request_registry.add_all([pr])
     g["github"] = gh
@@ -112,13 +111,13 @@ def test_pr_reviewer_explicit_reviewers_branch():
     assert rf is not None
     edges = [r for r in rf.relations if r.source_id == "11"]
     # Only the explicit reviewers should be linked -- mergedBy/assignees are
-    # ignored when an explicit list is present.
+    # ignored when explicit reviews are present.
     target_ids = sorted(r.target_id for r in edges)
     assert target_ids == ["rev1", "rev2"]
-    # Explicit branch must NOT carry the proxy stamp on any edge.
+    # Explicit branch must stamp proxy=False with source=Review.user.
     for r in edges:
-        assert r.extras.get("proxy") is not True
-        assert "source" not in r.extras
+        assert r.extras.get("proxy") is False
+        assert r.extras.get("source") == "Review.user"
 
 
 def test_cochange_component_aggregates_file_pairs():

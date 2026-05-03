@@ -6,21 +6,26 @@ all linked together in an in-memory graph structure.
 
 ## MCP Tools Available
 
-You have 4 tools from the `scriptbee-data` MCP server:
+You have 8 tools from the `scriptbee-data` MCP server:
 
 | Tool | Purpose |
 |------|---------|
+| `list_metrics` | Live catalog of every classifier, anomaly trait, relation kind, and overview table — reflects source code, no staleness. Call this once per session before exploring metrics. |
 | `execute_code` | Run Python code against the project graph. Use `print()` for output. |
 | `generate_plot` | Create matplotlib visualizations. `plt` is pre-imported. Don't call `plt.show()`. |
 | `get_project_status` | Check if a project is loaded and get statistics. |
 | `load_project` | Load a project by its UUID (shown in the web UI). |
+| `list_anomalies` | Filter enrichment tags by trait_name and/or entity_kind. |
+| `get_overview_table` | Fetch an overview table by name as parsed CSV rows. |
+| `get_relation_edges` | Fetch a relation file as edges, sorted by strength. |
 
 ## Workflow
 
 1. **Check status**: call `get_project_status` to see if a project is loaded
 2. **Load if needed**: call `load_project` with the project UUID
-3. **Query data**: write Python code using `graph_data` dict and call `execute_code`
-4. **Visualize**: write matplotlib code and call `generate_plot`
+3. **Discover what's available**: call `list_metrics` to see the live catalog
+4. **Query data**: write Python code using `graph_data` dict and call `execute_code`
+5. **Visualize**: write matplotlib code and call `generate_plot`
 
 ## Quick Reference
 
@@ -49,15 +54,15 @@ pr.git_commits         # Git commits in this PR
 
 ## Detailed Documentation
 
-The data model source code is in `data-server/src/common/`:
-- `base_models.py` - Base classes (Project, Account, Developer)
-- `git_models.py` - Git domain (GitProject, GitCommit, File, Change, etc.)
-- `jira_models.py` - JIRA domain (JiraProject, Issue, IssueStatus, etc.)
-- `github_models.py` - GitHub domain (GitHubProject, PullRequest, GitHubCommit, etc.)
-- `registries.py` - AbstractRegistry base class
-- `project_linkers.py` - Cross-project relationship linking
+**Source-of-truth principle**: metric definitions live in source code, not in
+this file. Use `list_metrics` to discover what exists, then `Read` the
+`source_file` it returns for the computational rule. Threshold values live in
+`data-server/src/enrichment/config.py` (`EnrichmentConfig`).
 
-See `instructions/` folder for usage guides:
-- `guide.txt` - Graph structure, cross-project links, and rules
-- `query-examples.txt` - 6 example queries with full Python code
-- `plot-patterns.txt` - Matplotlib visualization patterns
+See the `instructions/` folder for the entry-point and pattern recipes:
+
+- `compass.md` — what kind of agent you are, where things live, how to answer
+  metric questions. Read this first.
+- `query-examples.txt` — worked-example queries against the graph and
+  enrichment layer.
+- `plot-patterns.txt` — matplotlib visualization patterns.

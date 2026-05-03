@@ -27,6 +27,24 @@ class GitHubUser(BaseModel):
     pull_requests_as_assignee: List[PullRequest] = Field(default_factory=list)
 
 
+@identity_fields("url", "createdAt")
+class ReviewComment(BaseModel):
+    # Inline code-review comments (DTO Review.comments[*]); distinct from PR-level conversation.
+    url: str
+    body: str
+    createdAt: datetime
+    updatedAt: datetime
+    author: Optional[GitHubUser] = None
+
+
+@identity_fields("state", "submittedAt", "body")
+class Review(BaseModel):
+    state: str
+    submittedAt: Optional[datetime]
+    body: str
+    user: Optional[GitHubUser] = None
+
+
 @identity_fields("number", "title", "state", "changedFiles", "body",
                   "createdAt", "mergedAt", "closedAt", "updatedAt")
 class PullRequest(BaseModel):
@@ -44,6 +62,11 @@ class PullRequest(BaseModel):
     assignees: List[GitHubUser] = Field(default_factory=list)
     mergedBy: Optional[GitHubUser] = None
     git_hub_commits: List[GitHubCommit] = Field(default_factory=list)
+
+    reviews: List[Review] = Field(default_factory=list)
+    requestedReviewers: List[GitHubUser] = Field(default_factory=list)
+    # Flattened from DTO Review.comments — the inline code-review payload (discussion_r URLs).
+    reviewComments: List[ReviewComment] = Field(default_factory=list)
 
     issues: List[Issue] = Field(default_factory=list)
     git_commits: List[GitCommit] = Field(default_factory=list)

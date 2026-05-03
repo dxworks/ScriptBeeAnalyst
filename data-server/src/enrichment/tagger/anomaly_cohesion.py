@@ -1,23 +1,43 @@
 """anomaly.cohesion.* — Bazaar, Cathedral, Pulsar (coordination) + Supernova (size).
 
-  - Bazaar: many distinct authors in the recent window.
-  - Cathedral: one author dominates the recent window (counterpart).
-  - Pulsar: bursty inter-commit interval distribution (lifetime CV >= threshold).
-  - Supernova (Phase 3, proxy): net-churn lifetime above a threshold; flagged
-    in `evidence` because we don't ingest absolute LOC.
+Phase-2 originals plus the A2.1 cohesion file traits:
+  - Hibernator (activity): lifetime-rich file with zero recent activity.
+  - Awakening (activity): dormant file recently reactivated.
+  - Erosion (activity): linearly declining commit cadence over its lifetime.
+  - Flicker (coordination): high CV of inter-commit gaps in the recent window
+    only — distinct from Pulsar which evaluates the lifetime distribution.
+  - FrequentChanger (size): lifetime or recent commit count above thresholds.
 """
 from __future__ import annotations
 
 import math
+from datetime import timedelta
 from typing import Iterable, Optional
 
 from src.enrichment.models import EntityTags, Trait
 from src.enrichment.recent_window import ensure_aware
 from src.enrichment.tagger.base import TaggingContext, make_trait
 from src.enrichment.tagger.file_classifiers import _file_id
+from src.enrichment.tagger.file_trait_utils import (
+    _commit_dates,
+    _linear_slope,
+    _time_bucketed_commits,
+)
 
 
 class CohesionAnomalyTagger:
+
+    TRAITS = [
+        {"name": "anomaly.cohesion.coordination.Bazaar",     "entity": "file", "family": "cohesion"},
+        {"name": "anomaly.cohesion.coordination.Cathedral",  "entity": "file", "family": "cohesion"},
+        {"name": "anomaly.cohesion.coordination.Pulsar",     "entity": "file", "family": "cohesion"},
+        {"name": "anomaly.cohesion.coordination.Flicker",    "entity": "file", "family": "cohesion"},
+        {"name": "anomaly.cohesion.size.Supernova",          "entity": "file", "family": "cohesion"},
+        {"name": "anomaly.cohesion.size.FrequentChanger",    "entity": "file", "family": "cohesion"},
+        {"name": "anomaly.cohesion.activity.Hibernator",     "entity": "file", "family": "cohesion"},
+        {"name": "anomaly.cohesion.activity.Awakening",      "entity": "file", "family": "cohesion"},
+        {"name": "anomaly.cohesion.activity.Erosion",        "entity": "file", "family": "cohesion"},
+    ]
 
     def tag(self, ctx: TaggingContext) -> Iterable[EntityTags]:
         git = ctx.graph_data.get("git")
@@ -77,8 +97,7 @@ class CohesionAnomalyTagger:
                     commits=commits_count,
                 ))
 
-            # Supernova (proxy): net-churn over lifetime above threshold. We
-            # cannot measure absolute LOC; sustained churn is the best stand-in.
+            # Supernova (proxy): net-churn over lifetime above threshold.
             net_churn = _net_churn(file_)
             if net_churn >= cfg.supernova_net_churn_min:
                 traits.append(make_trait(
@@ -89,6 +108,102 @@ class CohesionAnomalyTagger:
                     note="net-churn proxy, not absolute LOC",
                     net_churn=int(net_churn),
                     threshold=cfg.supernova_net_churn_min,
+                ))
+
+            # ── A2.1 cohesion traits ─────────────────────────────────────────
+
+            dates = _commit_dates(file_)
+            lifetime_commits = len(dates)
+            recent_commit_dates = (
+                [d for d in dates if cutoff is None or d >= cutoff]
+                if cutoff else dates
+            )
+
+            # Hibernator: enough lifetime commits, zero recent commits.
+            if (
+                cutoff is not None
+                and lifetime_commits >= cfg.hibernator_min_lifetime_commits
+                and not recent_commit_dates
+            ):
+                last = max(dates) if dates else None
+                traits.append(make_trait(
+                    "anomaly.cohesion.activity.Hibernator",
+                    family="cohesion",
+                    lifetime_commits=lifetime_commits,
+                    last_change=last.isoformat() if last else None,
+                    threshold=cfg.hibernator_min_lifetime_commits,
+                ))
+
+            # Awakening: long pre-window dormancy then recent revival.
+            if cutoff is not None and len(recent_commit_dates) >= cfg.awakening_recent_commits_min:
+                pre_window = [d for d in dates if d < cutoff]
+                if pre_window:
+                    last_before = max(pre_window)
+                    dormant = cutoff - last_before
+                    if dormant >= timedelta(weeks=cfg.awakening_min_dormant_weeks):
+                        traits.append(make_trait(
+                            "anomaly.cohesion.activity.Awakening",
+                            family="cohesion",
+                            severity=float(dormant.days),
+                            dormant_days=dormant.days,
+                            recent_commits=len(recent_commit_dates),
+                            last_pre_window_change=last_before.isoformat(),
+                            threshold_weeks=cfg.awakening_min_dormant_weeks,
+                        ))
+
+            # Erosion: negative linear trend on per-window commit counts.
+            buckets = _time_bucketed_commits(file_, cfg.erosion_window_weeks, fill_gaps=True)
+            if len(buckets) >= 4:
+                values = [float(c) for _, c in buckets]
+                slope = _linear_slope(values)
+                if slope is not None and slope <= cfg.erosion_trend_max:
+                    traits.append(make_trait(
+                        "anomaly.cohesion.activity.Erosion",
+                        family="cohesion",
+                        severity=round(-slope, 3),
+                        slope=round(slope, 4),
+                        bucket_count=len(buckets),
+                        bucket_weeks=cfg.erosion_window_weeks,
+                        threshold=cfg.erosion_trend_max,
+                    ))
+
+            # Flicker: recent-window CV of inter-commit gaps (Pulsar's
+            # short-horizon counterpart).
+            if len(recent_commit_dates) >= cfg.flicker_min_recent_commits:
+                gaps = _gaps(sorted(recent_commit_dates))
+                if len(gaps) >= 3:
+                    cv_recent = _coeff_of_variation(gaps)
+                    if cv_recent is not None and cv_recent >= cfg.flicker_cv_min:
+                        traits.append(make_trait(
+                            "anomaly.cohesion.coordination.Flicker",
+                            family="cohesion",
+                            severity=round(cv_recent, 3),
+                            recent_interval_cv=round(cv_recent, 3),
+                            recent_commits=len(recent_commit_dates),
+                            recent_gaps=len(gaps),
+                            threshold=cfg.flicker_cv_min,
+                        ))
+
+            # FrequentChanger: lifetime OR recent commit volume above thresholds.
+            recent_total_commits = len(recent_commit_dates)
+            if (
+                lifetime_commits >= cfg.frequent_changer_lifetime_min
+                or recent_total_commits >= cfg.frequent_changer_recent_min
+            ):
+                basis = (
+                    "lifetime"
+                    if lifetime_commits >= cfg.frequent_changer_lifetime_min
+                    else "recent"
+                )
+                traits.append(make_trait(
+                    "anomaly.cohesion.size.FrequentChanger",
+                    family="cohesion",
+                    severity=float(lifetime_commits),
+                    basis=basis,
+                    lifetime_commits=lifetime_commits,
+                    recent_commits=recent_total_commits,
+                    lifetime_threshold=cfg.frequent_changer_lifetime_min,
+                    recent_threshold=cfg.frequent_changer_recent_min,
                 ))
 
             if traits:
@@ -138,25 +253,27 @@ def _net_churn(file_) -> int:
     return total
 
 
+def _gaps(sorted_dates) -> list[float]:
+    return [
+        (sorted_dates[i + 1] - sorted_dates[i]).total_seconds()
+        for i in range(len(sorted_dates) - 1)
+    ]
+
+
+def _coeff_of_variation(values: list[float]) -> Optional[float]:
+    if not values:
+        return None
+    mean = sum(values) / len(values)
+    if mean <= 0:
+        return None
+    var = sum((g - mean) ** 2 for g in values) / len(values)
+    return math.sqrt(var) / mean
+
+
 def _inter_commit_cv(file_, min_intervals: int) -> Optional[float]:
-    dates = []
-    for ch in file_.changes or []:
-        c = getattr(ch, "commit", None)
-        if c is None:
-            continue
-        d = ensure_aware(getattr(c, "author_date", None))
-        if d is not None:
-            dates.append(d)
-    # Need at least `min_intervals` gaps, i.e. min_intervals + 1 timestamps.
+    dates = _commit_dates(file_)
     if len(dates) < min_intervals + 1:
         return None
     dates.sort()
-    gaps = [(dates[i + 1] - dates[i]).total_seconds() for i in range(len(dates) - 1)]
-    if not gaps:
-        return None
-    mean = sum(gaps) / len(gaps)
-    if mean <= 0:
-        return None
-    var = sum((g - mean) ** 2 for g in gaps) / len(gaps)
-    sd = math.sqrt(var)
-    return sd / mean
+    gaps = _gaps(dates)
+    return _coeff_of_variation(gaps) if gaps else None

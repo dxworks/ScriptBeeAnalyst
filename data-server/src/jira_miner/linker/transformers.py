@@ -1,4 +1,14 @@
-from src.common.models import IssueStatusCategory, IssueStatus, IssueType, Issue, JiraUser, JiraProject
+from src.common.models import (
+    IssueStatusCategory,
+    IssueStatus,
+    IssueType,
+    Issue,
+    JiraUser,
+    JiraProject,
+    JiraComment,
+    JiraChange,
+    JiraChangeItem,
+)
 from src.jira_miner.reader_dto.models import JsonFileFormatJira
 
 
@@ -89,6 +99,37 @@ class JiraProjectTransformer:
                         assignee.issues_as_assignee.append(i)
                     if assignee not in i.jira_users_as_assignee:
                         i.jira_users_as_assignee.append(assignee)
+
+            for comment_dto in issue.comments:
+                author = project.jira_user_registry.get_by_id(comment_dto.userId)
+                updated_by = project.jira_user_registry.get_by_id(comment_dto.updateUserId)
+                i.comments.append(JiraComment(
+                    body=comment_dto.body,
+                    created=comment_dto.created,
+                    updated=comment_dto.updated,
+                    author=author,
+                    updatedBy=updated_by,
+                ))
+
+            for change_dto in issue.changes:
+                change_user = project.jira_user_registry.get_by_id(change_dto.userId)
+                items = [
+                    JiraChangeItem(
+                        field=item.field,
+                        from_=item.from_,
+                        fromString=item.fromString,
+                        to=item.to,
+                        toString=item.toString,
+                    )
+                    for item in change_dto.items
+                ]
+                i.transitions.append(JiraChange(
+                    id=change_dto.id,
+                    created=change_dto.created,
+                    changedFields=list(change_dto.changedFields),
+                    items=items,
+                    user=change_user,
+                ))
 
         for jira_issue in self.jira_data.issues:
             current_issue = project.issue_registry.get_by_id(jira_issue.key)

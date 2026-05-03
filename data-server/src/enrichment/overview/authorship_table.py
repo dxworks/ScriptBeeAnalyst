@@ -34,6 +34,7 @@ COLUMNS = [
 class AuthorshipTableBuilder:
 
     NAME = "authorship"
+    ENTITY_KIND = "component"
 
     def build(self, ctx: TaggingContext, tags_by_entity: dict) -> OverviewTable:
         git = ctx.graph_data.get("git")

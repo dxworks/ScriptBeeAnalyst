@@ -13,6 +13,21 @@ from src.enrichment.tagger.base import Tagger, TaggingContext
 
 
 class AuthorClassifiersTagger:
+    """Per-author mandatory classifiers: activity, seniority.
+
+    `activity` is `active` if the author's last commit falls inside the recent
+    window (`cfg.recent_window_days`), else `idle`. `seniority` buckets the span
+    in days between the author's first and last commit using `cfg.newcomer_max_days`,
+    `cfg.established_max_days`, `cfg.senior_max_days`. Targets GitAccount today —
+    a future tagger could aggregate over UnifiedUser identities.
+    """
+
+    CLASSIFIERS = [
+        {"slot": "activity",  "entity": "author",
+         "values": ["active", "idle"]},
+        {"slot": "seniority", "entity": "author",
+         "values": ["newcomer", "established", "senior", "veteran"]},
+    ]
 
     def tag(self, ctx: TaggingContext) -> Iterable[EntityTags]:
         git = ctx.graph_data.get("git")

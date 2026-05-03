@@ -23,6 +23,12 @@ from src.enrichment.tagger.file_classifiers import _file_id
 class TestingAnomalyTagger:
     """Reads pre-computed commit classifiers via `tags_by_entity`."""
 
+    TRAITS = [
+        {"name": "anomaly.testing.BugMagnet",         "entity": "file", "family": "testing"},
+        {"name": "anomaly.testing.RefactoringMagnet", "entity": "file", "family": "testing"},
+        {"name": "anomaly.testing.TestOrphan",        "entity": "file", "family": "testing"},
+    ]
+
     def __init__(self, tags_by_entity: dict):
         self._tags = tags_by_entity
 
@@ -52,6 +58,7 @@ class TestingAnomalyTagger:
 
             total = 0
             bugfix = 0
+            refactor = 0
             commits_for_file: list = []
             for ch in file_.changes or []:
                 c = getattr(ch, "commit", None)
@@ -60,8 +67,11 @@ class TestingAnomalyTagger:
                 total += 1
                 commits_for_file.append(c)
                 tags = self._tags.get(f"commit:{c.id}")
-                if tags and tags.classifiers.get("message.nature") == "bugfix":
+                nature = tags.classifiers.get("message.nature") if tags else None
+                if nature == "bugfix":
                     bugfix += 1
+                elif nature == "refactor":
+                    refactor += 1
 
             traits = []
 
@@ -79,6 +89,22 @@ class TestingAnomalyTagger:
                     bugfix_ratio=round(ratio, 3),
                     ratio_threshold=cfg.bugmagnet_ratio_min,
                     min_count=cfg.bugmagnet_min_bugfix_commits,
+                ))
+
+            # RefactoringMagnet: high count of refactor-nature commits on the
+            # same file. Mirrors BugMagnet but with absolute count only — no
+            # ratio guard, since dx defines this as a sustained-restructuring
+            # signal regardless of the file's other activity mix.
+            if refactor >= cfg.refactoring_magnet_min_commits:
+                refactor_ratio = refactor / total if total > 0 else 0.0
+                traits.append(make_trait(
+                    "anomaly.testing.RefactoringMagnet",
+                    family="testing",
+                    severity=float(refactor),
+                    refactor_commits=refactor,
+                    total_commits=total,
+                    refactor_ratio=round(refactor_ratio, 3),
+                    threshold=cfg.refactoring_magnet_min_commits,
                 ))
 
             file_tags = self._tags.get(f"file:{fid}")

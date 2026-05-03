@@ -12,7 +12,29 @@ from src.enrichment.tagger.base import Tagger, TaggingContext
 
 
 class CommitClassifiersTagger:
-    """All commits → classifiers only (no traits)."""
+    """All commits → classifiers only (no traits).
+
+    Six mandatory slots emitted per commit. Vocabularies declared via the
+    `CLASSIFIERS` class attribute so the registry can introspect them without
+    running the pipeline. `message.nature` values come from `cfg.nature_patterns`
+    (regex catalog in src/enrichment/config.py); other slot bucketing rules live
+    in the corresponding `cfg.*` fields.
+    """
+
+    CLASSIFIERS = [
+        {"slot": "message.nature",     "entity": "commit",
+         "values": ["merge", "revert", "bugfix", "docs", "test", "refactor", "chore", "feature"]},
+        {"slot": "volume.churn",       "entity": "commit",
+         "values": ["focused", "medium", "bulk"]},
+        {"slot": "volume.spread",      "entity": "commit",
+         "values": ["narrow", "wide"]},
+        {"slot": "daytime",            "entity": "commit",
+         "values": ["night", "morning", "afternoon", "evening"]},
+        {"slot": "weekday",            "entity": "commit",
+         "values": ["mon", "tue", "wed", "thu", "fri", "sat", "sun"]},
+        {"slot": "message.smartness",  "entity": "commit",
+         "values": ["smart", "dumb"]},
+    ]
 
     def tag(self, ctx: TaggingContext) -> Iterable[EntityTags]:
         git = ctx.graph_data.get("git")

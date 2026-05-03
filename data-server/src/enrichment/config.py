@@ -108,6 +108,15 @@ class EnrichmentConfig:
     pr_size_m_max: int = 600
     pr_size_l_max: int = 2000
 
+    # ── A2.5 PR review metrics ─────────────────────────────────────────────────
+    # `pr.review_intensity` count buckets: 0=none, 1..light_max=light,
+    # light_max+1..heavy_min-1=moderate, >=heavy_min=heavy.
+    review_intensity_light_max: int = 2
+    review_intensity_heavy_min: int = 5
+    # `anomaly.review.StalledReview`: open PRs older than this with no recent
+    # review activity (no reviews at all OR last review older than threshold).
+    stalled_review_open_days_min: int = 14
+
     # Phase 3 proxy traits — flagged as proxy in evidence per plan §B-#5.
     # Net-churn floor for Supernova; chosen at 5k so only files with sustained
     # heavy contribution flag (median project files churn <500 over their life).
@@ -121,6 +130,51 @@ class EnrichmentConfig:
 
     # Phase 3 components — optional mapping JSON path; missing file = heuristic.
     components_mapping_path: Optional[str] = None
+
+    # ── A2.1 file-level traits ─────────────────────────────────────────────────
+    # Knowledge family
+    accumulator_bucket_weeks: int = 4
+    accumulator_min_windows: int = 6
+    owner_churn_dominance_threshold: float = 0.5
+    polarised_top_share: float = 0.8
+    polarised_min_authors: int = 2
+    solitaire_min_lifetime_commits: int = 5
+    team_churn_set_change_ratio: float = 0.5
+    weak_owner_max_share: float = 0.2
+    weak_owner_min_active_authors: int = 2
+
+    # ── A2.2 author-level traits ───────────────────────────────────────────────
+    orphancauser_min_orphan_files: int = 3
+    orphancauser_min_lifetime_commits: int = 10
+    orphancauser_orphan_sample_cap: int = 20
+
+    # Cohesion family
+    hibernator_min_lifetime_commits: int = 5
+    awakening_min_dormant_weeks: int = 12
+    awakening_recent_commits_min: int = 1
+    erosion_window_weeks: int = 4
+    erosion_trend_max: float = -0.5
+    flicker_cv_min: float = 1.2
+    flicker_min_recent_commits: int = 4
+    frequent_changer_lifetime_min: int = 50
+    frequent_changer_recent_min: int = 10
+
+    # Testing family
+    refactoring_magnet_min_commits: int = 10
+
+    # Structuring family
+    identical_filenames_min_count: int = 2
+    identical_filenames_peer_cap: int = 20
+
+    # ── A2.3 relations ─────────────────────────────────────────────────────────
+    # Δt window for time-windowed cochange (file-file and author-author).
+    time_windowed_cochange_hours: int = 24
+    # similarity.file-file.names
+    name_similarity_min_score: float = 0.85
+    # If True, only compare files sharing the same extension (cuts O(N²) cost).
+    name_similarity_extension_filter: bool = False
+    # Per-file cap so a single file can't dominate the edge list.
+    name_similarity_max_pairs_per_file: int = 50
 
     # Issue age buckets — boundaries in days; first match wins.
     issue_age_buckets: list[tuple[str, int]] = field(default_factory=lambda: [

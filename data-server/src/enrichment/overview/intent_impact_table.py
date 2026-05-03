@@ -32,6 +32,7 @@ COLUMNS = [
 class IntentImpactTableBuilder:
 
     NAME = "intent_impact"
+    ENTITY_KIND = "issue"
 
     def build(self, ctx: TaggingContext, tags_by_entity: dict) -> OverviewTable:
         jira = ctx.graph_data.get("jira")
