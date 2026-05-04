@@ -8,6 +8,10 @@ Columns (lifetime + recent + trend% on rate-like columns):
   - bugfix_ratio         — bugfix commits / commit_count
   - bus_factor_1_files   — files in the component carrying BusFactor1
   - bugmagnet_files      — files in the component carrying BugMagnet
+  - total_loc            — Lizard NLOC summed across the component's files (B1)
+  - source_loc           — alias of total_loc; reserved for Metrix++ split (B1)
+  - avg_loc_per_file     — total_loc / file_count when LOC is known (B1)
+  - max_ccn              — highest cyclomatic complexity in the component (B1)
 """
 from __future__ import annotations
 
@@ -34,6 +38,10 @@ COLUMNS = [
     "bugfix_ratio",
     "bus_factor_1_files",
     "bugmagnet_files",
+    "total_loc",
+    "source_loc",
+    "avg_loc_per_file",
+    "max_ccn",
 ]
 
 
@@ -67,8 +75,9 @@ class ComponentsTableBuilder:
             files_by_component[comp].append(f)
 
         all_files = list(git.file_registry.all)
+        file_metric_map = ctx.file_metric_map
 
-        rows.append(self._row_for("(project)", all_files, cutoff, tags_by_entity))
+        rows.append(self._row_for("(project)", all_files, cutoff, tags_by_entity, file_metric_map))
 
         ordered_names = [c.name for c in components]
         for name in ordered_names:
@@ -77,6 +86,7 @@ class ComponentsTableBuilder:
                 files_by_component.get(name, []),
                 cutoff,
                 tags_by_entity,
+                file_metric_map,
             ))
 
         return OverviewTable(
@@ -86,7 +96,7 @@ class ComponentsTableBuilder:
             rows=rows,
         )
 
-    def _row_for(self, entity_id, files, cutoff, tags_by_entity) -> OverviewRow:
+    def _row_for(self, entity_id, files, cutoff, tags_by_entity, file_metric_map) -> OverviewRow:
         lifetime_churn = 0
         recent_churn = 0
         lifetime_commits: set[str] = set()
@@ -97,11 +107,20 @@ class ComponentsTableBuilder:
         recent_bugfix_commits: set[str] = set()
         bf1 = 0
         bm = 0
+        loc_total = 0
+        files_with_loc = 0
+        max_ccn_seen = 0
 
         for f in files:
             fid = _file_id(f)
             if fid is None:
                 continue
+            metric = file_metric_map.get(fid)
+            if metric is not None:
+                loc_total += metric.sum_nloc
+                files_with_loc += 1
+                if metric.max_ccn > max_ccn_seen:
+                    max_ccn_seen = metric.max_ccn
             ftags = tags_by_entity.get(f"file:{fid}")
             if ftags:
                 if any(t.name == "anomaly.knowledge.BusFactor1" for t in ftags.traits):
@@ -164,6 +183,22 @@ class ComponentsTableBuilder:
         )
         cells["bugmagnet_files"] = OverviewCell(
             lifetime_value=bm, recent_value=bm, trend_percent=None,
+        )
+
+        loc_value = loc_total if files_with_loc > 0 else None
+        avg_loc = round(loc_total / files_with_loc, 2) if files_with_loc > 0 else None
+        max_ccn_value = max_ccn_seen if files_with_loc > 0 else None
+        cells["total_loc"] = OverviewCell(
+            lifetime_value=loc_value, recent_value=loc_value, trend_percent=None,
+        )
+        cells["source_loc"] = OverviewCell(
+            lifetime_value=loc_value, recent_value=loc_value, trend_percent=None,
+        )
+        cells["avg_loc_per_file"] = OverviewCell(
+            lifetime_value=avg_loc, recent_value=avg_loc, trend_percent=None,
+        )
+        cells["max_ccn"] = OverviewCell(
+            lifetime_value=max_ccn_value, recent_value=max_ccn_value, trend_percent=None,
         )
 
         return OverviewRow(entity_id=entity_id, cells=cells)

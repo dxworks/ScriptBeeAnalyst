@@ -110,6 +110,15 @@ def load_graph_from_supabase(user_id: str, project_id: str):
     if missing_keys:
         raise ValueError(f"Pickle missing required keys: {missing_keys}")
 
+    graph_data.setdefault("metrics", {"lizard": []})
+    # B2: keep `code_structure` always present (None when no JaFax/CodeFrame
+    # ingest happened) so consumers don't need to check `key in dict`.
+    graph_data.setdefault("code_structure", None)
+    # B3: same convention for DuDe duplication.
+    graph_data.setdefault("duplication", None)
+    # B4: same convention for Insider quality-issues.
+    graph_data.setdefault("quality_issues", None)
+
     return graph_data
 
 
@@ -1224,6 +1233,140 @@ async def get_enrichment_overview_csv(name: str):
     )
 
 
+@app.get("/enrichments/metrics/files")
+async def get_file_metrics(min_loc: int = 0, limit: int = 100):
+    """Return per-file Lizard metrics (LOC, max CCN, function count).
+
+    Sorted by `sum_nloc` descending. `min_loc` filters out small files;
+    `limit` caps the response. Returns an empty list when no Lizard CSV
+    was ingested for the loaded project.
+    """
+    if not graph_data:
+        return JSONResponse({"error": "No project loaded."}, status_code=400)
+
+    metrics_block = graph_data.get("metrics") or {}
+    metrics = metrics_block.get("lizard") or []
+    filtered = [m for m in metrics if m.sum_nloc >= min_loc]
+    filtered.sort(key=lambda m: -m.sum_nloc)
+    return {
+        "count": len(filtered),
+        "files": [
+            {
+                "file_path": m.file_path,
+                "source": m.source,
+                "sum_nloc": m.sum_nloc,
+                "max_ccn": m.max_ccn,
+                "avg_ccn": m.avg_ccn,
+                "function_count": m.function_count,
+                "longest_function_nloc": m.longest_function_nloc,
+            }
+            for m in filtered[:limit]
+        ],
+    }
+
+
+@app.get("/enrichments/code-structure/summary")
+async def get_code_structure_summary():
+    """JSON summary of the JaFax (B2) code-structure registries.
+
+    Returns counts of types/methods/fields/references and the union set of
+    files covered. Returns an empty payload (no `code_structure` key) when
+    no JaFax/CodeFrame ingest happened.
+    """
+    if not graph_data:
+        return JSONResponse({"error": "No project loaded."}, status_code=400)
+
+    cs = graph_data.get("code_structure")
+    if cs is None:
+        return {"loaded": False, "source": None}
+
+    return {
+        "loaded": True,
+        "source": cs.source,
+        "counts": {
+            "types": len(cs.type_registry.all),
+            "methods": len(cs.method_registry.all),
+            "fields": len(cs.field_registry.all),
+            "references": len(cs.reference_registry.all),
+            "covered_files": len(cs.file_paths),
+        },
+    }
+
+
+@app.get("/enrichments/duplication/summary")
+async def get_duplication_summary():
+    """JSON summary of DuDe (B3) duplication ingest.
+
+    Returns counts of external pairs / internal files plus aggregate totals.
+    Returns `{"loaded": False, "source": None}` when no DuDe ingest happened.
+    Use this to gate `get_relation_edges("duplication.file-file.*")` calls.
+    """
+    if not graph_data:
+        return JSONResponse({"error": "No project loaded."}, status_code=400)
+
+    dup = graph_data.get("duplication")
+    if dup is None:
+        return {"loaded": False, "source": None}
+
+    total_external_lines = sum(p.total_block_length for p in dup.external_pairs)
+    total_blocks = sum(p.block_count for p in dup.external_pairs)
+    total_internal_lines = sum(dup.internal_by_file.values())
+    return {
+        "loaded": True,
+        "source": dup.source,
+        "counts": {
+            "external_pairs": len(dup.external_pairs),
+            "external_blocks": total_blocks,
+            "external_total_duplicated_lines": total_external_lines,
+            "internal_files": len(dup.internal_by_file),
+            "internal_total_duplicated_lines": total_internal_lines,
+        },
+    }
+
+
+@app.get("/enrichments/quality-issues/summary")
+async def get_quality_issues_summary():
+    """JSON summary of the Insider (B4) quality-issues ingest.
+
+    Returns counts of issues / distinct rules / categories / files plus the
+    top-10 rules by aggregate occurrence count. Returns
+    `{"loaded": False, "source": None}` when no Insider ingest happened.
+    Use this to gate `list_anomalies(trait_name="anomaly.codesmell.*")` calls.
+    """
+    if not graph_data:
+        return JSONResponse({"error": "No project loaded."}, status_code=400)
+
+    qi = graph_data.get("quality_issues")
+    if qi is None:
+        return {"loaded": False, "source": None}
+
+    rule_counts: dict[str, int] = {}
+    category_counts: dict[str, int] = {}
+    for issue in qi.issues:
+        rule_counts[issue.rule_name] = rule_counts.get(issue.rule_name, 0) + issue.occurrence_count
+        category_counts[issue.category] = category_counts.get(issue.category, 0) + issue.occurrence_count
+    top_rules = sorted(rule_counts.items(), key=lambda kv: -kv[1])[:10]
+    return {
+        "loaded": True,
+        "source": qi.source,
+        "counts": {
+            "records": len(qi.issues),
+            "distinct_rules": len(rule_counts),
+            "distinct_categories": len(category_counts),
+            "covered_files": len(qi.file_paths),
+            "total_occurrence_count": sum(rule_counts.values()),
+        },
+        "top_rules": [
+            {"rule_name": name, "occurrence_count": count}
+            for name, count in top_rules
+        ],
+        "category_breakdown": [
+            {"category": cat, "occurrence_count": count}
+            for cat, count in sorted(category_counts.items(), key=lambda kv: -kv[1])
+        ],
+    }
+
+
 @app.get("/enrichments/summary")
 async def get_enrichment_summary():
     """JSON summary of what's in the enrichment layer (counts only, no payload)."""
@@ -1342,6 +1485,15 @@ _REENRICH_ALLOWED_OVERRIDES: frozenset[str] = frozenset({
     "supernova_net_churn_min",
     "test_orphan_max_cochange_test_count",
     "test_orphan_min_commits",
+    "dynamicblob_loc_min",
+    "dynamicblob_changes_min",
+    # B2 — JaFax / CodeFrame thresholds.
+    "zonecrossroad_min_zone_commits",
+    "concurrent_zonecrossroad_strict_threshold",
+    "feature_encapsulation_wide_files_min",
+    "feature_encapsulation_deep_churn_min",
+    "feature_encapsulation_high_impact_files_min",
+    "feature_encapsulation_scattered_components_min",
 })
 
 

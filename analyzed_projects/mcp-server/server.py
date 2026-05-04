@@ -342,6 +342,106 @@ async def list_metrics() -> dict:
 
 
 @mcp.tool()
+async def list_file_metrics(min_loc: int = 0, limit: int = 100) -> dict:
+    """List per-file Lizard complexity metrics (LOC, max CCN, function count).
+
+    Calls `GET /enrichments/metrics/files`. Returns an empty list when no
+    Lizard CSV was ingested for the loaded project.
+
+    Args:
+        min_loc: Filter out files with sum_nloc below this threshold.
+        limit:  Cap on returned files (server already sorts by sum_nloc desc).
+
+    Returns:
+        Dict with `count` and `files` (list of {file_path, source, sum_nloc,
+        max_ccn, avg_ccn, function_count, longest_function_nloc}).
+    """
+    async with httpx.AsyncClient(timeout=TIMEOUT) as client:
+        try:
+            resp = await client.get(
+                f"{DATA_SERVER_URL}/enrichments/metrics/files",
+                params={"min_loc": min_loc, "limit": limit},
+            )
+        except httpx.ConnectError:
+            return {"error": f"Cannot connect to data-server at {DATA_SERVER_URL}"}
+
+    if resp.status_code != 200:
+        return {"error": f"HTTP {resp.status_code}: {resp.text}"}
+    return resp.json()
+
+
+@mcp.tool()
+async def get_code_structure_summary() -> dict:
+    """Counts of types/methods/fields/references from the JaFax (B2) layer.
+
+    Calls `GET /enrichments/code-structure/summary`. Returns
+    `{"loaded": False, "source": None}` when no JaFax/CodeFrame ingest happened.
+    Use this to discover whether structural relations (calls.file-file,
+    coupling.file-file, etc.) are available before querying them.
+    """
+    async with httpx.AsyncClient(timeout=TIMEOUT) as client:
+        try:
+            resp = await client.get(
+                f"{DATA_SERVER_URL}/enrichments/code-structure/summary",
+            )
+        except httpx.ConnectError:
+            return {"error": f"Cannot connect to data-server at {DATA_SERVER_URL}"}
+
+    if resp.status_code != 200:
+        return {"error": f"HTTP {resp.status_code}: {resp.text}"}
+    return resp.json()
+
+
+@mcp.tool()
+async def get_duplication_summary() -> dict:
+    """Counts of external pairs / internal files from the DuDe (B3) layer.
+
+    Calls `GET /enrichments/duplication/summary`. Returns
+    `{"loaded": False, "source": None}` when no DuDe ingest happened.
+    Use this to discover whether duplication relations
+    (`duplication.file-file.external`, `.sibling`, `.internal-summary`) are
+    available before querying them.
+    """
+    async with httpx.AsyncClient(timeout=TIMEOUT) as client:
+        try:
+            resp = await client.get(
+                f"{DATA_SERVER_URL}/enrichments/duplication/summary",
+            )
+        except httpx.ConnectError:
+            return {"error": f"Cannot connect to data-server at {DATA_SERVER_URL}"}
+
+    if resp.status_code != 200:
+        return {"error": f"HTTP {resp.status_code}: {resp.text}"}
+    return resp.json()
+
+
+@mcp.tool()
+async def get_quality_issues_summary() -> dict:
+    """Counts of code-smell issues, distinct rules, top rules from Insider (B4).
+
+    Calls `GET /enrichments/quality-issues/summary`. Returns
+    `{"loaded": False, "source": None}` when no Insider ingest happened.
+    Use this to discover whether `anomaly.codesmell.*` traits are available
+    before calling `list_anomalies(trait_name="anomaly.codesmell.*")`.
+
+    The `top_rules` field surfaces the most-fired rules by aggregate
+    occurrence count (Insider's `value`); the `category_breakdown` field
+    rolls those counts up by rule family (Inheritance / Traceability / ...).
+    """
+    async with httpx.AsyncClient(timeout=TIMEOUT) as client:
+        try:
+            resp = await client.get(
+                f"{DATA_SERVER_URL}/enrichments/quality-issues/summary",
+            )
+        except httpx.ConnectError:
+            return {"error": f"Cannot connect to data-server at {DATA_SERVER_URL}"}
+
+    if resp.status_code != 200:
+        return {"error": f"HTTP {resp.status_code}: {resp.text}"}
+    return resp.json()
+
+
+@mcp.tool()
 async def load_project(project_id: str) -> str:
     """Load a project into the data server's memory by its UUID.
 

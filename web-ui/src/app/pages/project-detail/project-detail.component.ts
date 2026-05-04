@@ -385,7 +385,9 @@ export class ProjectDetailComponent implements OnInit, OnDestroy {
         ? invalidFiles.join(', ')
         : `${invalidFiles.slice(0, 2).join(', ')} and ${invalidFiles.length - 2} more`;
       this.toastService.warning(
-        `Invalid file${invalidFiles.length > 1 ? 's' : ''}: ${fileNames}. Expected: *.iglog, github.json, or jira.json`
+        `Invalid file${invalidFiles.length > 1 ? 's' : ''}: ${fileNames}. ` +
+        `Expected: *.iglog, github.json, jira.json, *-lizard.csv, *-layout.json, ` +
+        `*-external_duplication.csv, *-internal_duplication.json, or *-code_smells.json`
       );
     }
 
@@ -679,6 +681,16 @@ export class ProjectDetailComponent implements OnInit, OnDestroy {
         return 'GitHub';
       case 'jira':
         return 'JIRA';
+      case 'lizard':
+        return 'Lizard (LOC + complexity)';
+      case 'jafax':
+        return 'JaFax (code structure)';
+      case 'dude_external':
+        return 'DuDe external duplication';
+      case 'dude_internal':
+        return 'DuDe internal duplication';
+      case 'quality_issues':
+        return 'Insider code smells';
     }
   }
 

@@ -289,12 +289,19 @@
                 <input
                   type="file"
                   multiple
-                  accept=".json,.iglog"
+                  accept=".json,.iglog,.csv"
                   (change)="onFileSelect($event)"
                   hidden
                 />
               </label>
-              <p class="upload-hint">Expected files: *.iglog (one per repo), github.json, jira.json (max {{ fileService.getMaxFileSizeMB() }}MB)</p>
+              <p class="upload-hint">
+                Expected files (max {{ fileService.getMaxFileSizeMB() }}MB):
+                *.iglog (one per repo), github.json, jira.json,
+                &lt;repo&gt;-lizard.csv, &lt;repo&gt;-layout.json,
+                &lt;repo&gt;-external_duplication.csv,
+                &lt;repo&gt;-internal_duplication.json,
+                &lt;repo&gt;-code_smells.json
+              </p>
             </div>
 
             <!-- Staged Files (ready to upload) -->

@@ -39,6 +39,11 @@ from src.jira_miner.linker.transformers import JiraProjectTransformer
 from src.github_miner.reader_dto.loader import GithubJsonLoader
 from src.github_miner.linker.transformers import GitHubProjectTransformer
 from src.common.project_linkers import ProjectLinker
+from src.lizard_miner.reader_dto.loader import LizardCsvLoader, MetrixppCsvLoader
+from src.lizard_miner.linker.transformers import LizardProjectTransformer
+from src.codestructure_miner.parser import CodeStructureFormat, parse as parse_codestructure
+from src.dude_miner.parser import parse_dude
+from src.quality_miner.parser import parse_insider
 
 
 @dataclass
@@ -47,6 +52,12 @@ class DownloadedFiles:
     git_files: List[Tuple[str, Path]] = field(default_factory=list)  # [(repo_name, path), ...]
     jira_file: Optional[Path] = None
     github_file: Optional[Path] = None
+    lizard_file: Optional[Path] = None
+    metrixpp_file: Optional[Path] = None
+    jafax_file: Optional[Path] = None
+    dude_external_file: Optional[Path] = None
+    dude_internal_file: Optional[Path] = None
+    quality_issues_file: Optional[Path] = None
 
 
 def download_serialized_files_from_supabase(project_id: str) -> DownloadedFiles:
@@ -107,6 +118,18 @@ def download_serialized_files_from_supabase(project_id: str) -> DownloadedFiles:
                 downloaded.jira_file = temp_file_path
             elif file_type == "github":
                 downloaded.github_file = temp_file_path
+            elif file_type == "lizard":
+                downloaded.lizard_file = temp_file_path
+            elif file_type == "metrixpp":
+                downloaded.metrixpp_file = temp_file_path
+            elif file_type == "jafax":
+                downloaded.jafax_file = temp_file_path
+            elif file_type == "dude_external":
+                downloaded.dude_external_file = temp_file_path
+            elif file_type == "dude_internal":
+                downloaded.dude_internal_file = temp_file_path
+            elif file_type == "quality_issues":
+                downloaded.quality_issues_file = temp_file_path
             file_summaries.append(f"{file_type} ({file_name})")
 
     logger.info(f"Downloaded: {', '.join(file_summaries)}")
@@ -174,6 +197,50 @@ def build_graph_from_local_files() -> Dict:
     github_data = github_loader.load()
     github_project = GitHubProjectTransformer(github_data, name="GitHub Project").transform()
 
+    # Lizard (optional)
+    lizard_metrics: list = []
+    lizard_file = base_path / "lizard" / f"{repo_name}.csv"
+    if lizard_file.exists():
+        logger.info(f"  - Loading Lizard CSV from {lizard_file.name}...")
+        rows = LizardCsvLoader(str(lizard_file)).load()
+        lizard_metrics = LizardProjectTransformer(rows, repo_root=repo_name, repo_prefix=repo_name).transform()
+
+    # JaFax (optional). Conventional layout file name: <repo>-layout.json.
+    code_structure = None
+    jafax_file = base_path / "jafax" / f"{repo_name}-layout.json"
+    if jafax_file.exists():
+        logger.info(f"  - Loading JaFax layout from {jafax_file.name}...")
+        code_structure = parse_codestructure(
+            str(jafax_file), CodeStructureFormat.JAFAX,
+            path_prefix=None,
+        )
+
+    # DuDe duplication (optional). Conventional file names:
+    #   <repo>-external_duplication.csv (headerless)
+    #   <repo>-internal_duplication.json
+    duplication = None
+    dude_external = base_path / "dude" / f"{repo_name}-external_duplication.csv"
+    dude_internal = base_path / "dude" / f"{repo_name}-internal_duplication.json"
+    if dude_external.exists() or dude_internal.exists():
+        logger.info(
+            "  - Loading DuDe duplication (external=%s internal=%s)...",
+            dude_external.name if dude_external.exists() else "missing",
+            dude_internal.name if dude_internal.exists() else "missing",
+        )
+        duplication = parse_dude(
+            external_csv_path=str(dude_external) if dude_external.exists() else None,
+            internal_json_path=str(dude_internal) if dude_internal.exists() else None,
+            path_prefix=repo_name,
+        )
+
+    # Insider code-smells (optional). Conventional file name:
+    #   <repo>-code_smells.json (note: hyphen-prefix, NOT literal "codeSmells.json").
+    quality_issues = None
+    insider_file = base_path / "insider" / f"{repo_name}-code_smells.json"
+    if insider_file.exists():
+        logger.info(f"  - Loading Insider code-smells from {insider_file.name}...")
+        quality_issues = parse_insider(str(insider_file), path_prefix=None)
+
     # Link projects together
     logger.info("Linking projects")
     ProjectLinker.link_projects(github_project, jira_project, jira_data)
@@ -184,11 +251,33 @@ def build_graph_from_local_files() -> Dict:
     logger.info(f"Git commits: {len(git_project.git_commit_registry.all)}")
     logger.info(f"JIRA issues: {len(jira_project.issue_registry.all)}")
     logger.info(f"GitHub PRs: {len(github_project.pull_request_registry.all)}")
+    if lizard_metrics:
+        logger.info(f"Lizard FileMetrics: {len(lizard_metrics)}")
+    if code_structure is not None:
+        logger.info(
+            f"JaFax CodeStructure: types={len(code_structure.type_registry.all)} "
+            f"methods={len(code_structure.method_registry.all)} "
+            f"refs={len(code_structure.reference_registry.all)}"
+        )
+    if duplication is not None:
+        logger.info(
+            f"DuDe Duplication: external_pairs={len(duplication.external_pairs)} "
+            f"internal_files={len(duplication.internal_by_file)}"
+        )
+    if quality_issues is not None:
+        logger.info(
+            f"Insider QualityIssues: issues={len(quality_issues.issues)} "
+            f"files={len(quality_issues.file_paths)}"
+        )
 
     return {
         "git": git_project,
         "jira": jira_project,
         "github": github_project,
+        "metrics": {"lizard": lizard_metrics},
+        "code_structure": code_structure,
+        "duplication": duplication,
+        "quality_issues": quality_issues,
     }
 
 
@@ -258,6 +347,66 @@ def build_graph_from_downloaded_files(downloaded: DownloadedFiles, project_name:
         github_data = github_loader.load()
         github_project = GitHubProjectTransformer(github_data, name="GitHub Project").transform()
 
+    # Load Lizard CSV if available. Lizard emits absolute paths; the transformer
+    # normalises against the first downloaded git repo's name so paths join with
+    # the iglog-side repo prefix.
+    lizard_metrics: list = []
+    if downloaded.lizard_file:
+        rows = LizardCsvLoader(str(downloaded.lizard_file)).load()
+        prefix = downloaded.git_files[0][0] if downloaded.git_files else None
+        lizard_metrics = LizardProjectTransformer(
+            rows, repo_root=prefix, repo_prefix=prefix,
+        ).transform()
+
+    # Metrix++ stub: returns [] on header-only input (vendored Metrix++ 1.7.3
+    # is broken on Python 3.11+).
+    if downloaded.metrixpp_file:
+        try:
+            MetrixppCsvLoader(str(downloaded.metrixpp_file)).load()
+        except (FileNotFoundError, ValueError) as e:
+            logger.warning("Metrix++ CSV ignored: %s", e)
+
+    # JaFax CodeStructure (optional). The path_prefix mirrors the iglog repo
+    # prefix so JaFax file paths join with git File.last_existing_name(); the
+    # JaFax `name` strings are typically already prefixed with the project
+    # segment (e.g. "zeppelin/...") so we leave them unchanged.
+    code_structure = None
+    if downloaded.jafax_file:
+        code_structure = parse_codestructure(
+            str(downloaded.jafax_file), CodeStructureFormat.JAFAX,
+            path_prefix=None,
+        )
+
+    # DuDe duplication (optional). Same prefix story as JaFax: DuDe paths in
+    # the observed Zeppelin run are already prefixed with the project segment,
+    # so passing the iglog prefix is a no-op when paths already match — but
+    # keeps a future ingest run that emits unprefixed paths in sync.
+    duplication = None
+    if downloaded.dude_external_file or downloaded.dude_internal_file:
+        prefix = downloaded.git_files[0][0] if downloaded.git_files else None
+        duplication = parse_dude(
+            external_csv_path=(
+                str(downloaded.dude_external_file)
+                if downloaded.dude_external_file else None
+            ),
+            internal_json_path=(
+                str(downloaded.dude_internal_file)
+                if downloaded.dude_internal_file else None
+            ),
+            path_prefix=prefix,
+        )
+
+    # Insider code-smells (optional). Same prefix story as DuDe/JaFax: Insider
+    # paths in the observed Zeppelin run are already prefixed with the project
+    # segment, so passing the iglog prefix is a no-op when paths already match.
+    quality_issues = None
+    if downloaded.quality_issues_file:
+        prefix = downloaded.git_files[0][0] if downloaded.git_files else None
+        quality_issues = parse_insider(
+            str(downloaded.quality_issues_file),
+            path_prefix=prefix,
+        )
+
     # Link projects together (only if both projects exist)
     if github_project and jira_project and jira_data:
         ProjectLinker.link_projects(github_project, jira_project, jira_data)
@@ -274,6 +423,24 @@ def build_graph_from_downloaded_files(downloaded: DownloadedFiles, project_name:
         stats.append(f"JIRA issues: {len(jira_project.issue_registry.all)}")
     if github_project:
         stats.append(f"GitHub PRs: {len(github_project.pull_request_registry.all)}")
+    if lizard_metrics:
+        stats.append(f"Lizard FileMetrics: {len(lizard_metrics)}")
+    if code_structure is not None:
+        stats.append(
+            f"JaFax types/methods/refs: {len(code_structure.type_registry.all)}"
+            f"/{len(code_structure.method_registry.all)}"
+            f"/{len(code_structure.reference_registry.all)}"
+        )
+    if duplication is not None:
+        stats.append(
+            f"DuDe pairs/internal-files: {len(duplication.external_pairs)}"
+            f"/{len(duplication.internal_by_file)}"
+        )
+    if quality_issues is not None:
+        stats.append(
+            f"Insider issues/files: {len(quality_issues.issues)}"
+            f"/{len(quality_issues.file_paths)}"
+        )
 
     logger.info(f"Project built successfully - {', '.join(stats)}")
 
@@ -281,6 +448,10 @@ def build_graph_from_downloaded_files(downloaded: DownloadedFiles, project_name:
         "git": git_project,
         "jira": jira_project,
         "github": github_project,
+        "metrics": {"lizard": lizard_metrics},
+        "code_structure": code_structure,
+        "duplication": duplication,
+        "quality_issues": quality_issues,
     }
 
 

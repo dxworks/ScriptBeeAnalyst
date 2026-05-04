@@ -121,6 +121,30 @@ class EnrichmentConfig:
     # Net-churn floor for Supernova; chosen at 5k so only files with sustained
     # heavy contribution flag (median project files churn <500 over their life).
     supernova_net_churn_min: int = 5000
+
+    # ── B2 — JaFax / CodeFrame thresholds ──────────────────────────────────
+    # ZoneCrossroad: minimum commits a file must have inside one UTC offset
+    # before that offset counts as "significant". dx default
+    # (ZoneCrossroad.java:16) is 10.
+    zonecrossroad_min_zone_commits: int = 10
+    # ConcurrentZoneCrossroad: number of (year, month) periods with >= 2
+    # active zones above which severity tiers up. dx default ~5.
+    concurrent_zonecrossroad_strict_threshold: int = 5
+    # FeatureEncapsulationOverview thresholds (commit-spread / churn buckets).
+    # Wide commit = touches >= this many files; deep commit = churn over this many lines.
+    feature_encapsulation_wide_files_min: int = 20
+    feature_encapsulation_deep_churn_min: int = 500
+    # High-impact task = touches >= this many files; scattered task = touches
+    # >= this many components.
+    feature_encapsulation_high_impact_files_min: int = 10
+    feature_encapsulation_scattered_components_min: int = 3
+
+    # ── B1 — Lizard / Metrix++ thresholds ───────────────────────────────────
+    # DynamicBlob = high-LOC + high-churn. dx defaults: hugefile_threshold=500
+    # (DynamicBlob.java line 29) and frequentchanges_threshold=20
+    # (Initializer.java line 73). Severity follows DynamicBlob.java lines 27-38.
+    dynamicblob_loc_min: int = 500
+    dynamicblob_changes_min: int = 20
     # Max number of commits on a production file that ALSO touch a test-role
     # file before TestOrphan stops firing. 1 leaves room for ad-hoc smoke tests.
     test_orphan_max_cochange_test_count: int = 1

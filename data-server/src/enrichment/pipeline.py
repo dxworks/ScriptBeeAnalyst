@@ -59,6 +59,15 @@ from src.enrichment.relations.cochange_file_shared_task_prefixes import (
 from src.enrichment.relations.cochange_file_time_windowed import (
     FileTimeWindowedCoChangeExtractor,
 )
+from src.enrichment.relations.calls import FileCallsExtractor
+from src.enrichment.relations.coupling import FileCouplingExtractor
+from src.enrichment.relations.data_access import FileDataAccessExtractor
+from src.enrichment.relations.duplication_external import ExternalDuplicationExtractor
+from src.enrichment.relations.duplication_internal_summary import (
+    InternalDuplicationSummaryExtractor,
+)
+from src.enrichment.relations.duplication_sibling import SiblingDuplicationExtractor
+from src.enrichment.relations.hierarchy import FileHierarchyExtractor
 from src.enrichment.relations.issue_file import IssueFileExtractor
 from src.enrichment.relations.issue_issue import IssueIssueExtractor
 from src.enrichment.relations.ownership import OwnershipExtractor
@@ -67,10 +76,18 @@ from src.enrichment.relations.pr_reviewer import PullRequestReviewerExtractor
 from src.enrichment.relations.similarity_file_names import (
     FileNameSimilarityExtractor,
 )
+from src.enrichment.overview.code_quality_table import CodeQualityOverview
+from src.enrichment.overview.feature_encapsulation_table import (
+    FeatureEncapsulationTableBuilder,
+)
 from src.enrichment.tagger.anomaly_cohesion import CohesionAnomalyTagger
+from src.enrichment.tagger.anomaly_complexity import ComplexityAnomalyTagger
+from src.enrichment.tagger.anomaly_coupling import PivotFileCouplingTagger
 from src.enrichment.tagger.anomaly_knowledge import KnowledgeAnomalyTagger
+from src.enrichment.tagger.anomaly_quality_issues import QualityIssuesTagger
 from src.enrichment.tagger.anomaly_structuring import StructuringAnomalyTagger
 from src.enrichment.tagger.anomaly_testing import TestingAnomalyTagger
+from src.enrichment.tagger.anomaly_timezone import TimezoneAnomalyTagger
 from src.enrichment.tagger.author_classifiers import AuthorClassifiersTagger
 from src.enrichment.tagger.base import TaggingContext, compose_tags
 from src.enrichment.tagger.commit_classifiers import CommitClassifiersTagger
@@ -94,12 +111,14 @@ def compute_enrichments(
 
     anchor = _resolve_anchor(graph_data)
     cutoff = recent_cutoff(anchor, cfg.recent_window_days)
+    file_metric_map = _build_file_metric_map(graph_data)
 
     ctx = TaggingContext(
         graph_data=graph_data,
         config=cfg,
         anchor_date=anchor,
         recent_cutoff=cutoff,
+        file_metric_map=file_metric_map,
     )
 
     # Components — folder heuristic + optional mapping override.
@@ -119,12 +138,19 @@ def compute_enrichments(
     tags_by_entity = compose_tags(classifier_taggers, ctx)
 
     # Pass 2: anomaly traits (BugMagnet/TestOrphan/Supernova read pass-1 output).
+    # B2 taggers (PivotFileCouplingTagger / TimezoneAnomalyTagger) self-skip when
+    # their inputs are absent so the pipeline still runs on git-only projects.
     trait_taggers = [
         KnowledgeAnomalyTagger(tags_by_entity),
         CohesionAnomalyTagger(),
+        ComplexityAnomalyTagger(),
         StructuringAnomalyTagger(),
         TestingAnomalyTagger(tags_by_entity),
         StalledReviewTagger(),
+        PivotFileCouplingTagger(),
+        TimezoneAnomalyTagger(),
+        # B4 — self-skips when ctx.graph_data['quality_issues'] is None.
+        QualityIssuesTagger(),
     ]
     trait_results = compose_tags(trait_taggers, ctx)
     for key, value in trait_results.items():
@@ -162,6 +188,19 @@ def compute_enrichments(
     relations.extend(AuthorSharedTaskPrefixesExtractor().extract(ctx))
     relations.extend(AuthorTimeWindowedExtractor().extract(ctx))
 
+    # B2 — code-structure relations (no-op when ctx.graph_data['code_structure']
+    # is None, which is the case for git-only projects).
+    relations.extend(FileCallsExtractor().extract(ctx))
+    relations.extend(FileDataAccessExtractor().extract(ctx))
+    relations.extend(FileHierarchyExtractor().extract(ctx))
+    relations.extend(FileCouplingExtractor().extract(ctx))
+
+    # B3 — DuDe duplication relations (no-op when ctx.graph_data['duplication']
+    # is None, which is the case for projects without DuDe ingest).
+    relations.extend(ExternalDuplicationExtractor().extract(ctx))
+    relations.extend(SiblingDuplicationExtractor().extract(ctx))
+    relations.extend(InternalDuplicationSummaryExtractor().extract(ctx))
+
     # Component-component cochange aggregates the file-file edges; depends on
     # `resolver` and `file_cochange` so it runs after both exist.
     relations.extend(
@@ -190,6 +229,9 @@ def compute_enrichments(
         NatureTableBuilder().build(ctx, tags_by_entity),
         FeatureTraceabilityTableBuilder().build(ctx, tags_by_entity),
         PullRequestLifecycleTableBuilder().build(ctx, tags_by_entity),
+        FeatureEncapsulationTableBuilder().build(ctx, tags_by_entity, components, resolver),
+        # B4 — empty rows list when quality_issues is None; safe to always include.
+        CodeQualityOverview().build(ctx, tags_by_entity, components, resolver),
     ]
 
     LOG.info(
@@ -227,3 +269,14 @@ def _list_file_paths(graph_data: dict) -> list[str]:
         if fid:
             out.append(fid)
     return out
+
+
+def _build_file_metric_map(graph_data: dict) -> dict:
+    """Index FileMetrics by file_path so taggers / overviews can look up by file id.
+
+    The processor stores them at `graph_data['metrics']['lizard']`. Returns
+    an empty dict when no Lizard ingest happened so taggers degrade gracefully.
+    """
+    metrics_block = graph_data.get("metrics") or {}
+    lizard_metrics = metrics_block.get("lizard") or []
+    return {m.file_path: m for m in lizard_metrics}

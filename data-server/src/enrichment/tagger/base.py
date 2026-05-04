@@ -6,10 +6,11 @@ concatenating traits when multiple taggers target the same entity.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Iterable, Optional, Protocol
 
+from src.common.lizard_models import FileMetric
 from src.enrichment.config import EnrichmentConfig
 from src.enrichment.models import EntityTags, Trait
 
@@ -21,6 +22,7 @@ class TaggingContext:
     config: EnrichmentConfig
     anchor_date: Optional[datetime]
     recent_cutoff: Optional[datetime]
+    file_metric_map: dict[str, FileMetric] = field(default_factory=dict)
 
 
 class Tagger(Protocol):

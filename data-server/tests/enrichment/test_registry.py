@@ -24,6 +24,9 @@ DATA_SERVER_ROOT = Path(__file__).resolve().parents[2]
 EXPECTED_OVERVIEW_NAMES = {
     "pace", "authorship", "testing", "components", "intent_impact",
     "knowledge", "nature", "feature_traceability", "pr_lifecycle",
+    "feature_encapsulation",
+    # B4 — Insider code-quality overview
+    "code_quality",
 }
 
 EXPECTED_RELATION_KINDS = {
@@ -48,6 +51,15 @@ EXPECTED_RELATION_KINDS = {
     "cochange.component-component.shared-devs",
     "cochange.component-component.shared-task-prefixes",
     "cochange.component-component.time-windowed",
+    # B2 — JaFax / CodeFrame
+    "calls.file-file",
+    "data-access.file-file",
+    "hierarchy.file-file",
+    "coupling.file-file",
+    # B3 — DuDe duplication
+    "duplication.file-file.external",
+    "duplication.file-file.sibling",
+    "duplication.file-file.internal-summary",
 }
 
 EXPECTED_TRAIT_NAMES = {
@@ -57,6 +69,7 @@ EXPECTED_TRAIT_NAMES = {
     "anomaly.cohesion.coordination.Pulsar",
     "anomaly.cohesion.coordination.Flicker",
     "anomaly.cohesion.size.Supernova",
+    "anomaly.cohesion.size.DynamicBlob",
     "anomaly.cohesion.size.FrequentChanger",
     "anomaly.cohesion.activity.Hibernator",
     "anomaly.cohesion.activity.Awakening",
@@ -82,6 +95,9 @@ EXPECTED_TRAIT_NAMES = {
     "anomaly.structuring.TasksBottleneck",
     # Review (A2.5)
     "anomaly.review.StalledReview",
+    # B2 — JaFax / CodeFrame
+    "anomaly.cohesion.ZoneCrossroad",
+    "anomaly.cohesion.ConcurrentZoneCrossroad",
 }
 
 EXPECTED_CLASSIFIER_SLOTS = {

@@ -162,6 +162,35 @@ plt.xticks(rotation=30)
 plt.tight_layout()
 ```
 
+## LOC vs. churn scatter (Lizard B1)
+
+```python
+metrics = (graph_data.get("metrics") or {}).get("lizard") or []
+xs, ys, labels = [], [], []
+for m in metrics:
+    git_file = next(
+        (f for f in graph_data["git"].file_registry.all
+         if (f.last_existing_name() or "") == m.file_path),
+        None,
+    )
+    if git_file is None:
+        continue
+    churn = sum(
+        len(h.added_lines) + len(h.deleted_lines)
+        for ch in (git_file.changes or []) for h in (ch.hunks or [])
+    )
+    xs.append(m.sum_nloc)
+    ys.append(churn)
+    labels.append(m.file_path)
+
+plt.figure(figsize=(8, 6))
+plt.scatter(xs, ys, alpha=0.5)
+plt.xlabel("LOC (Lizard NLOC)")
+plt.ylabel("Lifetime churn (added + deleted)")
+plt.title("LOC vs. churn — DynamicBlob lives in the upper right")
+plt.tight_layout()
+```
+
 ## Tips
 
 - Always use `plt.figure(figsize=(w, h))` to set a reasonable size

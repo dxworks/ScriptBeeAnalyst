@@ -175,6 +175,137 @@ if rf:
         print(f"{r.source_id} <-> {r.target_id}: {r.strength}")
 ```
 
+## 9b. Files over 1000 LOC (Lizard B1)
+
+```python
+# `list_file_metrics` is the new MCP tool; here's the equivalent inside execute_code.
+metrics = (graph_data.get("metrics") or {}).get("lizard") or []
+big = sorted([m for m in metrics if m.sum_nloc >= 1000], key=lambda m: -m.sum_nloc)
+for m in big[:10]:
+    print(f"{m.sum_nloc:>6} NLOC  ccn_max={m.max_ccn:<4} fns={m.function_count:<4}  {m.file_path}")
+```
+
+## 9c. DynamicBlob anomaly files
+
+```python
+files = find_files_with_trait("anomaly.cohesion.size.DynamicBlob")
+print(f"{len(files)} DynamicBlob files (high-LOC + high-churn)")
+for fid in files[:10]:
+    print(f"  {fid}")
+```
+
+## 9d. Files most coupled by method calls (JaFax / B2)
+
+```python
+# Top 10 file pairs by inter-file method-call count.
+ef = graph_data["enrichments"].relation_file("calls.file-file", "lifetime")
+if ef is None or not ef.relations:
+    print("No JaFax data ingested.")
+else:
+    for r in ef.relations[:10]:
+        print(f"  {int(r.strength):>5} calls  {r.source_id} -> {r.target_id}")
+```
+
+## 9e. ZoneCrossroad (timezone-anomaly) files
+
+```python
+files = find_files_with_trait("anomaly.cohesion.ZoneCrossroad")
+print(f"{len(files)} files with commits across multiple time zones")
+for fid in files[:10]:
+    print(f"  {fid}")
+```
+
+## 9g. Top file pairs by external duplication (DuDe / B3)
+
+```python
+# `duplication.file-file.external` strength = total duplicated lines (sum of
+# block_length across all duplicated blocks between the two files). Pairs in
+# the same immediate parent directory go to `duplication.file-file.sibling`
+# instead.
+ef = graph_data["enrichments"].relation_file("duplication.file-file.external", "lifetime")
+if ef is None or not ef.relations:
+    print("No DuDe data ingested.")
+else:
+    for r in ef.relations[:10]:
+        blocks = r.extras.get("block_count", "?")
+        print(f"  {int(r.strength):>5} lines / {blocks} blocks  {r.source_id} <-> {r.target_id}")
+```
+
+## 9h. Files with the most internal duplication (DuDe / B3)
+
+```python
+# `duplication.file-file.internal-summary` is a per-file scalar emitted as a
+# self-loop edge (source_id == target_id == file_path). Strength = duplicated
+# lines inside the file.
+ef = graph_data["enrichments"].relation_file("duplication.file-file.internal-summary", "lifetime")
+if ef is None or not ef.relations:
+    print("No DuDe internal data ingested.")
+else:
+    for r in ef.relations[:10]:
+        print(f"  {int(r.strength):>4} duplicated lines  {r.source_id}")
+```
+
+## 9f. FeatureEncapsulationOverview snapshot
+
+```python
+table = overview_as_dict("feature_encapsulation")
+for row in table["rows"][:10]:
+    cells = row["cells"]
+    print(
+        f'{row["entity_id"]:<24} '
+        f'files={cells["file_count"]["lifetime_value"]:<5} '
+        f'kloc={cells["source_loc_kloc"]["lifetime_value"]} '
+        f'wide%={cells["wide_commit_pct"]["lifetime_value"]} '
+        f'high_impact_tasks={cells["high_impact_task_count"]["lifetime_value"]}'
+    )
+```
+
+## 9i. Top files by Insider code-smell count (B4)
+
+```python
+# Insider records are stashed at graph_data["quality_issues"]; each issue carries
+# `occurrence_count` (the raw `value` field) which is a count of rule firings,
+# NOT a 1-5 severity ordinal.
+qi = graph_data.get("quality_issues")
+if qi is None or not qi.issues:
+    print("No Insider data ingested.")
+else:
+    from collections import defaultdict
+    per_file = defaultdict(int)
+    for issue in qi.issues:
+        per_file[issue.file_path] += issue.occurrence_count
+    for fid, total in sorted(per_file.items(), key=lambda kv: -kv[1])[:10]:
+        print(f"  {total:>5} smells  {fid}")
+```
+
+## 9j. Files carrying a specific Insider code-smell trait
+
+```python
+# Trait names are data-driven: anomaly.codesmell.{Category}.{Rule} where
+# whitespace is stripped from both segments. Run get_quality_issues_summary()
+# (MCP) or check graph_data["quality_issues"].issues to discover what fired.
+files = find_files_with_trait("anomaly.codesmell.Traceability.CatchTopLevelException")
+print(f"{len(files)} files flagged with Catch Top-Level Exception")
+for fid in files[:10]:
+    print(f"  {fid}")
+```
+
+## 9k. CodeQualityOverview snapshot (B4)
+
+```python
+table = overview_as_dict("code_quality")
+for row in table["rows"][:10]:
+    cells = row["cells"]
+    print(
+        f'{row["entity_id"]:<24} '
+        f'smells={cells["total_smells"]["lifetime_value"]:<5} '
+        f'rules={cells["distinct_rules"]["lifetime_value"]:<3} '
+        f'files={cells["distinct_files"]["lifetime_value"]:<4} '
+        f'top={cells["top_rule"]["lifetime_value"]} '
+        f'({cells["top_rule_count"]["lifetime_value"]})'
+    )
+```
+
 ## 10. Commits per author (top 10)
 
 ```python

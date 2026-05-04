@@ -49,7 +49,10 @@ export class FileService {
     if (!isValidSerializedFileName(file.name)) {
       return {
         valid: false,
-        error: `Invalid filename. Expected: *.iglog, github.json, or jira.json`,
+        error:
+          `Invalid filename. Expected: *.iglog, github.json, jira.json, ` +
+          `*-layout.json, *-code_smells.json, *-external_duplication.csv, ` +
+          `*-internal_duplication.json, or *-lizard.csv`,
       };
     }
 
