@@ -62,4 +62,4 @@ alter table public.serialized_files
 
 alter table public.serialized_files
   add constraint serialized_files_file_type_check
-  check (file_type in ('git', 'github', 'jira', 'lizard', 'metrixpp', 'jafax', 'codeframe'));
+  check (file_type in ('git', 'github', 'jira', 'lizard', 'jafax', 'codeframe'));

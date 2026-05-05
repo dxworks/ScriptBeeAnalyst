@@ -25,8 +25,7 @@ export interface UpdateProjectDto {
 // 'git' / 'github' / 'jira' are the original sources. The remaining values
 // match the data-server's processor.py file_type dispatch and the DB CHECK
 // constraint set by migration 20260503000004_insider_quality_issues.sql.
-// 'metrixpp' and 'codeframe' are NOT exposed here on purpose — their parsers
-// raise NotImplementedError or are stub-only.
+// 'codeframe' is NOT exposed here on purpose — its parser is stub-only.
 export type FileType =
   | 'git'
   | 'github'

@@ -58,10 +58,10 @@ create policy "Users can delete own duplication"
   );
 
 -- Allow DuDe external CSV / internal JSON to upload as serialized files
--- alongside git/github/jira/lizard/metrixpp/jafax/codeframe.
+-- alongside git/github/jira/lizard/jafax/codeframe.
 alter table public.serialized_files
   drop constraint if exists serialized_files_file_type_check;
 
 alter table public.serialized_files
   add constraint serialized_files_file_type_check
-  check (file_type in ('git', 'github', 'jira', 'lizard', 'metrixpp', 'jafax', 'codeframe', 'dude_external', 'dude_internal'));
+  check (file_type in ('git', 'github', 'jira', 'lizard', 'jafax', 'codeframe', 'dude_external', 'dude_internal'));

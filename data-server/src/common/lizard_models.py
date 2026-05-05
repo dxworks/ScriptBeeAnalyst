@@ -1,4 +1,4 @@
-"""Per-file complexity metrics ingested from Lizard CSV (and Metrix++ stub).
+"""Per-file complexity metrics ingested from Lizard CSV.
 
 Implements §3 of communication/B1_lizard/index_step_general.md.
 

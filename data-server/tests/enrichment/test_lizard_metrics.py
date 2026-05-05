@@ -122,7 +122,6 @@ def test_components_overview_includes_loc_columns():
     table = e.overview("components")
     assert table is not None
     assert "total_loc" in table.columns
-    assert "source_loc" in table.columns
     assert "avg_loc_per_file" in table.columns
     assert "max_ccn" in table.columns
     project_row = next(r for r in table.rows if r.entity_id == "(project)")

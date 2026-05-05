@@ -139,7 +139,7 @@ class EnrichmentConfig:
     feature_encapsulation_high_impact_files_min: int = 10
     feature_encapsulation_scattered_components_min: int = 3
 
-    # ── B1 — Lizard / Metrix++ thresholds ───────────────────────────────────
+    # ── B1 — Lizard thresholds ─────────────────────────────────────────────
     # DynamicBlob = high-LOC + high-churn. dx defaults: hugefile_threshold=500
     # (DynamicBlob.java line 29) and frequentchanges_threshold=20
     # (Initializer.java line 73). Severity follows DynamicBlob.java lines 27-38.

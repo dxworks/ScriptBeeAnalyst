@@ -9,7 +9,6 @@ Columns (lifetime + recent + trend% on rate-like columns):
   - bus_factor_1_files   — files in the component carrying BusFactor1
   - bugmagnet_files      — files in the component carrying BugMagnet
   - total_loc            — Lizard NLOC summed across the component's files (B1)
-  - source_loc           — alias of total_loc; reserved for Metrix++ split (B1)
   - avg_loc_per_file     — total_loc / file_count when LOC is known (B1)
   - max_ccn              — highest cyclomatic complexity in the component (B1)
 """
@@ -39,7 +38,6 @@ COLUMNS = [
     "bus_factor_1_files",
     "bugmagnet_files",
     "total_loc",
-    "source_loc",
     "avg_loc_per_file",
     "max_ccn",
 ]
@@ -189,9 +187,6 @@ class ComponentsTableBuilder:
         avg_loc = round(loc_total / files_with_loc, 2) if files_with_loc > 0 else None
         max_ccn_value = max_ccn_seen if files_with_loc > 0 else None
         cells["total_loc"] = OverviewCell(
-            lifetime_value=loc_value, recent_value=loc_value, trend_percent=None,
-        )
-        cells["source_loc"] = OverviewCell(
             lifetime_value=loc_value, recent_value=loc_value, trend_percent=None,
         )
         cells["avg_loc_per_file"] = OverviewCell(

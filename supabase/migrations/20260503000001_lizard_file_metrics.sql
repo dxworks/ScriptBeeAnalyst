@@ -1,4 +1,4 @@
--- Lizard / Metrix++ file metrics cache: one JSONB blob per project.
+-- Lizard file metrics cache: one JSONB blob per project.
 -- Mirrors the enrichment cache pattern (20260429000001_create_enrichments.sql):
 -- the data-server (re)computes per-file LOC + complexity rollups from Lizard
 -- CSV at project load and stores the full set as a single payload row keyed
@@ -56,10 +56,10 @@ create policy "Users can delete own file_metrics"
     )
   );
 
--- Allow Lizard / Metrix++ CSVs to upload as serialized files alongside git/github/jira.
+-- Allow Lizard CSV to upload as a serialized file alongside git/github/jira.
 alter table public.serialized_files
   drop constraint if exists serialized_files_file_type_check;
 
 alter table public.serialized_files
   add constraint serialized_files_file_type_check
-  check (file_type in ('git', 'github', 'jira', 'lizard', 'metrixpp'));
+  check (file_type in ('git', 'github', 'jira', 'lizard'));

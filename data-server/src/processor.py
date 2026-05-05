@@ -39,7 +39,7 @@ from src.jira_miner.linker.transformers import JiraProjectTransformer
 from src.github_miner.reader_dto.loader import GithubJsonLoader
 from src.github_miner.linker.transformers import GitHubProjectTransformer
 from src.common.project_linkers import ProjectLinker
-from src.lizard_miner.reader_dto.loader import LizardCsvLoader, MetrixppCsvLoader
+from src.lizard_miner.reader_dto.loader import LizardCsvLoader
 from src.lizard_miner.linker.transformers import LizardProjectTransformer
 from src.codestructure_miner.parser import CodeStructureFormat, parse as parse_codestructure
 from src.dude_miner.parser import parse_dude
@@ -53,7 +53,6 @@ class DownloadedFiles:
     jira_file: Optional[Path] = None
     github_file: Optional[Path] = None
     lizard_file: Optional[Path] = None
-    metrixpp_file: Optional[Path] = None
     jafax_file: Optional[Path] = None
     dude_external_file: Optional[Path] = None
     dude_internal_file: Optional[Path] = None
@@ -120,8 +119,6 @@ def download_serialized_files_from_supabase(project_id: str) -> DownloadedFiles:
                 downloaded.github_file = temp_file_path
             elif file_type == "lizard":
                 downloaded.lizard_file = temp_file_path
-            elif file_type == "metrixpp":
-                downloaded.metrixpp_file = temp_file_path
             elif file_type == "jafax":
                 downloaded.jafax_file = temp_file_path
             elif file_type == "dude_external":
@@ -357,14 +354,6 @@ def build_graph_from_downloaded_files(downloaded: DownloadedFiles, project_name:
         lizard_metrics = LizardProjectTransformer(
             rows, repo_root=prefix, repo_prefix=prefix,
         ).transform()
-
-    # Metrix++ stub: returns [] on header-only input (vendored Metrix++ 1.7.3
-    # is broken on Python 3.11+).
-    if downloaded.metrixpp_file:
-        try:
-            MetrixppCsvLoader(str(downloaded.metrixpp_file)).load()
-        except (FileNotFoundError, ValueError) as e:
-            logger.warning("Metrix++ CSV ignored: %s", e)
 
     # JaFax CodeStructure (optional). The path_prefix mirrors the iglog repo
     # prefix so JaFax file paths join with git File.last_existing_name(); the

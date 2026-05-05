@@ -1,4 +1,4 @@
-"""CSV loaders for Lizard and Metrix++ outputs.
+"""CSV loader for Lizard output.
 
 Implements §4 of communication/B1_lizard/index_step_general.md.
 """
@@ -16,8 +16,6 @@ LOG = get_logger(__name__)
 
 LIZARD_HEADER = ("NLOC", "CCN", "token", "PARAM", "length",
                  "location", "file", "function", "long_name", "start", "end")
-
-METRIXPP_HEADER_PREFIX = ("file", "region", "type")
 
 
 class LizardCsvLoader:
@@ -65,45 +63,5 @@ class LizardCsvLoader:
         return rows
 
 
-class MetrixppCsvLoader:
-    """Tolerant Metrix++ CSV loader.
-
-    Stub: vendored Metrix++ 1.7.3 fails on Python 3.11+ (uses removed
-    `open(..., 'rU', ...)`), so the runner produces a header-only CSV.
-    Returns [] on header-only input rather than crashing the pipeline.
-    """
-
-    def __init__(self, csv_path: str):
-        self.csv_path = Path(csv_path)
-
-    def load(self) -> list[dict]:
-        if not self.csv_path.exists():
-            raise FileNotFoundError(f"Metrix++ CSV not found: {self.csv_path}")
-
-        with self.csv_path.open("r", encoding="utf-8", newline="") as fh:
-            reader = csv.DictReader(fh)
-            if reader.fieldnames is None:
-                LOG.warning("Metrix++ CSV %s is empty", self.csv_path)
-                return []
-            if not _looks_like_metrixpp_header(reader.fieldnames):
-                raise ValueError(
-                    f"Unexpected CSV header for Metrix++ at {self.csv_path}: {reader.fieldnames}"
-                )
-            rows = list(reader)
-        if not rows:
-            LOG.warning(
-                "Metrix++ CSV %s is header-only; bundled Metrix++ 1.7.3 is "
-                "broken on Python 3.11+, ingestion skipped",
-                self.csv_path,
-            )
-        return rows
-
-
 def _is_lizard_header(fields) -> bool:
     return tuple(fields) == LIZARD_HEADER
-
-
-def _looks_like_metrixpp_header(fields) -> bool:
-    if not fields or len(fields) < 3:
-        return False
-    return tuple(fields[:3]) == METRIXPP_HEADER_PREFIX
