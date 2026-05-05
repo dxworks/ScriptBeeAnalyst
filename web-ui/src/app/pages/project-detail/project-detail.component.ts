@@ -243,26 +243,58 @@ export class ProjectDetailComponent implements OnInit, OnDestroy {
   }
 
   /**
-   * Poll data server to check which project is currently loaded in memory
+   * Poll data server to check which project is currently loaded in memory.
+   *
+   * `expectLoadedId` (optional): when set, the poll will retry up to a few
+   * times if the server reports "no project loaded" — this protects against a
+   * transient window right after POST /load returns success, where one of the
+   * queued in-flight /current requests might still see the pre-load state.
+   * Without retries, that stale 404 would clear loadedProjectId and the UI
+   * would look "not loaded" even though the server just finished loading.
    */
-  private async pollServerState(): Promise<void> {
-    try {
-      const currentProject = await this.dataServerService.getCurrentProject();
+  private async pollServerState(expectLoadedId?: string): Promise<void> {
+    const maxAttempts = expectLoadedId ? 4 : 1;
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      try {
+        const currentProject = await this.dataServerService.getCurrentProject();
 
-      if (currentProject) {
-        this.loadedProjectId.set(currentProject.project_id);
-        this.loadedProjectStats.set(currentProject.stats);
-        this.dataServerConnected.set(true);
-      } else {
+        if (currentProject) {
+          this.loadedProjectId.set(currentProject.project_id);
+          this.loadedProjectStats.set(currentProject.stats);
+          this.dataServerConnected.set(true);
+          // Polling is the source of truth for "is the project loaded in
+          // memory?". If a load operation is somehow still flagged as
+          // in-flight (e.g. its HTTP POST stalled or the response was lost),
+          // the server-confirmed loaded state should clear the local flag so
+          // the UI doesn't get stuck on "Please Wait" or block re-clicking
+          // "Load Project".
+          if (
+            this.loadingInDataServer() &&
+            currentProject.project_id === this.selectedProject()?.id
+          ) {
+            this.loadingInDataServer.set(false);
+          }
+          return;
+        }
+
+        // No project loaded server-side. If we're confirming a just-completed
+        // load, give the server a moment and retry before trusting the null.
+        if (expectLoadedId && attempt < maxAttempts) {
+          await new Promise(r => setTimeout(r, 750));
+          continue;
+        }
+
         this.loadedProjectId.set(null);
         this.loadedProjectStats.set(null);
         this.dataServerConnected.set(true);
+        return;
+      } catch (error) {
+        // If polling fails, assume server is disconnected
+        // Don't clear loadedProjectId - keep last known state
+        this.dataServerConnected.set(false);
+        console.warn('Data server polling failed:', error);
+        return;
       }
-    } catch (error) {
-      // If polling fails, assume server is disconnected
-      // Don't clear loadedProjectId - keep last known state
-      this.dataServerConnected.set(false);
-      console.warn('Data server polling failed:', error);
     }
   }
 
@@ -622,8 +654,11 @@ export class ProjectDetailComponent implements OnInit, OnDestroy {
           this.workspacePath.set(scaffoldResult.path);
         }
       });
-      // Poll to confirm
-      await this.pollServerState();
+      // Poll with retries to confirm — the server's /projects/current may
+      // briefly return 404 right after /load if another in-flight poll
+      // queued before the global was set. Retrying prevents a stale 404
+      // from blanking the just-set loadedProjectId.
+      await this.pollServerState(result.project_id || project.id);
     } else {
       this.toastService.error(result.error || 'Failed to load project in data server');
     }

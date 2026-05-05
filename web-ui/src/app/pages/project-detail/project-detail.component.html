@@ -806,14 +806,7 @@
           <div class="content-body">
             @switch (selectedProject()?.status) {
               @case ('ready') {
-                @if (loadingInDataServer()) {
-                  <!-- Loading state -->
-                  <div class="chat-placeholder chat-loading">
-                    <div class="spinner-large"></div>
-                    <h2>Please Wait</h2>
-                    <p class="text-secondary">Loading project into server memory...</p>
-                  </div>
-                } @else if (isCurrentProjectLoaded()) {
+                @if (isCurrentProjectLoaded()) {
                   <!-- Current project is loaded - agent workspace instructions -->
                   <div class="chat-placeholder">
                     <svg width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" class="text-success">
@@ -895,6 +888,18 @@
                       </button>
                       <button class="btn btn-secondary" (click)="onUnloadFromDataServer()" [disabled]="!dataServerConnected()">Unload from Server</button>
                     </div>
+                  </div>
+                } @else if (loadingInDataServer()) {
+                  <!-- Loading state — only shown while we're actively waiting on
+                       POST /load AND polling has not yet confirmed the load.
+                       Once isCurrentProjectLoaded() flips true (whether from
+                       polling or from the load response), the success branch
+                       above takes precedence so a hung HTTP POST can't keep
+                       the spinner stuck. -->
+                  <div class="chat-placeholder chat-loading">
+                    <div class="spinner-large"></div>
+                    <h2>Please Wait</h2>
+                    <p class="text-secondary">Loading project into server memory...</p>
                   </div>
                 } @else if (isDifferentProjectLoaded()) {
                   <!-- Different project is loaded -->

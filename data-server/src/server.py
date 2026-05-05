@@ -1,3 +1,4 @@
+import asyncio
 import io
 import sys
 import pickle
@@ -274,8 +275,13 @@ async def load_project(project_id: str):
     supabase: Client = create_client(SUPABASE_URL, SUPABASE_SERVICE_KEY)
 
     # Query database to get project info (especially user_id)
+    # Run in a thread so the event loop stays responsive — without this, the
+    # /projects/current poll endpoint stalls for the duration of the load,
+    # and the web UI cannot pick up the loaded state.
     try:
-        response = supabase.table("projects").select("*").eq("id", project_id).single().execute()
+        response = await asyncio.to_thread(
+            lambda: supabase.table("projects").select("*").eq("id", project_id).single().execute()
+        )
         project = response.data
 
         if not project:
@@ -306,9 +312,12 @@ async def load_project(project_id: str):
     if current_project_id:
         graph_data.clear()
 
-    # Download and load pickle from Supabase Storage
+    # Download and load pickle from Supabase Storage.
+    # The download + pickle.loads can take 30-60 s on a 344 MB pickle — run it
+    # in a worker thread so the asyncio loop stays free for /projects/current
+    # polling and other requests.
     try:
-        loaded_graph = load_graph_from_supabase(user_id, project_id)
+        loaded_graph = await asyncio.to_thread(load_graph_from_supabase, user_id, project_id)
         graph_data.clear()
         graph_data.update(loaded_graph)
         current_project_id = project_id
@@ -330,7 +339,7 @@ async def load_project(project_id: str):
             repo = SupabaseEnrichmentRepository()
             cached = None
             try:
-                cached = repo.load(project_id)
+                cached = await asyncio.to_thread(repo.load, project_id)
             except Exception as e:
                 logger.warning(f"Could not read cached enrichments (will recompute): {e}")
             if cached is not None:
@@ -340,10 +349,10 @@ async def load_project(project_id: str):
                     f"(generated_at={cached.generated_at.isoformat()})"
                 )
             else:
-                fresh = compute_enrichments(graph_data)
+                fresh = await asyncio.to_thread(compute_enrichments, graph_data)
                 graph_data["enrichments"] = fresh
                 try:
-                    repo.save(project_id, fresh)
+                    await asyncio.to_thread(repo.save, project_id, fresh)
                 except Exception as e:
                     logger.warning(f"Failed to persist enrichments (non-fatal): {e}")
         except Exception as e:

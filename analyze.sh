@@ -58,7 +58,7 @@ fi
 
 WORKSPACE="$PROJECTS_DIR/$FOLDER_NAME"
 
-# Create workspace if it doesn't exist
+# Create workspace skeleton if it doesn't exist (one-time files: README, dirs)
 if [ ! -d "$WORKSPACE" ]; then
     echo "Creating workspace for '$PROJECT_NAME'..."
 
@@ -83,8 +83,14 @@ The agent has MCP tools to query the data-server.
 See \`analyzed_projects/instructions/\` for data model documentation.
 EOF
 
-    # Generate per-project opencode.json with adjusted relative paths
-    cat > "$WORKSPACE/opencode.json" << 'OJEOF'
+    echo "Workspace created: analyzed_projects/projects/$FOLDER_NAME"
+fi
+
+# Always (re)write the per-workspace opencode.json. If this file is missing
+# OpenCode walks up to the parent analyzed_projects/opencode.json whose
+# relative MCP command path won't resolve from the workspace cwd, and the
+# scriptbee-data MCP server fails to start.
+cat > "$WORKSPACE/opencode.json" << 'OJEOF'
 {
   "$schema": "https://opencode.ai/config.json",
   "mcp": {
@@ -109,9 +115,6 @@ EOF
   ]
 }
 OJEOF
-
-    echo "Workspace created: analyzed_projects/projects/$FOLDER_NAME"
-fi
 
 echo "Opening OpenCode for: $PROJECT_NAME ($PROJECT_ID)"
 cd "$WORKSPACE" && exec opencode
