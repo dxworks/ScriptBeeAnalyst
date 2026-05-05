@@ -11,7 +11,6 @@ set -e
 # Usage:
 #   ./env-switch.sh local    # Switch to local laptop
 #   ./env-switch.sh remote   # Switch to home server via LAN
-#   ./env-switch.sh vpn      # Switch to home server via VPN
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 ENV_SUPABASE="$SCRIPT_DIR/.env.supabase"
@@ -37,7 +36,6 @@ if [ -z "$1" ]; then
   echo -e "${RED}Usage: ./env-switch.sh <target>${NC}"
   echo -e "  ${GREEN}local${NC}    Laptop (localhost:8000)"
   echo -e "  ${GREEN}remote${NC}   Home server via LAN (192.168.0.100:8000)"
-  echo -e "  ${GREEN}vpn${NC}      Home server via VPN (10.8.0.1:8000)"
   exit 1
 fi
 
@@ -51,12 +49,8 @@ case "$TARGET" in
     URL="http://192.168.0.100:8000"
     URL_DOCKER="$URL"
     ;;
-  vpn)
-    URL="http://10.8.0.1:8000"
-    URL_DOCKER="$URL"
-    ;;
   *)
-    echo -e "${RED}Error: Unknown target '$TARGET'. Use: local, remote, or vpn${NC}"
+    echo -e "${RED}Error: Unknown target '$TARGET'. Use: local or remote${NC}"
     exit 1
     ;;
 esac
