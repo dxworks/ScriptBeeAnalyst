@@ -76,7 +76,7 @@ from src.common.domains.components.registries import ComponentRegistry
 from src.common.kernel import EntityKind, EntityRef, Graph
 from src.common.people import SourceKind
 from src.common.people.unified import UnifiedUserRegistry
-from src.enrichment.relations_v2.registries import RelationRegistry
+from src.enrichment.relations.registries import RelationRegistry
 from src.enrichment.tags.registries import ClassifierRegistry, TraitRegistry
 
 

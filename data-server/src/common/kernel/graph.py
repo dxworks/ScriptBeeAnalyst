@@ -101,7 +101,7 @@ from ..domains.quality.registries import (
 )
 
 # Enrichment registries
-from ...enrichment.relations_v2.registries import RelationRegistry
+from ...enrichment.relations.registries import RelationRegistry
 from ...enrichment.tags.registries import ClassifierRegistry, TraitRegistry
 
 if TYPE_CHECKING:

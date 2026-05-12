@@ -29,7 +29,7 @@ Derivation strategy
 -------------------
 
 * ``commit_issues``: re-runs the same issue-key regex that
-  :class:`~src.enrichment.relations_v2.implementations.issue_file.IssueFileBuilder`
+  :class:`~src.enrichment.relations.implementations.issue_file.IssueFileBuilder`
   uses (commit-message regex against every known issue key). This is
   the v2 substitute for the legacy ``ProjectLinker``-populated
   ``commit.issues`` list — bare ``issue ↔ commit`` is intentionally
@@ -38,7 +38,7 @@ Derivation strategy
 * ``pr_commits``: walks ``pr.commit_refs`` → :class:`GitHubCommit`
   (via ``graph.github_commits.get(...)``) → ``.sha`` → git
   :class:`Commit` (via ``graph.commits.get(sha)``). Same join the
-  :class:`~src.enrichment.relations_v2.implementations.pr_file.PrFileBuilder`
+  :class:`~src.enrichment.relations.implementations.pr_file.PrFileBuilder`
   performs internally.
 * ``issue_commits``: re-runs the commit-message regex against this
   one issue's ``key`` (inverse of ``commit_issues``).
@@ -71,7 +71,7 @@ def commit_issues(commit: "Commit", graph_data: GraphLike) -> list["Issue"]:
     Replaces the legacy ``commit.issues`` property (which the legacy
     ``ProjectLinker`` populated by scanning commit messages for issue
     keys). The v2 derivation matches the
-    :class:`~src.enrichment.relations_v2.implementations.issue_file.IssueFileBuilder`
+    :class:`~src.enrichment.relations.implementations.issue_file.IssueFileBuilder`
     semantics — case-insensitive ``\\b<key>\\b`` match against every
     known issue key in the loaded graph.
 
@@ -160,7 +160,7 @@ def issue_commits(issue: "Issue", graph_data: GraphLike) -> list["Commit"]:
     every commit message in the loaded graph for ``\\b<issue.key>\\b``
     (case-insensitive). Mirrors :func:`commit_issues` from the other
     side and matches the
-    :class:`~src.enrichment.relations_v2.implementations.issue_file.IssueFileBuilder`
+    :class:`~src.enrichment.relations.implementations.issue_file.IssueFileBuilder`
     semantics.
 
     Returns an empty list when ``issue.key`` is missing or no commits
@@ -192,7 +192,7 @@ def _issue_key_pattern(keys: Iterable[str]) -> "re.Pattern[str] | None":
     if no non-empty keys remain.
 
     Mirrors
-    :func:`src.enrichment.relations_v2.implementations.issue_file._build_issue_pattern`
+    :func:`src.enrichment.relations.implementations.issue_file._build_issue_pattern`
     — kept duplicated rather than imported so the sandbox package
     doesn't reach into builder internals (the helper is a private
     function on the builder module).

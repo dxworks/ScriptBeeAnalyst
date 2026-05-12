@@ -46,7 +46,7 @@ from src.common.kernel import EntityKind
 
 if TYPE_CHECKING:  # forward-only: avoid circular imports at module load
     from src.common.kernel import Graph
-    from src.enrichment.relations_v2 import Relation
+    from src.enrichment.relations import Relation
     from src.enrichment.tags import Classifier, Trait
 
 

@@ -27,7 +27,7 @@ from src.common.domains.jira.models import (
 )
 from src.common.kernel import EntityKind, EntityRef, Graph
 from src.common.people import SourceKind
-from src.enrichment.relations_v2 import Relation, WindowKind
+from src.enrichment.relations import Relation, WindowKind
 from src.enrichment.tags.base import Classifier, Trait, TraitFamily
 from src.sandbox import MCPSandboxView
 

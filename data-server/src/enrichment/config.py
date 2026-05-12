@@ -2,7 +2,7 @@
 
 Mirrors dx's `Initializer` class — a single tunable surface. Values chosen to
 match dx defaults where applicable; callers may override by passing a custom
-EnrichmentConfig to `compute_enrichments`.
+EnrichmentConfig to ``run_pipeline``.
 """
 from __future__ import annotations
 
@@ -52,7 +52,7 @@ BUILD_PATTERNS = [
 
 @dataclass
 class EnrichmentConfig:
-    """All knobs in one place. Adjust then re-run compute_enrichments."""
+    """All knobs in one place. Adjust then re-run ``run_pipeline``."""
 
     # Time windows
     recent_window_days: int = 90

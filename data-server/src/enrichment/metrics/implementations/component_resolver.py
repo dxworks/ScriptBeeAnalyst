@@ -38,7 +38,7 @@ from src.common.domains.components.resolver import (
 )
 from src.common.kernel import EntityKind, EntityRef
 from src.enrichment.metrics import METRICS, Metric, MetricInputs, MetricOutputs
-from src.enrichment.relations_v2 import Relation, WindowKind
+from src.enrichment.relations import Relation, WindowKind
 
 if TYPE_CHECKING:
     from src.common.kernel import Graph

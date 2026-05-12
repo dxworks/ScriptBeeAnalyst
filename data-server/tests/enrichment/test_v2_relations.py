@@ -1,4 +1,4 @@
-"""Chunk-3 tests for :mod:`src.enrichment.relations_v2`.
+"""Chunk-3 tests for :mod:`src.enrichment.relations`.
 
 Covers:
 
@@ -22,7 +22,7 @@ import pytest
 from pydantic import ValidationError
 
 from src.common.kernel import EntityKind, EntityRef
-from src.enrichment.relations_v2 import (
+from src.enrichment.relations import (
     Relation,
     RelationBuilder,
     RelationRegistry,

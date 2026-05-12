@@ -76,7 +76,7 @@ from src.common.people import SourceKind
 from src.common.pickle_store import PickleStore
 from src.config import RECURSION_LIMIT, SUPABASE_SERVICE_KEY, SUPABASE_URL
 from src.enrichment.config import DEFAULT_CONFIG, EnrichmentConfig
-from src.enrichment.v2_pipeline import PipelineResult, run_pipeline
+from src.enrichment.pipeline import PipelineResult, run_pipeline
 from src.logger import get_logger
 
 logger = get_logger("processor")

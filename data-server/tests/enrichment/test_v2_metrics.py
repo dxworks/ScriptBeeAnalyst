@@ -33,7 +33,7 @@ from src.enrichment.metrics import (
     MetricOutputs,
     MetricRegistry,
 )
-from src.enrichment.relations_v2 import Relation, WindowKind
+from src.enrichment.relations import Relation, WindowKind
 from src.enrichment.tags import Trait, TraitFamily
 
 

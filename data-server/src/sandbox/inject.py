@@ -44,7 +44,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Iterator, Optional
 
 from src.common.kernel import EntityKind, EntityRef
-from src.enrichment.relations_v2.models import WindowKind
+from src.enrichment.relations.models import WindowKind
 from src.enrichment.tags.base import Classifier, Tag, Trait
 
 if TYPE_CHECKING:
