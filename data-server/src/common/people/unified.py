@@ -1,0 +1,151 @@
+"""UnifiedUser entity and registry.
+
+See §2.2 + §2.3 of ``architectural_changes.md``.
+
+A :class:`UnifiedUser` ties together the per-source accounts the smart-merge
+UI has confirmed belong to one human. The link is bidirectional and O(1) in
+both directions:
+
+* ``UnifiedUser.account_refs`` (list of :class:`EntityRef`) → resolves to
+  per-source ``Account`` entities through the graph's domain registries.
+* :class:`UnifiedUserRegistry` declares a ``by_account`` index keyed on each
+  entry in ``account_refs`` (multi-key fan-out — see Chunk 1's
+  ``IndexSpec`` key-fn semantics).
+
+Decoupling note
+---------------
+
+The plan §2.2 sketched convenience methods ``git_accounts(graph)``,
+``jira_users(graph)``, ``github_users(graph)`` on :class:`UnifiedUser`.
+Implementing them here would force this module to import domain classes
+(``GitAccount`` from Chunk 4, ``JiraUser`` from Chunk 5, …) and reintroduce
+the very coupling §3 of the plan eliminates. Instead we expose a single
+generic accessor :meth:`UnifiedUser.accounts_of_kind` parameterised by
+:class:`EntityKind`; domain chunks (or the MCP sandbox) can layer thin
+helpers on top if they want the ergonomic names. See the Chunk 2 handoff
+for the suggested helper pattern.
+"""
+from __future__ import annotations
+
+from typing import TYPE_CHECKING, ClassVar, Iterable, List, Optional
+
+from ..kernel import Entity, EntityKind, EntityRef, IndexSpec, Registry
+
+if TYPE_CHECKING:  # forward-only; we never import the domain Account types
+    from ..kernel import Graph
+    from .account import Account
+
+
+class UnifiedUser(Entity):
+    """A merged identity across source-side accounts.
+
+    Attributes
+    ----------
+    display_name:
+        Human-friendly name chosen during smart-merge.
+    primary_email:
+        Most-trusted email (usually the Git one). ``None`` if unknown.
+    account_refs:
+        Per-source account references (kind ∈ ``{GIT_ACCOUNT, JIRA_USER,
+        GITHUB_USER}``). Indexed by :class:`UnifiedUserRegistry`'s
+        ``by_account`` for reverse lookups.
+    """
+
+    kind: ClassVar[EntityKind] = EntityKind.UNIFIED_USER
+
+    display_name: str
+    primary_email: Optional[str] = None
+    account_refs: List[EntityRef] = []
+
+    # ------------------------------------------------------------------
+    # Generic, domain-free accessors. Keep this list short on purpose —
+    # convenience helpers (``git_accounts`` etc.) belong in the per-domain
+    # modules or the MCP sandbox, not here. See module docstring.
+    # ------------------------------------------------------------------
+    def accounts(self, graph: "Graph") -> list["Account"]:
+        """Resolve every account_ref through ``graph``.
+
+        Returns the concrete subclasses (``GitAccount`` / ``JiraUser`` /
+        ``GitHubUser`` once those chunks land); ``Account`` here is only a
+        type hint to keep this module domain-free.
+        """
+        resolved: list["Account"] = []
+        for ref in self.account_refs:
+            entity = graph.resolve(ref)
+            if entity is not None:
+                resolved.append(entity)  # type: ignore[arg-type]
+        return resolved
+
+    def accounts_of_kind(
+        self, graph: "Graph", kind: EntityKind
+    ) -> list["Account"]:
+        """Resolve only the account_refs of a given :class:`EntityKind`.
+
+        Use this instead of the per-domain helpers the plan sketched
+        (``git_accounts`` / ``jira_users`` / ``github_users``). Example::
+
+            git_accounts = uu.accounts_of_kind(graph, EntityKind.GIT_ACCOUNT)
+        """
+        resolved: list["Account"] = []
+        for ref in self.account_refs:
+            if ref.kind != kind:
+                continue
+            entity = graph.resolve(ref)
+            if entity is not None:
+                resolved.append(entity)  # type: ignore[arg-type]
+        return resolved
+
+
+def _unified_by_account_keys(u: UnifiedUser) -> Iterable[EntityRef]:
+    """Index key-fn: fan out across every entry in ``account_refs``.
+
+    Chunk 1's ``_normalize_keys`` (``index.py``) special-cases ``BaseModel``
+    as a *single* hashable composite key (good — EntityRef is hashable).
+    Returning a plain ``list[EntityRef]`` hits the iterable branch and
+    fans out — one bucket per account ref, exactly what §2.3 wants.
+    """
+    return u.account_refs
+
+
+class UnifiedUserRegistry(Registry[UnifiedUser, str]):
+    """Registry of :class:`UnifiedUser` with a reverse-lookup index.
+
+    The ``by_account`` index makes "which UnifiedUser owns this source
+    account?" an O(1) lookup. Concrete convenience method
+    :meth:`for_account` wraps that index so Chunk 7 (smart-merge UI) and
+    Chunk 9 (relation builder) don't need to know the index name.
+    """
+
+    indexes = [
+        IndexSpec(
+            name="by_account",
+            key_fn=_unified_by_account_keys,
+            multi=True,
+        ),
+    ]
+
+    def get_id(self, entity: UnifiedUser) -> str:
+        return entity.id
+
+    # ------------------------------------------------------------------
+    # Domain-facing convenience
+    # ------------------------------------------------------------------
+    def for_account(self, account_ref: EntityRef) -> Optional[UnifiedUser]:
+        """Return the unique :class:`UnifiedUser` that owns ``account_ref``.
+
+        Returns ``None`` if no UnifiedUser has been merged yet for that
+        account. Returns the first match if (incorrectly) multiple users
+        claim the same account — the smart-merge UI is responsible for
+        keeping that invariant; the registry won't enforce it here so
+        downstream code can detect+repair such states.
+        """
+        bucket = self.by_account[account_ref]  # type: ignore[attr-defined]
+        if not bucket:
+            return None
+        # ``bucket`` is a tuple[UnifiedUser, ...] per kernel multi-index
+        # semantics. We return the first; callers expecting at-most-one
+        # treat it as canonical.
+        return bucket[0]
+
+
+__all__ = ["UnifiedUser", "UnifiedUserRegistry"]
