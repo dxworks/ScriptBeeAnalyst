@@ -23,13 +23,16 @@ the Chunk 4 handoff for the location decision.
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from typing import Any, ClassVar, List, Mapping
+from typing import Any, ClassVar, Iterable, List, Mapping
 
 from pydantic import BaseModel, ConfigDict, Field
 
 from ..kernel import Entity, EntityKind
 from ..people.source import SourceKind
 from ..projects import Project
+
+
+_BUNDLE_PROJECT_KEY = "project"
 
 
 class TransformResult(BaseModel):
@@ -121,6 +124,90 @@ class Transformer(ABC):
         entities. The dispatcher (Chunk 8) is the single chokepoint that
         writes them to registries.
         """
+
+    # ------------------------------------------------------------------
+    # Shared bundle helper (Chunk 4 review item #2 promotion)
+    # ------------------------------------------------------------------
+    @classmethod
+    def collect_bundle(
+        cls,
+        raw: Mapping[str, Any],
+        project_cls: type[Project],
+        bucket_specs: Mapping[str, tuple[EntityKind, type[Entity]]],
+    ) -> "TransformResult":
+        """Validate + regroup a pre-built entity bundle.
+
+        Concrete transformers in every domain accept a Mapping of the
+        form::
+
+            {
+                "project":   <project_cls>(...),       # required
+                "<bucket_a>": Iterable[<entity_cls_a>],   # optional
+                "<bucket_b>": Iterable[<entity_cls_b>],   # optional
+                ...
+            }
+
+        and need the same four checks before they can hand a typed
+        :class:`TransformResult` to the dispatcher:
+
+        1. ``"project"`` key is present.
+        2. its value is an instance of the expected :class:`Project`
+           subclass for this transformer.
+        3. no unknown top-level keys leaked into the bundle.
+        4. every item in every recognized bucket is an instance of the
+           expected :class:`Entity` subclass (no cross-bucket mix-ups).
+
+        ``bucket_specs`` declares each expected bucket — the key is the
+        bundle key (e.g. ``"commits"``), and the value is a
+        ``(EntityKind, EntityClass)`` pair that the helper uses to (a)
+        type-check each item and (b) emit the right :class:`EntityKind`
+        in the result. Every declared bucket is included in the result
+        (with an empty list when absent in the input), so the
+        dispatcher can iterate uniformly.
+
+        Per Chunk 4 handoff item #2, this method replaces the
+        ``_transform_entity_bundle`` skeleton each domain transformer
+        used to clone. Errors mention the *transformer class name* and
+        the *bundle key*, so callers can grep their way back to the
+        bundle they built.
+        """
+        transformer_name = cls.__name__
+        if _BUNDLE_PROJECT_KEY not in raw:
+            raise ValueError(
+                f"{transformer_name}.transform: missing required key "
+                f"{_BUNDLE_PROJECT_KEY!r} in entity bundle"
+            )
+        project = raw[_BUNDLE_PROJECT_KEY]
+        if not isinstance(project, project_cls):
+            raise TypeError(
+                f"{transformer_name}.transform: 'project' must be a "
+                f"{project_cls.__name__}, got {type(project).__name__}"
+            )
+
+        known_keys = {_BUNDLE_PROJECT_KEY, *bucket_specs.keys()}
+        unknown_keys = set(raw) - known_keys
+        if unknown_keys:
+            raise ValueError(
+                f"{transformer_name}.transform: unknown bundle keys "
+                f"{sorted(unknown_keys)}"
+            )
+
+        entities: dict[EntityKind, List[Entity]] = {}
+        for bucket_name, (kind, expected_cls) in bucket_specs.items():
+            raw_bucket: Iterable[Entity] = raw.get(bucket_name, ()) or ()
+            collected: List[Entity] = []
+            for item in raw_bucket:
+                if not isinstance(item, expected_cls):
+                    raise TypeError(
+                        f"{transformer_name}.transform: bucket "
+                        f"{bucket_name!r} contains "
+                        f"{type(item).__name__}, expected "
+                        f"{expected_cls.__name__}"
+                    )
+                collected.append(item)
+            entities[kind] = collected
+
+        return TransformResult(project=project, entities=entities)
 
 
 __all__ = ["Transformer", "TransformResult"]
