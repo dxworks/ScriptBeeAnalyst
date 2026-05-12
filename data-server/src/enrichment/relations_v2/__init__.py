@@ -17,11 +17,13 @@ See §6 of ``architectural_changes.md`` for the design.
 """
 from __future__ import annotations
 
-from .builders import RelationBuilder
+from .builders import BUILDERS, BuilderRegistry, RelationBuilder
 from .models import Relation, RelationExtra, WindowKind
 from .registries import RelationRegistry
 
 __all__ = [
+    "BUILDERS",
+    "BuilderRegistry",
     "Relation",
     "RelationExtra",
     "RelationBuilder",
