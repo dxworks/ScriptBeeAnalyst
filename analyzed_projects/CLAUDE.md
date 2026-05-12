@@ -30,26 +30,35 @@ You have 8 tools from the `scriptbee-data` MCP server:
 ## Quick Reference
 
 ```python
-# Access the three data sources
-git_project    = graph_data['git']     # commits, files, changes, authors
-jira_project   = graph_data['jira']    # issues, statuses, types, users
-github_project = graph_data['github']  # pull requests, users, commits
-unified_users  = graph_data.get('users', [])  # merged identities (after setup)
+# `graph_data` is a single MCPSandboxView over the typed v2 Graph.
+# The four main entity surfaces are exposed directly as registries —
+# no more dict-of-projects.
 
 # Iterate all entities via registries
-for commit in git_project.git_commit_registry.all:
+for commit in graph_data.commits.all():
     print(commit.id[:8], commit.message[:50])
 
 # Lookup by ID
-commit = git_project.git_commit_registry.get_by_id("abc123")
-issue = jira_project.issue_registry.get_by_id("PROJ-42")
-pr = github_project.pull_request_registry.get_by_id(17)
+commit = graph_data.commits.get("abc123")
+issue  = graph_data.issues.get("PROJ-42")
+pr     = graph_data.pull_requests.get("17")     # PR ids are strings in v2
+file   = graph_data.files.get("src/app.py")
 
-# Cross-project navigation
-commit.issues          # JIRA issues linked to this commit
-commit.pull_requests   # GitHub PRs containing this commit
-issue.git_commits      # Git commits mentioning this issue
-pr.git_commits         # Git commits in this PR
+# Cross-entity navigation — entities are sealed data models, so the
+# legacy `commit.issues` shape moved to free helper functions that
+# read off the typed Graph (also pre-injected into the sandbox):
+issues_for_commit   = commit_issues(commit, graph_data)   # was commit.issues
+commits_for_pr      = pr_commits(pr, graph_data)          # was pr.git_commits
+commits_for_issue   = issue_commits(issue, graph_data)    # was issue.git_commits
+
+# Enrichment side — traits / classifiers / relations live in the typed
+# Graph (graph_data.traits / .classifiers / .relations / .components).
+from src.common.kernel import EntityKind, EntityRef
+file_ref = EntityRef(kind=EntityKind.FILE, id="src/app.py")
+tags     = graph_data.tags_for(file_ref)                  # traits + classifiers
+bug_files = graph_data.find_files_with_trait("anomaly.testing.BugMagnet")
+prod_files = graph_data.find_files_with_classifier("role", "production")
+neighbors = graph_data.cochange_neighbors("src/app.py", "lifetime", limit=10)
 ```
 
 ## Detailed Documentation

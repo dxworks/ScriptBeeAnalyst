@@ -48,16 +48,24 @@ mcp = FastMCP(
 async def execute_code(code: str) -> str:
     """Execute Python code against the loaded project's in-memory graph.
 
-    The code runs in a sandbox with `graph_data` dict available:
-      - graph_data['git']    -> GitProject (commits, files, changes, authors)
-      - graph_data['jira']   -> JiraProject (issues, statuses, types, users)
-      - graph_data['github'] -> GitHubProject (pull requests, users, commits)
-      - graph_data['enrichments'] -> Enrichments (classifiers + traits + relations + overviews)
+    The code runs in a sandbox where `graph_data` is an MCPSandboxView
+    over the typed v2 Graph. Direct attribute access exposes:
+      - graph_data.commits        -> CommitRegistry (.all(), .get(id), iter)
+      - graph_data.issues         -> IssueRegistry
+      - graph_data.pull_requests  -> PullRequestRegistry
+      - graph_data.files          -> FileRegistry
+      - graph_data.traits / .classifiers / .relations / .components
+                                  -> the typed enrichment registries
+      - graph_data.<anything else on the typed Graph> via read-through
 
     Pre-injected helpers (no import needed):
-      - find_files_with_trait(trait_name) -> list[str]
-      - cochange_neighbors(file_id, window="lifetime", limit=10) -> list[tuple[str, float]]
-      - overview_as_dict(name) -> dict
+      - commit_issues(commit, graph_data)  -> list[Issue]
+      - pr_commits(pr, graph_data)         -> list[Commit]
+      - issue_commits(issue, graph_data)   -> list[Commit]
+      - find_files_with_trait(trait_name)  -> list[File]
+      - cochange_neighbors(file_id, window="lifetime", limit=None)
+                                           -> list[File]
+      - overview_as_dict(name)             -> dict | None (None for stubs)
 
     Trait, classifier, overview, and relation names are project-versioned —
     call list_metrics() to get the live catalog (no hardcoded list here).
@@ -92,10 +100,12 @@ async def execute_code(code: str) -> str:
 async def generate_plot(code: str) -> str:
     """Execute Python code that generates a matplotlib plot.
 
-    Same sandbox as execute_code (graph_data, enrichments, find_files_with_trait,
-    cochange_neighbors, overview_as_dict), but also has `plt` (matplotlib.pyplot)
-    available. Do NOT call plt.show() or plt.savefig() - the server captures
-    the current figure.
+    Same sandbox as execute_code (`graph_data` is an MCPSandboxView over
+    the typed v2 Graph, plus the same pre-injected helpers:
+    `commit_issues`, `pr_commits`, `issue_commits`, `find_files_with_trait`,
+    `cochange_neighbors`, `overview_as_dict`), and additionally `plt`
+    (matplotlib.pyplot). Do NOT call plt.show() or plt.savefig() — the
+    server captures the current figure.
 
     The resulting plot is saved as a JPEG file and the path is returned.
 

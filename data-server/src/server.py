@@ -45,6 +45,12 @@ from src.graph_store import graph_store
 from src.common.kernel import Graph
 from src.common.pickle_store import PickleStore
 from src import processor as v2_processor
+from src.sandbox import (
+    MCPSandboxView,
+    commit_issues as _sandbox_commit_issues,
+    issue_commits as _sandbox_issue_commits,
+    pr_commits as _sandbox_pr_commits,
+)
 from dataclasses import replace as dc_replace
 
 logger = get_logger("data-server")
@@ -1679,20 +1685,40 @@ async def execute_code(request: CodeRequest):
         sys_stdout = sys.stdout
         sys.stdout = stdout
 
-        # Execute code with limited scope. Chunk 8: also expose the
-        # typed v2 ``graph`` (or ``None`` if no project is loaded) so
-        # MCP sandbox helpers (Chunk 9) and ad-hoc /execute calls can
-        # read the new shape. ``graph_data`` stays around for legacy
-        # snippets that still walk the per-project registries.
+        # Execute code with limited scope. Chunk 9: ``graph_data`` is
+        # now the :class:`MCPSandboxView` wrapping the typed v2 Graph —
+        # this is the post-refactor agent-facing surface (see
+        # ``architectural_changes.md`` §11 and the chunk 9 handoff for
+        # the mapping spec). When no project is loaded, ``graph_data``
+        # is ``None``; the agent docs already cover that case via
+        # ``get_project_status``.
         v2_graph: Optional[Graph] = (
             graph_store.get(current_project_id) if current_project_id else None
         )
+        sandbox_view: Optional[MCPSandboxView] = (
+            MCPSandboxView(v2_graph) if v2_graph is not None else None
+        )
         exec_globals = {
-            "graph_data": graph_data,
-            "graph": v2_graph,
-            "find_files_with_trait": _helper_find_files_with_trait,
-            "cochange_neighbors": _helper_cochange_neighbors,
-            "overview_as_dict": _helper_overview_as_dict,
+            "graph_data": sandbox_view,
+            "graph": v2_graph,  # raw Graph still exposed for power users
+            # Free helpers for the three legacy entity-side navigations
+            # (plan §11 rows 4–6). Same names the legacy sandbox exposed;
+            # the implementations now read off the typed Graph.
+            "commit_issues": _sandbox_commit_issues,
+            "issue_commits": _sandbox_issue_commits,
+            "pr_commits": _sandbox_pr_commits,
+            # Bind the view's per-method helpers as top-level callables
+            # too, so legacy snippets calling ``find_files_with_trait("x")``
+            # without going through ``graph_data.`` still work.
+            "find_files_with_trait": (
+                sandbox_view.find_files_with_trait if sandbox_view else lambda *_a, **_k: []
+            ),
+            "cochange_neighbors": (
+                sandbox_view.cochange_neighbors if sandbox_view else lambda *_a, **_k: []
+            ),
+            "overview_as_dict": (
+                sandbox_view.overview_as_dict if sandbox_view else lambda *_a, **_k: None
+            ),
         }
         exec(code, exec_globals)
 
@@ -1737,15 +1763,34 @@ async def generate_plot(request: CodeRequest):
         sys_stdout = sys.stdout
         sys.stdout = stdout
 
-        # Prepare isolated execution environment. Chunk 8: expose
-        # ``graph`` (typed v2 Graph) alongside the legacy ``graph_data``.
+        # Prepare isolated execution environment. Chunk 9: ``graph_data``
+        # is the :class:`MCPSandboxView` over the v2 Graph (same shape
+        # as /execute — see plan §11 mapping table). Plot helpers
+        # (find_files_with_trait / cochange_neighbors / overview_as_dict)
+        # plus the three entity-side navigators (commit_issues etc.) are
+        # bound here so matplotlib snippets can use them too.
         v2_graph: Optional[Graph] = (
             graph_store.get(current_project_id) if current_project_id else None
         )
+        sandbox_view: Optional[MCPSandboxView] = (
+            MCPSandboxView(v2_graph) if v2_graph is not None else None
+        )
         exec_globals = {
-            "graph_data": graph_data,
+            "graph_data": sandbox_view,
             "graph": v2_graph,
             "plt": plt,
+            "commit_issues": _sandbox_commit_issues,
+            "issue_commits": _sandbox_issue_commits,
+            "pr_commits": _sandbox_pr_commits,
+            "find_files_with_trait": (
+                sandbox_view.find_files_with_trait if sandbox_view else lambda *_a, **_k: []
+            ),
+            "cochange_neighbors": (
+                sandbox_view.cochange_neighbors if sandbox_view else lambda *_a, **_k: []
+            ),
+            "overview_as_dict": (
+                sandbox_view.overview_as_dict if sandbox_view else lambda *_a, **_k: None
+            ),
         }
 
         # Run user code
