@@ -26,12 +26,25 @@ from src.common.author_extractor import extract_all_identities
 from src.smart_merge.engine import AuthorSmartMergeEngine
 from src.smart_merge.supabase_repository import SupabaseSmartMergeRepository
 from src.smart_merge.types import MAX_IDENTITIES_PER_SUGGESTION, RejectedPair, Suggestion, UserMapping
-from src.enrichment import compute_enrichments
+# Chunk 8: legacy enrichment imports are replaced by the v2 pipeline.
+# ``compute_enrichments`` / ``Enrichments`` / ``relations/writer`` /
+# ``overview/writer`` belong to the pre-refactor enrichment layer; in
+# v2 they are subsumed by ``run_pipeline`` over the typed Graph (writes
+# directly into ``graph.relations`` / ``graph.traits`` / etc.).
+#
+# The Supabase enrichment-cache repository is kept around as a legacy
+# module so the smart-merge endpoints that still reference it compile;
+# Chunk 10 deletes the legacy modules and removes the stub fallbacks
+# below. See Chunk 8 handoff "Deferred ports" §enrichment-endpoints for
+# the rationale on why every ``/enrichments/...`` endpoint returns a
+# 501 in this chunk.
 from src.enrichment.config import DEFAULT_CONFIG, EnrichmentConfig
-from src.enrichment.models import Enrichments
-from src.enrichment.relations.writer import to_csv_bytes as relations_to_csv
-from src.enrichment.overview.writer import to_csv_bytes as overview_to_csv
 from src.enrichment.repository import SupabaseEnrichmentRepository
+from src.enrichment.v2_pipeline import PipelineResult, run_pipeline
+from src.graph_store import graph_store
+from src.common.kernel import Graph
+from src.common.pickle_store import PickleStore
+from src import processor as v2_processor
 from dataclasses import replace as dc_replace
 
 logger = get_logger("data-server")
@@ -72,6 +85,32 @@ graph_data = {}
 
 # Serializes full-graph snapshot saves against concurrent mutations.
 _save_lock = threading.Lock()
+
+
+def load_graph_v2_from_disk(project_id: str) -> Optional[Graph]:
+    """Lazily load a typed v2 :class:`Graph` from the local pickle store.
+
+    Chunk 8: every typed registry lives under
+    ``/tmp/pickles/<project_id>/`` as a per-file pickle (see
+    :class:`~src.common.pickle_store.PickleStore`). Returns ``None`` if
+    no on-disk meta.json exists for this project — let the caller fall
+    through to a build trigger or surface a "not built" message.
+    """
+    from src.processor import _project_pickle_dir
+
+    base_dir = _project_pickle_dir(project_id)
+    if not (base_dir / PickleStore.META_FILENAME).exists():
+        return None
+    try:
+        return Graph.lazy(project_id, PickleStore(base_dir))
+    except Exception as exc:  # noqa: BLE001
+        # Per the greenfield rule: bumped schema_version / partial
+        # layout differences surface here. Logging + None signals "user
+        # needs to rebuild" without crashing the load endpoint.
+        logger.warning(
+            f"Graph.lazy failed for {project_id}: {type(exc).__name__}: {exc}"
+        )
+        return None
 
 
 def load_graph_from_supabase(user_id: str, project_id: str):
@@ -218,12 +257,20 @@ current_user_id = None
 
 @app.get("/health")
 async def health_check():
-    """Health check endpoint."""
+    """Health check endpoint.
+
+    Chunk 8: ``loaded_projects`` reports the v2 ``GraphStore``
+    contents. The legacy ``data_loaded`` / ``stats`` block reflects the
+    single in-memory ``graph_data`` dict the legacy smart-merge
+    endpoints still consult; Chunk 10 collapses both into the typed
+    Graph index.
+    """
     return {
         "status": "ok",
         "mode": "standalone",
         "data_loaded": bool(graph_data),
         "current_project_id": current_project_id,
+        "loaded_projects": graph_store.get_all_project_ids(),
         "stats": {
             "git_commits": len(graph_data.get("git", {}).git_commit_registry.all) if graph_data else 0,
             "jira_issues": len(graph_data.get("jira", {}).issue_registry.all) if graph_data else 0,
@@ -333,30 +380,12 @@ async def load_project(project_id: str):
         except Exception as e:
             logger.warning(f"Failed to replay user mappings (non-fatal): {e}")
 
-        # Build (or restore) the enrichment layer. Cache hit on Supabase skips
-        # recompute; fresh compute is persisted for the next load. Non-fatal.
-        try:
-            repo = SupabaseEnrichmentRepository()
-            cached = None
-            try:
-                cached = await asyncio.to_thread(repo.load, project_id)
-            except Exception as e:
-                logger.warning(f"Could not read cached enrichments (will recompute): {e}")
-            if cached is not None:
-                graph_data["enrichments"] = cached
-                logger.info(
-                    f"Restored cached enrichments for {project_id} "
-                    f"(generated_at={cached.generated_at.isoformat()})"
-                )
-            else:
-                fresh = await asyncio.to_thread(compute_enrichments, graph_data)
-                graph_data["enrichments"] = fresh
-                try:
-                    await asyncio.to_thread(repo.save, project_id, fresh)
-                except Exception as e:
-                    logger.warning(f"Failed to persist enrichments (non-fatal): {e}")
-        except Exception as e:
-            logger.warning(f"Failed to compute enrichments (non-fatal): {e}", exc_info=True)
+        # Chunk 8: legacy enrichment-cache path is disabled. The v2 typed
+        # Graph runs the pipeline at build time (``processor.build_graph``)
+        # and persists the resulting registries via :class:`PickleStore`.
+        # TODO chunk 10 cleanup: drop the SupabaseEnrichmentRepository
+        # path entirely once the smart-merge endpoints are ported.
+        pass
 
         unified_users_count = len(graph_data.get("users", []))
 
@@ -388,16 +417,75 @@ async def load_project(project_id: str):
         )
 
 
+@app.post("/projects/{project_id}/build")
+async def build_project(project_id: str):
+    """Build a typed v2 :class:`Graph` for ``project_id``.
+
+    Chunk 8: drives the new processor end-to-end —
+    download → per-source :class:`Transformer` → typed Graph →
+    ``run_pipeline`` → persist. The freshly built Graph lands in
+    :data:`graph_store` keyed by ``project_id``.
+
+    Today the legacy → bundles bridge (``processor._downloaded_files_to_bundles``)
+    raises :class:`NotImplementedError` — the v2 transformers accept
+    only entity bundles and the per-source DTO walks ship in Chunk 10.
+    Calling /build against a real project surfaces that error verbatim
+    so the operator sees what's missing.
+    """
+    try:
+        graph, pipeline_result = await asyncio.to_thread(
+            v2_processor.build_graph, project_id
+        )
+    except NotImplementedError as exc:
+        logger.warning(f"build_graph deferred: {exc}")
+        return JSONResponse(
+            {
+                "error": str(exc),
+                "deferred": True,
+            },
+            status_code=501,
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("build_graph failed")
+        return JSONResponse(
+            {"error": f"build_graph failed: {exc}"},
+            status_code=500,
+        )
+
+    graph_store.set(project_id, graph)
+    return {
+        "project_id": project_id,
+        "schema_version": graph.schema_version,
+        "built_at": graph.built_at.isoformat(),
+        "pipeline": {
+            "builders_run": pipeline_result.builders_run,
+            "metrics_run": pipeline_result.metrics_run,
+            "traits_emitted": pipeline_result.traits_emitted,
+            "classifiers_emitted": pipeline_result.classifiers_emitted,
+            "relations_emitted": pipeline_result.relations_emitted,
+            "errors": [e.model_dump() for e in pipeline_result.errors],
+        },
+    }
+
+
 @app.delete("/projects/{project_id}/unload")
 async def unload_project(project_id: str):
     """
     Unload a project from memory.
 
     If the specified project is currently loaded, clears it from memory.
+    Chunk 8: also drops the typed Graph from :data:`graph_store`.
     """
     global graph_data, current_project_id, current_project_name, current_user_id
 
+    # Drop the typed v2 Graph from the new store (idempotent).
+    graph_store.delete(project_id)
+
     if current_project_id != project_id:
+        # Even if the legacy slot wasn't loaded, we've cleared the typed
+        # Graph above — surface a 200 here would change the contract
+        # vs. legacy callers, so preserve the 400 for the smart-merge
+        # path while keeping the graph_store side idempotent.
         return JSONResponse(
             {"error": f"Project {project_id} is not currently loaded"},
             status_code=400
@@ -1144,11 +1232,17 @@ async def replay_unified_users(project_id: str):
 # Enrichment Endpoints (tags, relations, overview tables)
 # =============================================================================
 
-def _require_enrichments() -> Optional[Enrichments]:
-    """Return loaded Enrichments or None if the graph isn't ready."""
-    if not graph_data:
-        return None
-    return graph_data.get("enrichments")
+def _require_enrichments():
+    """TODO chunk 10/cleanup: legacy ``Enrichments`` model is gone in v2.
+
+    The v2 typed Graph owns ``graph.relations`` / ``graph.traits`` /
+    ``graph.classifiers`` directly; the per-source overview tables are
+    still :class:`NotImplementedError` stubs (Chunk 7 handoff §F /
+    Deferred ports). Endpoints that used to consult the cached
+    ``Enrichments`` payload now consistently return ``None`` here so
+    they emit a 501 / empty-CSV instead of crashing.
+    """
+    return None
 
 
 @app.get("/enrichments/catalog")
@@ -1213,12 +1307,14 @@ async def get_enrichment_relations_csv(kind: str, window: str = "lifetime"):
     if window not in ("lifetime", "recent"):
         return JSONResponse({"error": f"window must be 'lifetime' or 'recent', got {window!r}"}, status_code=400)
 
-    rel_file = enrichments.relation_file(kind, window)
-    if rel_file is None:
-        return JSONResponse({"error": f"Unknown relation kind {kind!r} for window {window!r}"}, status_code=404)
-
+    # TODO chunk 10/cleanup: stream relations from ``graph.relations``
+    # directly. Today the v2 pipeline writes into
+    # :class:`RelationRegistry` but the CSV writer for the new shape is
+    # deferred — we emit an empty CSV header so the endpoint keeps the
+    # legacy contract (downloadable file) without crashing.
+    empty_csv = b"source,target,strength\n"
     return Response(
-        content=relations_to_csv(rel_file),
+        content=empty_csv,
         media_type="text/csv",
         headers={"Content-Disposition": f'attachment; filename="{kind}.{window}.csv"'},
     )
@@ -1231,12 +1327,13 @@ async def get_enrichment_overview_csv(name: str):
     if enrichments is None:
         return JSONResponse({"error": "No enrichments loaded. Load a project first."}, status_code=400)
 
-    table = enrichments.overview(name)
-    if table is None:
-        return JSONResponse({"error": f"Unknown overview table {name!r}"}, status_code=404)
-
+    # TODO chunk 10/cleanup: every legacy overview table is a v2
+    # :class:`NotImplementedError` stub (Chunk 7 §F). Emit an empty CSV
+    # so the endpoint keeps the legacy contract until Chunk 10 ports
+    # the OverviewTableBuilder runners.
+    empty_csv = b""
     return Response(
-        content=overview_to_csv(table),
+        content=empty_csv,
         media_type="text/csv",
         headers={"Content-Disposition": f'attachment; filename="{name}.csv"'},
     )
@@ -1416,45 +1513,21 @@ async def reenrich_project(project_id: str, body: Optional[ReenrichRequest] = No
             status_code=400,
         )
 
-    overrides = (body.overrides if body else None) or {}
-    try:
-        cfg = _merged_enrichment_config(overrides)
-    except ValueError as e:
-        return JSONResponse({"error": str(e)}, status_code=400)
-
-    try:
-        fresh = compute_enrichments(graph_data, cfg)
-    except Exception as e:
-        logger.exception("Re-enrichment failed")
-        return JSONResponse({"error": f"Re-enrichment failed: {e}"}, status_code=500)
-
-    graph_data["enrichments"] = fresh
-
-    persisted = True
-    try:
-        SupabaseEnrichmentRepository().save(project_id, fresh)
-    except Exception as e:
-        logger.warning(f"Failed to persist re-enrichments (non-fatal): {e}")
-        persisted = False
-
-    return {
-        "project_id": project_id,
-        "persisted": persisted,
-        "applied_overrides": overrides,
-        "summary": {
-            "generated_at": fresh.generated_at.isoformat(),
-            "recent_window_days": fresh.recent_window_days,
-            "entity_tags_count": len(fresh.tags_by_entity),
-            "relation_files": [
-                {"kind": r.kind, "window": r.window, "edges": len(r.relations)}
-                for r in fresh.relations
-            ],
-            "overviews": [
-                {"name": o.name, "entity_kind": o.entity_kind, "rows": len(o.rows), "columns": o.columns}
-                for o in fresh.overviews
-            ],
-        },
-    }
+    # TODO chunk 10/cleanup: /reenrich rebuilt the legacy ``Enrichments``
+    # payload by walking every tagger / relation builder / overview
+    # table. In v2 the equivalent is a fresh ``run_pipeline(graph,
+    # cfg)`` on the already-loaded typed Graph — but the pipeline
+    # mutates the graph in place (per its design), so the right
+    # contract is: clear ``graph.relations`` / ``graph.traits`` /
+    # ``graph.classifiers``, re-run. Deferred until Chunk 10's
+    # config-overrides port; today we return 501 so callers don't
+    # silently get stale state.
+    return JSONResponse(
+        {"error": "/reenrich is deferred to Chunk 10. The v2 pipeline "
+                  "runs at build time; rebuild the project to refresh "
+                  "enrichments."},
+        status_code=501,
+    )
 
 
 # Only scalar threshold fields are overridable via `/reenrich`.
@@ -1606,10 +1679,17 @@ async def execute_code(request: CodeRequest):
         sys_stdout = sys.stdout
         sys.stdout = stdout
 
-        # Execute code with limited scope. Enrichment helpers exposed so
-        # agents don't have to walk the Enrichments model manually.
+        # Execute code with limited scope. Chunk 8: also expose the
+        # typed v2 ``graph`` (or ``None`` if no project is loaded) so
+        # MCP sandbox helpers (Chunk 9) and ad-hoc /execute calls can
+        # read the new shape. ``graph_data`` stays around for legacy
+        # snippets that still walk the per-project registries.
+        v2_graph: Optional[Graph] = (
+            graph_store.get(current_project_id) if current_project_id else None
+        )
         exec_globals = {
             "graph_data": graph_data,
+            "graph": v2_graph,
             "find_files_with_trait": _helper_find_files_with_trait,
             "cochange_neighbors": _helper_cochange_neighbors,
             "overview_as_dict": _helper_overview_as_dict,
@@ -1657,9 +1737,14 @@ async def generate_plot(request: CodeRequest):
         sys_stdout = sys.stdout
         sys.stdout = stdout
 
-        # Prepare isolated execution environment
+        # Prepare isolated execution environment. Chunk 8: expose
+        # ``graph`` (typed v2 Graph) alongside the legacy ``graph_data``.
+        v2_graph: Optional[Graph] = (
+            graph_store.get(current_project_id) if current_project_id else None
+        )
         exec_globals = {
             "graph_data": graph_data,
+            "graph": v2_graph,
             "plt": plt,
         }
 

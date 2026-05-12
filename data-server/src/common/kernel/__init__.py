@@ -51,11 +51,19 @@ RegistryCls)``.
 from __future__ import annotations
 
 from .entity import Entity
-from .graph import Graph
 from .index import Index, IndexSpec
 from .kinds import EntityKind
 from .ref import EntityRef
 from .registry import Registry
+
+# ``Graph`` is imported LAST because Chunk-8 wired it to import every typed
+# registry up-front (one per domain). Those domain registries import the
+# kernel surface (``Entity``, ``EntityKind``, ``Registry`` etc.) via the
+# package init — so the kernel-package symbols must be bound before the
+# Graph module load triggers the domain chain. Reordering here keeps the
+# kernel package internally consistent without forcing every registry
+# module to use the per-submodule import form.
+from .graph import Graph  # noqa: E402
 
 __all__ = [
     "Entity",

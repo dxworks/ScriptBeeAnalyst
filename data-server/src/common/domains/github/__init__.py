@@ -22,7 +22,16 @@ from .registries import (
     ReviewCommentRegistry,
     ReviewRegistry,
 )
-from .transformer import GitHubTransformer
+
+
+# Lazy transformer export — see Chunk 8 note in the git/__init__.py twin.
+def __getattr__(name):  # PEP 562
+    if name == "GitHubTransformer":
+        from .transformer import GitHubTransformer
+
+        return GitHubTransformer
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
 
 __all__ = [
     # models

@@ -9,7 +9,16 @@ from .registries import (
     QualityIssueRegistry,
     QualityProjectRegistry,
 )
-from .transformer import QualityTransformer
+
+
+# Lazy transformer export — see Chunk 8 note in the git/__init__.py twin.
+def __getattr__(name):  # PEP 562
+    if name == "QualityTransformer":
+        from .transformer import QualityTransformer
+
+        return QualityTransformer
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
 
 __all__ = [
     # models

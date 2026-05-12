@@ -25,7 +25,22 @@ from .registries import (
     GitProjectRegistry,
     HunkRegistry,
 )
-from .transformer import GitTransformer
+
+
+# Lazy export of the transformer (PEP 562). Chunk 8's typed Graph imports
+# this package's registries during the kernel-package initialization
+# chain; if the transformer were imported eagerly here, that would cycle
+# back through ``common.domains.transformer`` while it's mid-load. The
+# lazy hook keeps ``from src.common.domains.git import GitTransformer``
+# working for tests / external callers without forcing the transformer
+# onto the kernel boot path.
+def __getattr__(name):  # PEP 562
+    if name == "GitTransformer":
+        from .transformer import GitTransformer
+
+        return GitTransformer
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
 
 __all__ = [
     # models

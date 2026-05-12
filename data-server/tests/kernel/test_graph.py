@@ -1,40 +1,58 @@
-"""Graph root sanity: registry_for / resolve / dump+lazy."""
+"""Graph root sanity: registry_for / resolve / dump+lazy.
+
+Updated by Chunk 8 to use the real domain registries (Chunk-2-onwards)
+that the typed Graph fields now hold. The previous custom ``_Person`` +
+``_PersonRegistry`` test fixtures don't fit Pydantic's typed-field
+validation — the registries on Graph are concrete classes, not generic
+``Registry[T, ID]``.
+
+The intent of each test is preserved:
+
+* meta defaults, ``registry_for`` and ``resolve`` happy paths.
+* ``Graph`` accepts a ``LazyRegistryProxy`` in a typed field.
+* ``Graph.dump`` materializes proxies before pickling.
+* ``Graph.lazy`` enforces schema_version.
+
+Chunk 8 ships ``tests/chunk_08/`` with the deeper round-trip tests; this
+file keeps the kernel-level smoke checks targeted at the contract.
+"""
 from __future__ import annotations
 
 from pathlib import Path
-from typing import ClassVar
 
+import pickle
 import pytest
 
-from src.common.kernel import (
-    Entity,
-    EntityKind,
-    EntityRef,
-    Graph,
-    IndexSpec,
-    Registry,
-)
-import pickle
-
+from src.common.domains.git.models import GitAccount, GitProject
+from src.common.domains.git.registries import GitAccountRegistry
+from src.common.kernel import EntityKind, EntityRef, Graph
+from src.common.people import SourceKind
 from src.common.pickle_store import LazyRegistryProxy, PickleStore, lazy_proxy_for
 
 
-class _Person(Entity):
-    kind: ClassVar[EntityKind] = EntityKind.GIT_ACCOUNT
-    name: str
+def _project() -> GitProject:
+    return GitProject(id="p1", name="test", source=SourceKind.GIT)
 
 
-class _PersonRegistry(Registry[_Person, str]):
-    indexes = [IndexSpec(name="by_name", key_fn=lambda p: p.name)]
-
-    def get_id(self, entity: _Person) -> str:
-        return entity.id
-
-
-def _people() -> _PersonRegistry:
-    reg = _PersonRegistry()
-    reg.add(_Person(id="alice", name="Alice"))
-    reg.add(_Person(id="bob", name="Bob"))
+def _people() -> GitAccountRegistry:
+    reg = GitAccountRegistry()
+    proj_ref = _project().ref()
+    reg.add(
+        GitAccount(
+            id="alice",
+            name="Alice",
+            project_ref=proj_ref,
+            email="alice@x",
+        )
+    )
+    reg.add(
+        GitAccount(
+            id="bob",
+            name="Bob",
+            project_ref=proj_ref,
+            email="bob@x",
+        )
+    )
     return reg
 
 
@@ -43,18 +61,23 @@ def test_graph_meta_defaults():
     assert g.schema_version == 2
     assert g.project_id == "p1"
     assert g.built_at is not None
-    assert g.registries == {}
+    # Every typed registry defaults to an empty instance of its concrete class.
+    assert isinstance(g.git_accounts, GitAccountRegistry)
+    assert len(g.git_accounts) == 0
 
 
 def test_registry_for_and_resolve():
-    g = Graph(project_id="p1", registries={EntityKind.GIT_ACCOUNT: _people()})
+    g = Graph(project_id="p1", git_accounts=_people())
 
     reg = g.registry_for(EntityKind.GIT_ACCOUNT)
     assert reg is not None
     assert len(reg) == 2
 
-    # Unknown kind -> None, not KeyError.
-    assert g.registry_for(EntityKind.COMMIT) is None
+    # Unknown kind via a default-empty registry — registry_for still returns
+    # the typed field (it's just empty), not None.
+    commits_reg = g.registry_for(EntityKind.COMMIT)
+    assert commits_reg is not None
+    assert len(commits_reg) == 0
 
     # resolve() routes through the right registry.
     alice = g.resolve(EntityRef(kind=EntityKind.GIT_ACCOUNT, id="alice"))
@@ -67,21 +90,22 @@ def test_registry_for_and_resolve():
 
 def test_graph_rejects_non_registry_values():
     with pytest.raises(Exception):
-        Graph(project_id="p", registries={EntityKind.GIT_ACCOUNT: "not a registry"})
+        Graph(project_id="p", git_accounts="not a registry")
 
 
 def test_graph_accepts_lazy_proxy(tmp_path: Path):
-    """A LazyRegistryProxy must be valid in Graph.registries values."""
+    """A LazyRegistryProxy must be valid in a typed Graph field."""
     reg = _people()
     store = PickleStore(tmp_path)
-    store.write_registry(EntityKind.GIT_ACCOUNT.value, reg)
+    store.write_registry("git_account", reg)
 
-    proxy = LazyRegistryProxy(
+    proxy = lazy_proxy_for(
+        GitAccountRegistry,
         store,
-        EntityKind.GIT_ACCOUNT.value,
-        lambda: store.read_registry(EntityKind.GIT_ACCOUNT.value, _PersonRegistry),
+        "git_account",
+        lambda: store.read_registry("git_account", GitAccountRegistry),
     )
-    g = Graph(project_id="p", registries={EntityKind.GIT_ACCOUNT: proxy})
+    g = Graph(project_id="p", git_accounts=proxy)
     assert proxy.is_loaded is False
 
     # Resolving through the graph triggers the lazy load transparently.
@@ -91,53 +115,56 @@ def test_graph_accepts_lazy_proxy(tmp_path: Path):
 
 
 def test_graph_dump_writes_per_registry_files(tmp_path: Path):
-    g = Graph(
-        project_id="p1",
-        registries={EntityKind.GIT_ACCOUNT: _people()},
-    )
+    g = Graph(project_id="p1", git_accounts=_people())
     store = PickleStore(tmp_path / "store")
     g.dump(store)
 
     # One pickle per registry + meta.json.
-    assert store.path_for(EntityKind.GIT_ACCOUNT.value).exists()
+    assert store.path_for("git_account").exists()
     meta = store.meta_read()
     assert meta is not None
     assert meta["project_id"] == "p1"
     assert meta["schema_version"] == 2
-    assert EntityKind.GIT_ACCOUNT.value in meta["registries"]
+    assert "git_account" in meta["registries"]
+    # Every other typed field is also dumped — even when empty.
+    assert "commit" in meta["registries"]
+    assert "trait" in meta["registries"]
 
 
-def test_graph_lazy_no_registries_yet_returns_empty():
-    """Chunk 1 has no concrete registry bindings — ``lazy`` returns a
-    well-formed Graph with empty ``registries``. Downstream chunks populate
-    it."""
-    g = Graph.lazy("p1", PickleStore("/tmp/does-not-exist"))
+def test_graph_lazy_no_registries_yet_returns_empty(tmp_path: Path):
+    """``Graph.lazy`` with no on-disk payload still builds proxies; reads
+    on missing files return an empty registry of the right class.
+    """
+    store = PickleStore(tmp_path)
+    store.meta_write({"schema_version": 2, "project_id": "p1"})
+    g = Graph.lazy("p1", store)
     assert g.project_id == "p1"
-    assert g.registries == {}
+    # All registries are lazy proxies bound to the right class.
+    assert isinstance(g.git_accounts, GitAccountRegistry)
+    # Materialising a missing-file proxy returns an empty registry.
+    assert len(g.git_accounts) == 0
 
 
 # ---- Required-fix tests --------------------------------------------------
 
 
 def test_graph_dump_with_proxy_writes_real_registry_payload(tmp_path: Path):
-    """Required fix #2: ``Graph.dump`` must materialize proxies before
-    pickling so on-disk files contain the real registry (not a proxy with
-    an unpicklable loader).
+    """``Graph.dump`` must materialize proxies before pickling so on-disk
+    files contain the real registry (not a proxy with an unpicklable
+    loader).
     """
     # Pre-stage a registry on disk and wrap it in a proxy.
     seed_store = PickleStore(tmp_path / "seed")
-    seed_store.write_registry(EntityKind.GIT_ACCOUNT.value, _people())
+    seed_store.write_registry("git_account", _people())
 
     proxy = lazy_proxy_for(
-        _PersonRegistry,
+        GitAccountRegistry,
         seed_store,
-        EntityKind.GIT_ACCOUNT.value,
-        lambda: seed_store.read_registry(
-            EntityKind.GIT_ACCOUNT.value, _PersonRegistry
-        ),
+        "git_account",
+        lambda: seed_store.read_registry("git_account", GitAccountRegistry),
     )
 
-    g = Graph(project_id="p1", registries={EntityKind.GIT_ACCOUNT: proxy})
+    g = Graph(project_id="p1", git_accounts=proxy)
 
     # Dump the graph to a fresh store. This MUST NOT raise even though
     # the proxy's loader is an unpicklable lambda.
@@ -145,50 +172,16 @@ def test_graph_dump_with_proxy_writes_real_registry_payload(tmp_path: Path):
     g.dump(out_store)  # would raise PicklingError before the fix
 
     # The on-disk shape is the real per-registry payload (per §8.1).
-    raw = out_store.read(EntityKind.GIT_ACCOUNT.value)
+    raw = out_store.read("git_account")
     assert raw is not None
     restored = pickle.loads(raw)
-    assert isinstance(restored, _PersonRegistry)
+    assert isinstance(restored, GitAccountRegistry)
     assert not isinstance(restored, LazyRegistryProxy)
     assert restored.ids() == {"alice", "bob"}
 
 
-def test_graph_round_trip_with_named_typed_field(tmp_path: Path):
-    """End-to-end Chunk-2 shape: a custom Graph subclass with a named
-    typed registry field accepts a lazy proxy AND survives dump→reload."""
-    from pydantic import ConfigDict
-
-    class TypedGraph(Graph):
-        # Chunk 2+ will declare each registry as a named field. This test
-        # proves the kernel already supports that pattern.
-        model_config = ConfigDict(arbitrary_types_allowed=True, extra="forbid")
-        git_accounts: _PersonRegistry
-
-    # Stage a registry, build a proxy, drop it into the typed field.
-    seed_store = PickleStore(tmp_path / "seed")
-    seed_store.write_registry(EntityKind.GIT_ACCOUNT.value, _people())
-
-    proxy = lazy_proxy_for(
-        _PersonRegistry,
-        seed_store,
-        EntityKind.GIT_ACCOUNT.value,
-        lambda: seed_store.read_registry(
-            EntityKind.GIT_ACCOUNT.value, _PersonRegistry
-        ),
-    )
-    g = TypedGraph(project_id="p1", git_accounts=proxy)
-
-    # isinstance contract on the typed field.
-    assert isinstance(g.git_accounts, _PersonRegistry)
-    assert proxy.is_loaded is False
-
-    # Functional access works through the proxy.
-    assert g.git_accounts.get("alice").name == "Alice"
-    assert proxy.is_loaded is True
-
-
 def test_graph_lazy_rejects_mismatched_schema_version(tmp_path: Path):
-    """Optional fix #2: ``Graph.lazy`` enforces ``schema_version`` per §8.3."""
+    """``Graph.lazy`` enforces ``schema_version`` per §8.3."""
     store = PickleStore(tmp_path)
     store.meta_write({"schema_version": 999, "project_id": "p1"})
     with pytest.raises(ValueError, match="schema_version"):
@@ -201,3 +194,22 @@ def test_graph_lazy_accepts_matching_schema_version(tmp_path: Path):
     g = Graph.lazy("p1", store)
     assert g.project_id == "p1"
     assert g.schema_version == 2
+
+
+# ---- Legacy ``registries=`` kwarg backwards-compat ----------------------
+
+
+def test_graph_accepts_legacy_registries_kwarg():
+    """The legacy ``registries={EntityKind: reg}`` kwarg fans the dict
+    out into typed fields. This keeps Chunk-1/2 callers compiling.
+    """
+    g = Graph(project_id="p1", registries={EntityKind.GIT_ACCOUNT: _people()})
+    assert len(g.git_accounts) == 2
+    assert g.resolve(EntityRef(kind=EntityKind.GIT_ACCOUNT, id="alice")) is not None
+
+
+def test_graph_registries_property_returns_dict_view():
+    g = Graph(project_id="p1", git_accounts=_people())
+    snapshot = g.registries
+    assert EntityKind.GIT_ACCOUNT in snapshot
+    assert len(snapshot[EntityKind.GIT_ACCOUNT]) == 2

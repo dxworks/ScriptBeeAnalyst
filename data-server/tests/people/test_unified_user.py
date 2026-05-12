@@ -149,13 +149,23 @@ def test_for_account_handles_deleted_account_gracefully():
     """If the account_ref points at a now-deleted account, ``for_account``
     still returns the owning UnifiedUser — the registry doesn't (and
     shouldn't) auto-prune dangling refs. Callers resolve through
-    :meth:`UnifiedUser.accounts` if they want live entities."""
-    # Build the account, register it, hand its ref to a UnifiedUser, then
-    # delete the account. The index keys remain because we keyed on the
-    # ref (a hashable composite), not on the account entity itself.
-    alice_git = _account("alice-git", "alice@example.com")
+    :meth:`UnifiedUser.accounts` if they want live entities.
+
+    Chunk 8 update: the Graph has typed registry fields now, so we use
+    the real :class:`GitAccountRegistry` here. The test still exercises
+    the dangling-ref semantic that matters for UnifiedUser.
+    """
+    from src.common.domains.git.models import GitAccount
+    from src.common.domains.git.registries import GitAccountRegistry
+
+    alice_git = GitAccount(
+        id="alice-git",
+        name="Alice",
+        project_ref=PROJECT_REF,
+        email="alice@example.com",
+    )
     alice_ref = alice_git.ref()
-    accounts = _DummyAccountRegistry()
+    accounts = GitAccountRegistry()
     accounts.add(alice_git)
 
     uu_reg = UnifiedUserRegistry()
@@ -174,10 +184,8 @@ def test_for_account_handles_deleted_account_gracefully():
     # ...and resolving through the graph yields an empty live-account list.
     graph = Graph(
         project_id="p",
-        registries={
-            EntityKind.GIT_ACCOUNT: accounts,
-            EntityKind.UNIFIED_USER: uu_reg,
-        },
+        git_accounts=accounts,
+        unified_users=uu_reg,
     )
     uu = uu_reg.get("uu-1")
     assert uu is not None
@@ -188,9 +196,21 @@ def test_for_account_handles_deleted_account_gracefully():
 
 
 def test_accounts_of_kind_filters_by_entity_kind():
-    """The generic accessor that replaces git_accounts/jira_users/github_users."""
-    alice_git = _account("alice-git", "alice@example.com")
-    accounts = _DummyAccountRegistry()
+    """The generic accessor that replaces git_accounts/jira_users/github_users.
+
+    Chunk 8 update: typed Graph fields — use the real
+    :class:`GitAccountRegistry` for the kind under test.
+    """
+    from src.common.domains.git.models import GitAccount
+    from src.common.domains.git.registries import GitAccountRegistry
+
+    alice_git = GitAccount(
+        id="alice-git",
+        name="Alice",
+        project_ref=PROJECT_REF,
+        email="alice@example.com",
+    )
+    accounts = GitAccountRegistry()
     accounts.add(alice_git)
 
     alice_jira_ref = EntityRef(kind=EntityKind.JIRA_USER, id="alice-jira")
@@ -204,16 +224,14 @@ def test_accounts_of_kind_filters_by_entity_kind():
 
     graph = Graph(
         project_id="p",
-        registries={
-            EntityKind.GIT_ACCOUNT: accounts,
-            EntityKind.UNIFIED_USER: uu_reg,
-        },
+        git_accounts=accounts,
+        unified_users=uu_reg,
     )
 
     git_accounts = uu.accounts_of_kind(graph, EntityKind.GIT_ACCOUNT)
     assert [a.id for a in git_accounts] == ["alice-git"]
 
-    # The jira ref filters in but resolves to None (no Jira registry bound),
-    # so accounts_of_kind drops it.
+    # The jira ref filters in but resolves to None (no Jira registry bound,
+    # so the typed field is the empty default registry).
     jira_users = uu.accounts_of_kind(graph, EntityKind.JIRA_USER)
     assert jira_users == []

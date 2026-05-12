@@ -22,7 +22,16 @@ from .registries import (
     CodeStructureProjectRegistry,
     CodeTypeRegistry,
 )
-from .transformer import CodeStructureTransformer
+
+
+# Lazy transformer export — see Chunk 8 note in the git/__init__.py twin.
+def __getattr__(name):  # PEP 562
+    if name == "CodeStructureTransformer":
+        from .transformer import CodeStructureTransformer
+
+        return CodeStructureTransformer
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
 
 __all__ = [
     # models

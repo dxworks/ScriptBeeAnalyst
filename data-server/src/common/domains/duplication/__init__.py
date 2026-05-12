@@ -13,7 +13,16 @@ from .registries import (
     DuplicationPairRegistry,
     DuplicationProjectRegistry,
 )
-from .transformer import DuplicationTransformer
+
+
+# Lazy transformer export — see Chunk 8 note in the git/__init__.py twin.
+def __getattr__(name):  # PEP 562
+    if name == "DuplicationTransformer":
+        from .transformer import DuplicationTransformer
+
+        return DuplicationTransformer
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
 
 __all__ = [
     # models

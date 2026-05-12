@@ -62,9 +62,26 @@ def test_entity_ref_method_uses_classvar():
 
 
 def test_resolve_through_graph():
-    reg = _PersonRegistry()
-    reg.add(_Person(id="alice", name="Alice"))
-    graph = Graph(project_id="p1", registries={EntityKind.GIT_ACCOUNT: reg})
+    """Chunk 8 update: ``Graph`` now has typed registry fields, so this
+    test uses the real :class:`GitAccountRegistry` rather than the
+    toy ``_PersonRegistry`` (which Pydantic rejects as not-an-instance-of
+    the typed field's class).
+    """
+    from src.common.domains.git.models import GitAccount, GitProject
+    from src.common.domains.git.registries import GitAccountRegistry
+    from src.common.people import SourceKind
+
+    project = GitProject(id="p1", name="t", source=SourceKind.GIT)
+    reg = GitAccountRegistry()
+    reg.add(
+        GitAccount(
+            id="alice",
+            name="Alice",
+            project_ref=project.ref(),
+            email="alice@x",
+        )
+    )
+    graph = Graph(project_id="p1", git_accounts=reg)
 
     ref = EntityRef(kind=EntityKind.GIT_ACCOUNT, id="alice")
     resolved = ref.resolve(graph)
