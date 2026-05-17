@@ -1,24 +1,48 @@
-"""Author classifiers metric — DEFERRED stub.
+"""Author classifiers metric — v2 port.
 
 Port of legacy ``src/enrichment/tagger/author_classifiers.py`` (~76 LOC).
-Emits ``activity`` (active/idle), ``seniority`` (newcomer/established/senior/veteran)
-classifiers per :class:`GitAccount`. Depends on a per-author last-commit
-date roll-up. See handoff §"Deferred ports".
+Emits two classifiers per :class:`GitAccount`:
+
+* ``dimension="activity"``  — ``"active"`` (last commit within the
+  recent window) or ``"idle"``.
+* ``dimension="seniority"`` — ``"newcomer"`` / ``"established"`` /
+  ``"senior"`` / ``"veteran"`` bucketed by the span (in days) between
+  the author's first and last commits.
+
+Reads from the host: ``git_accounts`` (whole registry) + ``commits``
+(``by_author`` index). The recent cutoff comes from
+``graph.recent_cutoff`` when the host carries one, else falls back to
+the latest commit date minus ``cfg.recent_window_days``.
+
+The ``"activity"`` dimension is load-bearing: ``file_trait_utils.active_author_churn``
+filters by ``classifier(dimension="activity", value="active")`` (locked
+in the Chunk-11 handoff §"Decisions" point 6).
 """
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, ClassVar, Iterable
+from datetime import datetime, timedelta
+from typing import TYPE_CHECKING, Any, ClassVar, Iterable, Optional
 
 from src.common.kernel import EntityKind
 from src.enrichment.metrics import METRICS, Metric, MetricInputs, MetricOutputs
+from src.enrichment.recent_window import ensure_aware
 from src.enrichment.tags import Classifier
 
 if TYPE_CHECKING:
     from src.common.kernel import Graph
 
 
+# Legacy defaults (from ``EnrichmentConfig``).
+_DEFAULT_RECENT_WINDOW_DAYS = 90
+_DEFAULT_NEWCOMER_MAX_DAYS = 30
+_DEFAULT_ESTABLISHED_MAX_DAYS = 180
+_DEFAULT_SENIOR_MAX_DAYS = 730
+
+
 @METRICS.register
 class AuthorClassifierMetric(Metric):
+    """Per-author mandatory classifiers: ``activity``, ``seniority``."""
+
     name: ClassVar[str] = "author.classifiers"
     inputs: ClassVar[MetricInputs] = MetricInputs(
         source_kind=EntityKind.GIT_ACCOUNT
@@ -34,10 +58,144 @@ class AuthorClassifierMetric(Metric):
     ]
 
     def compute(self, graph: "Graph", config: Any) -> Iterable[Classifier]:
-        raise NotImplementedError(
-            "AuthorClassifierMetric port deferred — depends on per-author "
-            "first/last commit date aggregation. See Chunk 7 handoff."
+        accounts = _safe_iter(getattr(graph, "git_accounts", None))
+        if not accounts:
+            return
+
+        commits_reg = getattr(graph, "commits", None)
+        if commits_reg is None:
+            return
+
+        by_author = getattr(commits_reg, "by_author", None)
+
+        # Resolve recent cutoff: honour an externally-attached
+        # ``graph.recent_cutoff`` (test stub convention used by the
+        # legacy taggers) when present; otherwise compute from the
+        # latest observed commit anchor minus ``recent_window_days``.
+        cutoff = _resolve_recent_cutoff(graph, commits_reg, config)
+
+        newcomer_max = _config_field(
+            config, "newcomer_max_days", _DEFAULT_NEWCOMER_MAX_DAYS
         )
+        established_max = _config_field(
+            config, "established_max_days", _DEFAULT_ESTABLISHED_MAX_DAYS
+        )
+        senior_max = _config_field(
+            config, "senior_max_days", _DEFAULT_SENIOR_MAX_DAYS
+        )
+
+        for account in accounts:
+            account_ref = account.ref()
+            commits = _commits_for_author(commits_reg, by_author, account_ref)
+            dates: list[datetime] = []
+            for c in commits:
+                d = ensure_aware(getattr(c, "author_date", None))
+                if d is not None:
+                    dates.append(d)
+            if not dates:
+                continue
+            first = min(dates)
+            last = max(dates)
+
+            # activity — active if last commit falls inside recent window
+            if cutoff is None or last >= cutoff:
+                activity_value = "active"
+            else:
+                activity_value = "idle"
+            yield Classifier(
+                id=f"activity:{account_ref.kind.value}/{account.id}",
+                target=account_ref,
+                dimension="activity",
+                value=activity_value,
+            )
+
+            # seniority — span between first and last commit
+            span_days = (last - first).days
+            seniority_value = _seniority_bucket(
+                span_days, newcomer_max, established_max, senior_max
+            )
+            yield Classifier(
+                id=f"seniority:{account_ref.kind.value}/{account.id}",
+                target=account_ref,
+                dimension="seniority",
+                value=seniority_value,
+            )
+
+
+# ----------------------------------------------------------------------
+# Helpers
+# ----------------------------------------------------------------------
+def _safe_iter(reg: Any) -> list[Any]:
+    if reg is None:
+        return []
+    try:
+        return list(reg)
+    except TypeError:
+        return []
+
+
+def _commits_for_author(commits_reg: Any, by_author: Any, account_ref: Any) -> list[Any]:
+    if by_author is not None:
+        return list(by_author[account_ref])
+    return [
+        c for c in commits_reg if getattr(c, "author_ref", None) == account_ref
+    ]
+
+
+def _config_field(config: Any, field: str, default: Any) -> Any:
+    if config is None:
+        return default
+    return getattr(config, field, default)
+
+
+def _resolve_recent_cutoff(graph: Any, commits_reg: Any, config: Any) -> Optional[datetime]:
+    """Reproduce the legacy ``recent_cutoff`` semantics.
+
+    Priority order (matching the established v2 builder pattern):
+
+    1. An explicit ``graph.recent_cutoff`` attribute attached by the
+       caller (used by the legacy test stubs and the production
+       processor when it carries a snapshot anchor).
+    2. ``latest_commit_date(commits) - recent_window_days``.
+    3. ``None`` (no commits — caller treats authors as active).
+    """
+    explicit = getattr(graph, "recent_cutoff", None)
+    if explicit is not None:
+        return ensure_aware(explicit)
+    window_days = _config_field(
+        config, "recent_window_days", _DEFAULT_RECENT_WINDOW_DAYS
+    )
+    latest: Optional[datetime] = None
+    try:
+        for c in commits_reg:
+            d = ensure_aware(
+                getattr(c, "author_date", None)
+                or getattr(c, "committer_date", None)
+            )
+            if d is None:
+                continue
+            if latest is None or d > latest:
+                latest = d
+    except TypeError:
+        return None
+    if latest is None:
+        return None
+    return latest - timedelta(days=window_days)
+
+
+def _seniority_bucket(
+    span_days: int,
+    newcomer_max: int,
+    established_max: int,
+    senior_max: int,
+) -> str:
+    if span_days <= newcomer_max:
+        return "newcomer"
+    if span_days <= established_max:
+        return "established"
+    if span_days <= senior_max:
+        return "senior"
+    return "veteran"
 
 
 __all__ = ["AuthorClassifierMetric"]

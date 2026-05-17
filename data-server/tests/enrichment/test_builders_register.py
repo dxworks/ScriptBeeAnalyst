@@ -35,6 +35,7 @@ _EXPECTED_NAMES = {
     "pr.file",
     "pr.issue",
     "pr.reviewer",
+    "similarity.file_names",  # Chunk 12 — substantively ported.
     # Deferred-stub builders (NotImplementedError in build()).
     "cochange.file_time_windowed",
     "cochange.file_shared_devs",
@@ -45,7 +46,6 @@ _EXPECTED_NAMES = {
     "cochange.component_time_windowed",
     "cochange.author_shared_task_prefixes",
     "cochange.author_time_windowed",
-    "similarity.file_names",
 }
 
 

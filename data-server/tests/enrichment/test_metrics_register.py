@@ -11,20 +11,21 @@ from src.enrichment.metrics import METRICS, Metric, MetricRegistry
 
 
 _EXPECTED_NAMES = {
-    # Substantively-ported metrics.
+    # Substantively-ported metrics (Chunks 7, 11, 12).
     "file.classifiers",
     "commit.classifiers",
+    "commit_task_prefixes",       # Chunk 11
     "component.resolver",
-    # Deferred-stub metrics.
+    "author.classifiers",         # Chunk 12
+    "anomaly.complexity",         # Chunk 12
+    "anomaly.coupling",           # Chunk 12
+    "anomaly.quality_issues",     # Chunk 12
+    # Deferred-stub metrics — flip as Chunks 15 / 16 land.
     "anomaly.cohesion",
-    "anomaly.complexity",
-    "anomaly.coupling",
     "anomaly.knowledge",
-    "anomaly.quality_issues",
     "anomaly.structuring",
     "anomaly.testing",
     "anomaly.timezone",
-    "author.classifiers",
     "issue_pr.classifiers",
     "pr.traits",
 }
@@ -46,10 +47,11 @@ def test_every_registered_class_subclasses_metric() -> None:
         assert issubclass(cls, Metric), cls
 
 
-def test_metric_registry_catalog_size_at_least_14() -> None:
-    """One :class:`Metric` per legacy tagger module + the component resolver.
+def test_metric_registry_catalog_size_at_least_15() -> None:
+    """One :class:`Metric` per legacy tagger module + the component
+    resolver + the Chunk-11 task-prefix classifier.
 
     8 anomaly_*.py + 4 *_classifiers.py + 1 pr_traits.py + 1 component
-    resolver = 14 total. Chunks 8+ may add more.
+    resolver + 1 commit_task_prefixes = 15 total. Later chunks may add more.
     """
-    assert len(METRICS) >= 14
+    assert len(METRICS) >= 15

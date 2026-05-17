@@ -49,6 +49,9 @@ from . import (  # noqa: F401
     duplication_sibling,
 )
 
+# Similarity builders — substantively ported.
+from . import similarity_file_names  # noqa: F401
+
 # Deferred-stub builders (NotImplementedError — see handoff "Deferred ports").
 from . import (  # noqa: F401
     cochange_author_shared_task_prefixes,
@@ -60,7 +63,6 @@ from . import (  # noqa: F401
     cochange_file_shared_devs,
     cochange_file_shared_task_prefixes,
     cochange_file_time_windowed,
-    similarity_file_names,
 )
 
 
