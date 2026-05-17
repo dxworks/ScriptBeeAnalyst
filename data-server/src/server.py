@@ -1,9 +1,6 @@
 import asyncio
 import io
 import sys
-import pickle
-import tempfile
-import threading
 import traceback
 import logging
 from pathlib import Path
@@ -21,11 +18,21 @@ from datetime import datetime
 from supabase import create_client, Client
 from src.config import SUPABASE_URL, SUPABASE_SERVICE_KEY, WORKSPACE_ROOT
 from src.logger import get_logger
-from src.common.unified_author import SourceIdentity, UnifiedUser
-from src.common.author_extractor import extract_all_identities
+# Chunk 19: smart-merge moved off the legacy ``graph_data: dict`` global.
+# ``SourceIdentity`` + ``UnifiedUser`` now live in ``src.smart_merge.identity``
+# (per D5 — internal smart-merge DTOs), and identities are derived from the
+# typed v2 :class:`Graph` via :mod:`src.smart_merge.identity_extractor`.
 from src.smart_merge.engine import AuthorSmartMergeEngine
+from src.smart_merge.identity import SourceIdentity, UnifiedUser
+from src.smart_merge.identity_extractor import extract_all_identities
+from src.smart_merge.state_store import smart_merge_state_store
 from src.smart_merge.supabase_repository import SupabaseSmartMergeRepository
-from src.smart_merge.types import MAX_IDENTITIES_PER_SUGGESTION, RejectedPair, Suggestion, UserMapping
+from src.smart_merge.types import (
+    MAX_IDENTITIES_PER_SUGGESTION,
+    RejectedPair,
+    Suggestion,
+    UserMapping,
+)
 # The v2 pipeline (``run_pipeline``) writes directly into the typed
 # ``Graph`` (``graph.relations`` / ``graph.traits`` / ``graph.classifiers``).
 # The legacy ``compute_enrichments`` / ``Enrichments`` /
@@ -76,13 +83,6 @@ class RejectSuggestionRequest(BaseModel):
     identity_keys: List[str]
 
 
-# Global graph data - loaded at startup
-graph_data = {}
-
-# Serializes full-graph snapshot saves against concurrent mutations.
-_save_lock = threading.Lock()
-
-
 def load_graph_v2_from_disk(project_id: str) -> Optional[Graph]:
     """Lazily load a typed v2 :class:`Graph` from the local pickle store.
 
@@ -109,66 +109,22 @@ def load_graph_v2_from_disk(project_id: str) -> Optional[Graph]:
         return None
 
 
-def load_graph_from_supabase(user_id: str, project_id: str):
-    """
-    Downloads and loads the project graph from Supabase Storage.
-
-    Args:
-        user_id: User UUID for storage path
-        project_id: Project UUID for storage path
-
-    Returns:
-        Dict with 'git', 'jira', 'github' keys containing project objects
-    """
-    storage_path = f"{user_id}/{project_id}/graph.pkl"
-
-    if not user_id or not project_id:
-        raise ValueError("user_id and project_id are required")
-
-    # Initialize Supabase client with service key (bypasses RLS)
-    supabase: Client = create_client(SUPABASE_URL, SUPABASE_SERVICE_KEY)
-
-    # Download pickle from Supabase Storage
-    try:
-        pickle_bytes = supabase.storage.from_("project-graphs").download(storage_path)
-    except Exception as e:
-        raise FileNotFoundError(f"Failed to download pickle from Supabase: {storage_path}. Error: {e}")
-
-    # Deserialize pickle
-    graph_data = pickle.loads(pickle_bytes)
-
-    # Verify structure
-    if not isinstance(graph_data, dict):
-        raise ValueError("Pickle file does not contain a dict")
-
-    required_keys = {"git", "jira", "github"}
-    missing_keys = required_keys - set(graph_data.keys())
-    if missing_keys:
-        raise ValueError(f"Pickle missing required keys: {missing_keys}")
-
-    graph_data.setdefault("metrics", {"lizard": []})
-    # B2: keep `code_structure` always present (None when no JaFax/CodeFrame
-    # ingest happened) so consumers don't need to check `key in dict`.
-    graph_data.setdefault("code_structure", None)
-    # B3: same convention for DuDe duplication.
-    graph_data.setdefault("duplication", None)
-    # B4: same convention for Insider quality-issues.
-    graph_data.setdefault("quality_issues", None)
-
-    return graph_data
-
-
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Application lifespan manager - server starts with no data loaded."""
-    global graph_data, current_project_id, current_user_id
+    """Application lifespan manager — server starts with no data loaded.
+
+    Chunk 19: the legacy ``graph_data: dict`` global is gone. The v2
+    typed :class:`Graph` lives in ``graph_store``; smart-merge state
+    lives in ``smart_merge_state_store``. Both are wiped on shutdown.
+    """
+    global current_project_id, current_user_id
     logger.info("Data server started on port 8001")
 
     try:
         yield
     finally:
-        if graph_data:
-            graph_data.clear()
+        graph_store.clear()
+        smart_merge_state_store.clear()
         current_project_id = None
         current_user_id = None
         logger.info("Shutdown complete - graph cleared from memory")
@@ -183,44 +139,36 @@ app = FastAPI(
     description="""
 ## Overview
 
-FastAPI backend for ScriptBeeAssistant - dynamically loads project graphs from Supabase Storage
-into memory. Graphs are built separately by processor.py background service.
+FastAPI backend for ScriptBeeAssistant. Loads typed v2 :class:`Graph`
+instances per `project_id` via the ``/projects/{id}/build`` flow and
+exposes query endpoints over them.
 
-**No authentication required** - this is a standalone development server.
+**No authentication required** — this is a standalone development server.
 
 ## Graph Data Structure
 
-The `graph_data` variable available in execute/plot endpoints contains:
+The `graph_data` variable available in /execute and /plot endpoints is
+an :class:`MCPSandboxView` wrapping the loaded typed :class:`Graph`. Read
+typed registries directly:
 
 ```python
-graph_data = {
-    "git": GitProject,      # Commits, files, changes, authors
-    "jira": JiraProject,    # Issues, statuses, types, users
-    "github": GitHubProject # Pull requests, commits, users
-}
+print(len(graph_data.commits))
+print(graph_data.git_accounts.all())
+print(graph_data.issues.by_assignee[user_ref])
 ```
-
-### Key Registries
-
-- `graph_data['git'].git_commit_registry.all` - List of all Git commits
-- `graph_data['git'].account_registry.all` - List of all Git authors
-- `graph_data['jira'].issue_registry.all` - List of all JIRA issues
-- `graph_data['github'].pull_request_registry.all` - List of all PRs
-- `graph_data['users']` - List of UnifiedUser objects (cross-source merged identities, after setup)
 
 ## Workflow
 
 1. Upload serialized files via web UI
-2. Processor builds graph and uploads pickle to Supabase Storage
-3. Call `POST /projects/{id}/load` to load project into memory
-4. Call `POST /execute` to run Python queries
-5. Call `POST /plot` to generate matplotlib visualizations
-6. Call `DELETE /projects/{id}/unload` to free memory
+2. POST `/projects/{id}/build` — builds the typed Graph, runs the pipeline
+3. POST `/execute` — run Python queries against the loaded Graph
+4. POST `/plot` — same shape, returns matplotlib JPEG
+5. DELETE `/projects/{id}/unload` — drop from memory
 
-## Data Source
-
-Pre-built graph pickles in Supabase Storage bucket `project-graphs` at path:
-`{user_id}/{project_id}/graph.pkl`
+Smart-merge endpoints (`/projects/{id}/authors/*`) consume the loaded
+typed Graph, derive `SourceIdentity` instances from
+`graph.git_accounts` / `graph.jira_users` / `graph.github_users`, and
+persist `UnifiedUser` records into Supabase.
     """,
     version="1.0.0",
     lifespan=lifespan,
@@ -245,172 +193,180 @@ app.add_middleware(
 # Endpoints
 # =============================================================================
 
-# Track currently loaded project
+# Track currently loaded project (kept module-level for the /execute /
+# /plot handlers' "which project's Graph do I expose?" lookup, and for
+# /projects/current). Set on /load and /build; cleared on /unload and
+# shutdown.
 current_project_id = None
 current_project_name = None
 current_user_id = None
+
+
+def _stats_for(graph: Optional[Graph], state) -> dict:
+    """Build the per-project stats block used by /health and /projects/current.
+
+    Reads directly off the typed Graph registries; the per-source counts
+    are the same shape the legacy ``graph_data``-backed endpoints
+    surfaced. ``unified_users`` counts the in-memory smart-merge
+    :class:`UnifiedUser` list (replayed from Supabase on /load).
+    """
+    if graph is None:
+        return {
+            "git_commits": 0,
+            "jira_issues": 0,
+            "github_prs": 0,
+            "unified_users": 0,
+        }
+    return {
+        "git_commits": len(graph.commits),
+        "jira_issues": len(graph.issues),
+        "github_prs": len(graph.pull_requests),
+        "unified_users": len(state.users) if state is not None else 0,
+    }
 
 
 @app.get("/health")
 async def health_check():
     """Health check endpoint.
 
-    Chunk 8: ``loaded_projects`` reports the v2 ``GraphStore``
-    contents. The legacy ``data_loaded`` / ``stats`` block reflects the
-    single in-memory ``graph_data`` dict the legacy smart-merge
-    endpoints still consult; Chunk 10 collapses both into the typed
-    Graph index.
+    Chunk 19: ``data_loaded`` now reflects ``graph_store`` (the typed-v2
+    home), and ``stats`` is computed off the loaded Graph rather than
+    the deleted ``graph_data`` dict.
     """
+    graph = (
+        graph_store.get(current_project_id) if current_project_id else None
+    )
+    state = (
+        smart_merge_state_store.get(current_project_id)
+        if current_project_id else None
+    )
     return {
         "status": "ok",
         "mode": "standalone",
-        "data_loaded": bool(graph_data),
+        "data_loaded": graph is not None,
         "current_project_id": current_project_id,
         "loaded_projects": graph_store.get_all_project_ids(),
-        "stats": {
-            "git_commits": len(graph_data.get("git", {}).git_commit_registry.all) if graph_data else 0,
-            "jira_issues": len(graph_data.get("jira", {}).issue_registry.all) if graph_data else 0,
-            "github_prs": len(graph_data.get("github", {}).pull_request_registry.all) if graph_data else 0,
-            "unified_users": len(graph_data.get("users", [])) if graph_data else 0,
-        }
+        "stats": _stats_for(graph, state),
     }
 
 
 @app.get("/projects/current")
 async def get_current_project():
     """Get information about the currently loaded project."""
-    if not graph_data or not current_project_id:
+    graph = (
+        graph_store.get(current_project_id) if current_project_id else None
+    )
+    if graph is None or not current_project_id:
         return JSONResponse(
             {"message": "No project currently loaded"},
             status_code=404
         )
-
+    state = smart_merge_state_store.get(current_project_id)
     return {
         "project_id": current_project_id,
         "project_name": current_project_name,
         "user_id": current_user_id,
-        "stats": {
-            "git_commits": len(graph_data.get("git", {}).git_commit_registry.all) if graph_data else 0,
-            "jira_issues": len(graph_data.get("jira", {}).issue_registry.all) if graph_data else 0,
-            "github_prs": len(graph_data.get("github", {}).pull_request_registry.all) if graph_data else 0,
-            "unified_users": len(graph_data.get("users", [])) if graph_data else 0,
-        }
+        "stats": _stats_for(graph, state),
     }
 
 
 @app.post("/projects/{project_id}/load")
 async def load_project(project_id: str):
-    """
-    Load a specific project's graph into memory.
+    """Load a previously-built v2 :class:`Graph` from the local pickle store.
 
-    - Queries database to get user_id for the project
-    - Downloads pickle from Supabase Storage
-    - Unloads any currently loaded project
-    - Loads new project into memory
+    Chunk 19 rewrite: the v1 pickle-pull from Supabase Storage is gone —
+    the v2 build path (``/projects/{id}/build`` → ``Graph.dump`` to
+    ``/tmp/pickles/<project_id>/``) is the only source of truth for the
+    typed graph.
 
-    Returns project stats on success.
+    Reads:
+    * Project metadata (name, status, user_id) from the ``projects``
+      table.
+    * The typed Graph via :func:`load_graph_v2_from_disk` (or returns
+      404 if no on-disk pickle exists).
+
+    Side effects:
+    * Sets ``graph_store[project_id]``.
+    * Updates ``current_project_id`` / ``current_project_name`` /
+      ``current_user_id``.
+    * Replays persisted user mappings into
+      ``smart_merge_state_store[project_id]``.
     """
-    global graph_data, current_project_id, current_project_name, current_user_id
+    global current_project_id, current_project_name, current_user_id
 
     logger.info(f"Loading project: {project_id}")
 
-    # Initialize Supabase client
     supabase: Client = create_client(SUPABASE_URL, SUPABASE_SERVICE_KEY)
 
-    # Query database to get project info (especially user_id)
-    # Run in a thread so the event loop stays responsive — without this, the
-    # /projects/current poll endpoint stalls for the duration of the load,
-    # and the web UI cannot pick up the loaded state.
     try:
         response = await asyncio.to_thread(
             lambda: supabase.table("projects").select("*").eq("id", project_id).single().execute()
         )
         project = response.data
-
         if not project:
             return JSONResponse(
-                {"error": f"Project {project_id} not found"},
-                status_code=404
+                {"error": f"Project {project_id} not found"}, status_code=404
             )
 
         user_id = project["user_id"]
         project_name = project["name"]
         project_status = project["status"]
 
-        # Check if project is ready
         if project_status != "ready":
             return JSONResponse(
-                {"error": f"Project is not ready (status: {project_status}). Please process the project first."},
-                status_code=400
+                {"error": (
+                    f"Project is not ready (status: {project_status}). "
+                    "Please process the project first."
+                )},
+                status_code=400,
             )
-
     except Exception as e:
         logger.error(f"Failed to fetch project from database: {e}")
         return JSONResponse(
-            {"error": f"Failed to fetch project: {str(e)}"},
-            status_code=500
+            {"error": f"Failed to fetch project: {str(e)}"}, status_code=500
         )
 
-    # Unload current project if any
-    if current_project_id:
-        graph_data.clear()
+    # Drop any previously-loaded project's typed Graph + smart-merge cache.
+    if current_project_id and current_project_id != project_id:
+        graph_store.delete(current_project_id)
+        smart_merge_state_store.delete(current_project_id)
 
-    # Download and load pickle from Supabase Storage.
-    # The download + pickle.loads can take 30-60 s on a 344 MB pickle — run it
-    # in a worker thread so the asyncio loop stays free for /projects/current
-    # polling and other requests.
+    # Pull the typed Graph from the local pickle store.
+    graph = await asyncio.to_thread(load_graph_v2_from_disk, project_id)
+    if graph is None:
+        return JSONResponse(
+            {"error": (
+                f"No built graph found for project {project_id}. "
+                "Run `Build Graph` first."
+            )},
+            status_code=404,
+        )
+
+    graph_store.set(project_id, graph)
+    smart_merge_state_store.reset(project_id)
+
+    current_project_id = project_id
+    current_project_name = project_name
+    current_user_id = user_id
+
+    # Auto-replay persisted user mappings onto the loaded graph.
+    replay_result = {"users_replayed": 0, "identities_matched": 0, "identities_missing": 0}
     try:
-        loaded_graph = await asyncio.to_thread(load_graph_from_supabase, user_id, project_id)
-        graph_data.clear()
-        graph_data.update(loaded_graph)
-        current_project_id = project_id
-        current_project_name = project_name
-        current_user_id = user_id
-
-        logger.info(f"Project {project_id} loaded into memory")
-
-        # Auto-replay persisted user mappings onto the loaded graph
-        replay_result = {"users_replayed": 0, "identities_matched": 0, "identities_missing": 0}
-        try:
-            replay_result = _replay_user_mappings(project_id)
-        except Exception as e:
-            logger.warning(f"Failed to replay user mappings (non-fatal): {e}")
-
-        # Chunk 8: legacy enrichment-cache path is disabled. The v2 typed
-        # Graph runs the pipeline at build time (``processor.build_graph``)
-        # and persists the resulting registries via :class:`PickleStore`.
-        # TODO chunk 10 cleanup: drop the SupabaseEnrichmentRepository
-        # path entirely once the smart-merge endpoints are ported.
-        pass
-
-        unified_users_count = len(graph_data.get("users", []))
-
-        return {
-            "message": "Project loaded successfully",
-            "project_id": project_id,
-            "project_name": project_name,
-            "user_id": user_id,
-            "stats": {
-                "git_commits": len(graph_data.get("git", {}).git_commit_registry.all) if graph_data else 0,
-                "jira_issues": len(graph_data.get("jira", {}).issue_registry.all) if graph_data else 0,
-                "github_prs": len(graph_data.get("github", {}).pull_request_registry.all) if graph_data else 0,
-                "unified_users": unified_users_count,
-            },
-            "replay": replay_result,
-        }
-
-    except FileNotFoundError as e:
-        logger.error(f"Pickle file not found: {e}")
-        return JSONResponse(
-            {"error": str(e)},
-            status_code=404
-        )
+        replay_result = _replay_user_mappings(project_id)
     except Exception as e:
-        logger.error(f"Failed to load project: {e}")
-        return JSONResponse(
-            {"error": f"Failed to load project: {str(e)}"},
-            status_code=500
-        )
+        logger.warning(f"Failed to replay user mappings (non-fatal): {e}")
+
+    state = smart_merge_state_store.get(project_id)
+    logger.info(f"Project {project_id} loaded into memory")
+
+    return {
+        "message": "Project loaded successfully",
+        "project_id": project_id,
+        "project_name": project_name,
+        "user_id": user_id,
+        "stats": _stats_for(graph, state),
+        "replay": replay_result,
+    }
 
 
 @app.post("/projects/{project_id}/build")
@@ -421,13 +377,9 @@ async def build_project(project_id: str):
     download → per-source :class:`Transformer` → typed Graph →
     ``run_pipeline`` → persist. The freshly built Graph lands in
     :data:`graph_store` keyed by ``project_id``.
-
-    Today the legacy → bundles bridge (``processor._downloaded_files_to_bundles``)
-    raises :class:`NotImplementedError` — the v2 transformers accept
-    only entity bundles and the per-source DTO walks ship in Chunk 10.
-    Calling /build against a real project surfaces that error verbatim
-    so the operator sees what's missing.
     """
+    global current_project_id
+
     try:
         graph, pipeline_result = await asyncio.to_thread(
             v2_processor.build_graph, project_id
@@ -435,20 +387,22 @@ async def build_project(project_id: str):
     except NotImplementedError as exc:
         logger.warning(f"build_graph deferred: {exc}")
         return JSONResponse(
-            {
-                "error": str(exc),
-                "deferred": True,
-            },
-            status_code=501,
+            {"error": str(exc), "deferred": True}, status_code=501,
         )
     except Exception as exc:  # noqa: BLE001
         logger.exception("build_graph failed")
         return JSONResponse(
-            {"error": f"build_graph failed: {exc}"},
-            status_code=500,
+            {"error": f"build_graph failed: {exc}"}, status_code=500,
         )
 
     graph_store.set(project_id, graph)
+    # Fresh build invalidates any cached smart-merge state for this project.
+    smart_merge_state_store.reset(project_id)
+
+    # Update the "currently loaded" pointers so /execute against this id
+    # works without an explicit /load round-trip.
+    current_project_id = project_id
+
     return {
         "project_id": project_id,
         "schema_version": graph.schema_version,
@@ -466,46 +420,38 @@ async def build_project(project_id: str):
 
 @app.delete("/projects/{project_id}/unload")
 async def unload_project(project_id: str):
+    """Unload a project's typed Graph + smart-merge state from memory.
+
+    Chunk 19: drops both ``graph_store[project_id]`` AND
+    ``smart_merge_state_store[project_id]``.
     """
-    Unload a project from memory.
+    global current_project_id, current_project_name, current_user_id
 
-    If the specified project is currently loaded, clears it from memory.
-    Chunk 8: also drops the typed Graph from :data:`graph_store`.
-    """
-    global graph_data, current_project_id, current_project_name, current_user_id
+    removed_graph = graph_store.delete(project_id)
+    smart_merge_state_store.delete(project_id)
 
-    # Drop the typed v2 Graph from the new store (idempotent).
-    graph_store.delete(project_id)
+    if current_project_id == project_id:
+        current_project_id = None
+        current_project_name = None
+        current_user_id = None
 
-    if current_project_id != project_id:
-        # Even if the legacy slot wasn't loaded, we've cleared the typed
-        # Graph above — surface a 200 here would change the contract
-        # vs. legacy callers, so preserve the 400 for the smart-merge
-        # path while keeping the graph_store side idempotent.
+    if not removed_graph:
         return JSONResponse(
             {"error": f"Project {project_id} is not currently loaded"},
-            status_code=400
+            status_code=400,
         )
 
-    logger.info(f"Unloading project: {project_id}")
-
-    graph_data.clear()
-    current_project_id = None
-    current_project_name = None
-    current_user_id = None
-
-    logger.info("Project unloaded successfully")
-
+    logger.info(f"Project {project_id} unloaded successfully")
     return {"message": "Project unloaded successfully"}
 
 
 @app.post("/projects/{project_id}/scaffold-workspace")
 async def scaffold_workspace(project_id: str):
-    """
-    Create the per-project workspace folder for AI agent analysis.
+    """Create the per-project workspace folder for AI agent analysis.
 
     Creates a directory under WORKSPACE_ROOT with a README containing
-    project info, stats, and UUID. Also creates outputs/ and scripts/ subdirs.
+    project info, stats, and UUID. Also creates outputs/ and scripts/
+    subdirs.
     """
     supabase: Client = create_client(SUPABASE_URL, SUPABASE_SERVICE_KEY)
 
@@ -526,25 +472,21 @@ async def scaffold_workspace(project_id: str):
 
     workspace_path = Path(WORKSPACE_ROOT) / folder_name
 
-    # Create directory structure
     workspace_path.mkdir(parents=True, exist_ok=True)
     (workspace_path / "outputs").mkdir(exist_ok=True)
     (workspace_path / "scripts").mkdir(exist_ok=True)
 
     # Gather stats if project is loaded
     stats_text = ""
-    if current_project_id == project_id and graph_data:
-        git_commits = len(graph_data.get("git", {}).git_commit_registry.all) if graph_data else 0
-        jira_issues = len(graph_data.get("jira", {}).issue_registry.all) if graph_data else 0
-        github_prs = len(graph_data.get("github", {}).pull_request_registry.all) if graph_data else 0
+    graph = graph_store.get(project_id)
+    if graph is not None:
         stats_text = (
             f"\n## Statistics\n\n"
-            f"- Git commits: {git_commits}\n"
-            f"- JIRA issues: {jira_issues}\n"
-            f"- GitHub PRs: {github_prs}\n"
+            f"- Git commits: {len(graph.commits)}\n"
+            f"- JIRA issues: {len(graph.issues)}\n"
+            f"- GitHub PRs: {len(graph.pull_requests)}\n"
         )
 
-    # Generate README
     readme_content = (
         f"# {project_name}\n\n"
         f"- **Project UUID:** `{project_id}`\n"
@@ -571,75 +513,113 @@ async def scaffold_workspace(project_id: str):
     }
 
 
-
 # =============================================================================
 # Author Smart Merge Endpoints
 # =============================================================================
+#
+# Per Phase-2 decision D5 (architectural_change_followup.md §1) the
+# smart-merge engine takes a typed v2 :class:`Graph` and derives
+# :class:`SourceIdentity` instances from the typed registries
+# (``git_accounts`` / ``jira_users`` / ``github_users``). UnifiedUser
+# records are persisted into Supabase ``unified_users`` /
+# ``user_identity_mappings`` / ``rejected_similarities`` (unchanged).
+#
+# The Phase-1 legacy ``graph_data`` global is GONE — per-project
+# smart-merge state (unified-user list, base-graph cache, last-served
+# suggestions) lives in :mod:`src.smart_merge.state_store` and is keyed
+# by ``project_id``.
 
 def _get_smart_merge_engine() -> AuthorSmartMergeEngine:
     """Create a smart merge engine instance with Supabase persistence."""
     return AuthorSmartMergeEngine(SupabaseSmartMergeRepository())
 
 
-def _invalidate_smart_merge_cache() -> None:
-    """Drop cached base graph and last suggestions after any merge/reject/delete."""
-    graph_data.pop("smart_merge_base_graph", None)
-    graph_data.pop("smart_merge_last_suggestions", None)
+def _require_loaded_graph(project_id: str) -> Graph | JSONResponse:
+    """Return the loaded :class:`Graph` for ``project_id`` or a 400 JSON.
+
+    Smart-merge endpoints used to gate on
+    ``not graph_data or current_project_id != project_id``; the v2
+    equivalent is "is a Graph loaded for this project in
+    ``graph_store``?". Returning a :class:`JSONResponse` lets callers
+    short-circuit with a plain ``isinstance`` check.
+    """
+    graph = graph_store.get(project_id)
+    if graph is None:
+        return JSONResponse(
+            {"error": "Project is not loaded. Load the project first."},
+            status_code=400,
+        )
+    return graph
 
 
-def _get_activity_counts() -> dict[str, int]:
-    """Compute activity counts for all identities in the loaded graph."""
+def _get_activity_counts(graph: Graph) -> dict[str, int]:
+    """Compute activity counts for every identity in the loaded graph.
+
+    Replaces the Phase-1 helper that read off ``graph_data["git"].account_registry``
+    and friends. v2 reads through the typed Graph's secondary indexes
+    (``commits.by_author`` etc.) — those are O(1) bucket lookups so even
+    a few-thousand-account graph is cheap.
+    """
     counts: dict[str, int] = {}
-    git_project = graph_data.get("git")
-    if git_project:
-        for account in git_project.account_registry.all:
-            key = f"git:{account.id}"
-            counts[key] = len(account.commits)
 
-    github_project = graph_data.get("github")
-    if github_project:
-        for user in github_project.git_hub_user_registry.all:
-            key = f"github:{user.url}"
-            total = (
-                len(user.pull_requests_as_creator)
-                + len(user.pull_requests_as_merged_by)
-                + len(user.pull_requests_as_assignee)
-            )
-            counts[key] = total
+    for account in graph.git_accounts.all():
+        key = f"git:{account.id}"
+        counts[key] = len(graph.commits.by_author[account.ref()])
 
-    jira_project = graph_data.get("jira")
-    if jira_project:
-        for user in jira_project.jira_user_registry.all:
-            key = f"jira:{user.link}"
-            total = (
-                len(user.issues_as_reporter)
-                + len(user.issues_as_creator)
-                + len(user.issues_as_assignee)
-            )
-            counts[key] = total
+    for user in graph.github_users.all():
+        key = f"github:{user.id}"
+        # PullRequestRegistry only declares ``by_author``; merged_by /
+        # assignee aggregates would require a scan or new index. The
+        # legacy code summed three lists kept on the GitHubUser entity
+        # itself — those back-pointers are gone in v2, so we approximate
+        # with the indexed ``by_author`` count, which is what the smart-
+        # merge UI primarily sorts on (the most-active account wins the
+        # name/email selection).
+        counts[key] = len(graph.pull_requests.by_author[user.ref()])
+
+    for user in graph.jira_users.all():
+        key = f"jira:{user.id}"
+        # IssueRegistry declares all three: by_reporter / by_creator /
+        # by_assignee. Sum without dedup so we keep parity with the
+        # legacy v1 helper (which also summed three flat lists).
+        user_ref = user.ref()
+        counts[key] = (
+            len(graph.issues.by_reporter[user_ref])
+            + len(graph.issues.by_creator[user_ref])
+            + len(graph.issues.by_assignee[user_ref])
+        )
 
     return counts
 
 
 def _replay_user_mappings(project_id: str) -> dict:
-    """
-    Replay persisted user mappings onto the loaded graph.
-    Called automatically after project load.
+    """Replay persisted Supabase user mappings onto the loaded Graph.
+
+    Called by :func:`load_project` after the typed Graph slot is set.
+    Re-creates the :class:`UnifiedUser` API objects from the persisted
+    ``unified_users`` + ``user_identity_mappings`` rows, binds each to
+    the typed Graph so the per-instance stats accessors resolve live,
+    and stores them in :mod:`smart_merge_state_store`.
     """
     repo = SupabaseSmartMergeRepository()
     mappings = repo.get_user_mappings(project_id)
 
+    state = smart_merge_state_store.reset(project_id)
+
+    graph = graph_store.get(project_id)
+    if graph is None:
+        # Defensive — the only caller is load_project, which sets the
+        # graph before calling here. If this fires, something's racing.
+        return {"users_replayed": 0, "identities_matched": 0, "identities_missing": 0}
+
     if not mappings:
-        graph_data["users"] = []
         return {"users_replayed": 0, "identities_matched": 0, "identities_missing": 0}
 
     users: list[UnifiedUser] = []
     total_matched = 0
     total_missing = 0
 
-    # Build a set of available identity keys from the current graph
-    all_identities = extract_all_identities(graph_data)
-    available_keys = {i.key for i in all_identities}
+    available_keys = {i.key for i in extract_all_identities(graph)}
 
     for mapping in mappings:
         matched_identities = []
@@ -660,10 +640,10 @@ def _replay_user_mappings(project_id: str) -> dict:
             primary_email=mapping.primary_email,
             identities=matched_identities,
         )
-        user.bind_graph(graph_data)
+        user.bind_graph(graph)
         users.append(user)
 
-    graph_data["users"] = users
+    state.users = users
     logger.info(
         f"Replayed {len(users)} unified users "
         f"({total_matched} matched, {total_missing} missing)"
@@ -678,22 +658,20 @@ def _replay_user_mappings(project_id: str) -> dict:
 
 @app.get("/projects/{project_id}/authors/suggestions")
 async def get_author_suggestions(project_id: str):
-    """
-    Compute and return author merge suggestions for the loaded project.
+    """Compute and return author merge suggestions for the loaded project.
 
     Uses the smart merge engine to detect likely duplicate identities
     across Git, GitHub, and JIRA sources.
     """
-    if not graph_data or current_project_id != project_id:
-        return JSONResponse(
-            {"error": "Project is not loaded. Load the project first."},
-            status_code=400,
-        )
+    graph = _require_loaded_graph(project_id)
+    if isinstance(graph, JSONResponse):
+        return graph
 
     try:
-        all_identities = extract_all_identities(graph_data)
-        existing_users: list[UnifiedUser] = graph_data.get("users", [])
-        activity_counts = _get_activity_counts()
+        state = smart_merge_state_store.get(project_id)
+        all_identities = extract_all_identities(graph)
+        existing_users: list[UnifiedUser] = state.users
+        activity_counts = _get_activity_counts(graph)
 
         # Exclude identities already bound to a unified user. Re-scans should
         # only propose merges among the still-unmerged identities — otherwise
@@ -705,9 +683,8 @@ async def get_author_suggestions(project_id: str):
         }
         unmapped_identities = [i for i in all_identities if i.key not in mapped_keys]
 
-        # Invalidate the cached base graph if the unmapped set changed (e.g. a
-        # user was deleted, freeing identities back into the pool).
-        cached_base = graph_data.get("smart_merge_base_graph")
+        # Invalidate the cached base graph if the unmapped set changed.
+        cached_base = state.base_graph
         if cached_base is not None and set(cached_base.nodes.keys()) != {
             i.key for i in unmapped_identities
         }:
@@ -721,10 +698,8 @@ async def get_author_suggestions(project_id: str):
             activity_counts=activity_counts,
             base_graph=cached_base,
         )
-        graph_data["smart_merge_base_graph"] = base_graph
-        graph_data["smart_merge_last_suggestions"] = {
-            s.suggestion_id: s for s in suggestions
-        }
+        state.base_graph = base_graph
+        state.last_suggestions = {s.suggestion_id: s for s in suggestions}
 
         return {
             "suggestions": [s.to_dict(activity_counts) for s in suggestions],
@@ -752,14 +727,12 @@ async def get_suggestion_identities(
     suggestion_id. The UI calls this endpoint to page through clusters
     larger than MAX_IDENTITIES_PER_SUGGESTION.
     """
-    if not graph_data or current_project_id != project_id:
-        return JSONResponse(
-            {"error": "Project is not loaded. Load the project first."},
-            status_code=400,
-        )
+    graph = _require_loaded_graph(project_id)
+    if isinstance(graph, JSONResponse):
+        return graph
 
-    cache: dict[str, Suggestion] = graph_data.get("smart_merge_last_suggestions", {})
-    suggestion = cache.get(suggestion_id)
+    state = smart_merge_state_store.get(project_id)
+    suggestion = state.last_suggestions.get(suggestion_id)
     if suggestion is None:
         return JSONResponse(
             {"error": "Suggestion not found. Recompute suggestions and try again."},
@@ -771,7 +744,7 @@ async def get_suggestion_identities(
     if limit <= 0:
         limit = MAX_IDENTITIES_PER_SUGGESTION
 
-    activity_counts = _get_activity_counts()
+    activity_counts = _get_activity_counts(graph)
     ordered = sorted(
         suggestion.identities,
         key=lambda i: activity_counts.get(i.key, 0),
@@ -799,20 +772,18 @@ async def get_suggestion_identities(
 
 @app.post("/projects/{project_id}/authors/suggestions/apply")
 async def apply_author_suggestion(project_id: str, request: ApplySuggestionRequest):
-    """
-    Apply a merge suggestion: create a UnifiedUser from selected identities.
+    """Apply a merge suggestion: create a UnifiedUser from selected identities.
 
     Optionally rejects unselected identities from the same suggestion.
     """
-    if not graph_data or current_project_id != project_id:
-        return JSONResponse(
-            {"error": "Project is not loaded. Load the project first."},
-            status_code=400,
-        )
+    graph = _require_loaded_graph(project_id)
+    if isinstance(graph, JSONResponse):
+        return graph
 
     try:
+        state = smart_merge_state_store.get(project_id)
         repo = SupabaseSmartMergeRepository()
-        all_identities = extract_all_identities(graph_data)
+        all_identities = extract_all_identities(graph)
         identity_lookup = {i.key: i for i in all_identities}
 
         # Resolve selected identities
@@ -831,13 +802,12 @@ async def apply_author_suggestion(project_id: str, request: ApplySuggestionReque
             )
 
         # Create the unified user
-        from uuid import uuid4
         user = UnifiedUser(
             display_name=request.name,
             primary_email=request.email if request.email != "unknown@unknown" else None,
             identities=selected,
         )
-        user.bind_graph(graph_data)
+        user.bind_graph(graph)
 
         # Persist the mapping
         mapping = UserMapping(
@@ -848,11 +818,9 @@ async def apply_author_suggestion(project_id: str, request: ApplySuggestionReque
         )
         repo.upsert_user_mapping(mapping, project_id)
 
-        # Update in-memory users list
-        existing_users: list[UnifiedUser] = graph_data.get("users", [])
-        existing_users.append(user)
-        graph_data["users"] = existing_users
-        _invalidate_smart_merge_cache()
+        # Update in-memory state
+        state.users.append(user)
+        state.invalidate_cache()
 
         # Handle rejected (unselected) identities
         if request.unselected_identity_keys:
@@ -886,19 +854,17 @@ async def apply_author_suggestion(project_id: str, request: ApplySuggestionReque
 
 @app.post("/projects/{project_id}/authors/suggestions/apply-batch")
 async def apply_author_suggestions_batch(project_id: str):
-    """
-    Bulk-apply every cached suggestion using its default name/email and all identities.
+    """Bulk-apply every cached suggestion using its default name/email and all identities.
 
     Expects the caller to have just fetched suggestions (so the cache is populated).
     Partial failures are reported but do not abort the loop.
     """
-    if not graph_data or current_project_id != project_id:
-        return JSONResponse(
-            {"error": "Project is not loaded. Load the project first."},
-            status_code=400,
-        )
+    graph = _require_loaded_graph(project_id)
+    if isinstance(graph, JSONResponse):
+        return graph
 
-    cache: dict[str, Suggestion] = graph_data.get("smart_merge_last_suggestions", {})
+    state = smart_merge_state_store.get(project_id)
+    cache = state.last_suggestions
     if not cache:
         return JSONResponse(
             {"error": "No cached suggestions. Compute suggestions first."},
@@ -907,7 +873,6 @@ async def apply_author_suggestions_batch(project_id: str):
 
     suggestions = list(cache.values())
     repo = SupabaseSmartMergeRepository()
-    existing_users: list[UnifiedUser] = graph_data.get("users", [])
 
     created_dtos: list[dict] = []
     failures: list[dict] = []
@@ -929,7 +894,7 @@ async def apply_author_suggestions_batch(project_id: str):
                 primary_email=primary_email,
                 identities=list(suggestion.identities),
             )
-            user.bind_graph(graph_data)
+            user.bind_graph(graph)
 
             mapping = UserMapping(
                 unified_user_id=user.id,
@@ -939,7 +904,7 @@ async def apply_author_suggestions_batch(project_id: str):
             )
             repo.upsert_user_mapping(mapping, project_id)
 
-            existing_users.append(user)
+            state.users.append(user)
             created_dtos.append(user.to_dict())
 
         except Exception as e:
@@ -952,8 +917,7 @@ async def apply_author_suggestions_batch(project_id: str):
                 "error": str(e),
             })
 
-    graph_data["users"] = existing_users
-    _invalidate_smart_merge_cache()
+    state.invalidate_cache()
 
     return {
         "created": len(created_dtos),
@@ -964,18 +928,15 @@ async def apply_author_suggestions_batch(project_id: str):
 
 @app.post("/projects/{project_id}/authors/suggestions/reject")
 async def reject_author_suggestion(project_id: str, request: RejectSuggestionRequest):
-    """
-    Reject a merge suggestion: persist rejected pairs so they don't reappear.
-    """
-    if not graph_data or current_project_id != project_id:
-        return JSONResponse(
-            {"error": "Project is not loaded. Load the project first."},
-            status_code=400,
-        )
+    """Reject a merge suggestion: persist rejected pairs so they don't reappear."""
+    graph = _require_loaded_graph(project_id)
+    if isinstance(graph, JSONResponse):
+        return graph
 
     try:
+        state = smart_merge_state_store.get(project_id)
         repo = SupabaseSmartMergeRepository()
-        all_identities = extract_all_identities(graph_data)
+        all_identities = extract_all_identities(graph)
         identity_lookup = {i.key: i for i in all_identities}
 
         identities = [
@@ -1003,7 +964,7 @@ async def reject_author_suggestion(project_id: str, request: RejectSuggestionReq
                 ))
 
         repo.add_rejected_similarities(project_id, pairs)
-        _invalidate_smart_merge_cache()
+        state.invalidate_cache()
 
         return {"ok": True, "rejected_pairs": len(pairs)}
 
@@ -1017,45 +978,39 @@ async def reject_author_suggestion(project_id: str, request: RejectSuggestionReq
 
 @app.get("/projects/{project_id}/authors/users")
 async def get_unified_users(project_id: str):
-    """
-    Get the current list of unified users for a project.
+    """Get the current list of unified users for a project.
+
     Returns both persisted and in-memory state.
     """
-    if not graph_data or current_project_id != project_id:
-        return JSONResponse(
-            {"error": "Project is not loaded. Load the project first."},
-            status_code=400,
-        )
+    graph = _require_loaded_graph(project_id)
+    if isinstance(graph, JSONResponse):
+        return graph
 
-    users: list[UnifiedUser] = graph_data.get("users", [])
+    state = smart_merge_state_store.get(project_id)
     return {
-        "users": [u.to_dict() for u in users],
-        "total": len(users),
+        "users": [u.to_dict() for u in state.users],
+        "total": len(state.users),
     }
 
 
 @app.delete("/projects/{project_id}/authors/users/{unified_user_id}")
 async def delete_unified_user(project_id: str, unified_user_id: str):
-    """
-    Delete a unified user and its identity mappings.
+    """Delete a unified user and its identity mappings.
 
-    Removes the unified user from both database (cascade-deletes identity mappings)
-    and in-memory graph state.
+    Removes the unified user from both database (cascade-deletes identity
+    mappings) and in-memory graph state.
     """
-    if not graph_data or current_project_id != project_id:
-        return JSONResponse(
-            {"error": "Project is not loaded. Load the project first."},
-            status_code=400,
-        )
+    graph = _require_loaded_graph(project_id)
+    if isinstance(graph, JSONResponse):
+        return graph
 
     try:
+        state = smart_merge_state_store.get(project_id)
         repo = SupabaseSmartMergeRepository()
         repo.delete_user_mapping(project_id, unified_user_id)
 
-        # Remove from in-memory users list
-        existing_users: list[UnifiedUser] = graph_data.get("users", [])
-        graph_data["users"] = [u for u in existing_users if u.id != unified_user_id]
-        _invalidate_smart_merge_cache()
+        state.users = [u for u in state.users if u.id != unified_user_id]
+        state.invalidate_cache()
 
         return {"ok": True, "deleted_id": unified_user_id}
 
@@ -1069,36 +1024,30 @@ async def delete_unified_user(project_id: str, unified_user_id: str):
 
 @app.delete("/projects/{project_id}/authors/users")
 async def delete_all_unified_users(project_id: str):
-    """
-    Reset author matching for a project as if it was freshly created.
+    """Reset author matching for a project as if it was freshly created.
 
-    Wipes unified users + identity mappings + rejected-pair history in Supabase,
-    clears the in-memory users list, invalidates the smart-merge cache, and
-    re-saves the on-disk pickle so the snapshot reflects the cleared state.
-    Project files in storage are untouched.
-    """
-    if not graph_data or current_project_id != project_id:
-        return JSONResponse(
-            {"error": "Project is not loaded. Load the project first."},
-            status_code=400,
-        )
+    Wipes unified users + identity mappings + rejected-pair history in
+    Supabase, clears the in-memory users list, and invalidates the
+    smart-merge cache.
 
-    if not current_user_id:
-        return JSONResponse(
-            {"error": "No user context for the loaded project."},
-            status_code=400,
-        )
+    Chunk 19: the Phase-1 ``_persist_project_pickle`` call (which would
+    have raised ``ImportError: upload_pickle_to_supabase``) is gone —
+    v2 persists each typed registry on /build via :meth:`Graph.dump`,
+    and smart-merge state is the Supabase tables themselves. Deleting
+    the rows IS the persistence operation.
+    """
+    graph = _require_loaded_graph(project_id)
+    if isinstance(graph, JSONResponse):
+        return graph
 
     try:
+        state = smart_merge_state_store.get(project_id)
         repo = SupabaseSmartMergeRepository()
         deleted_users = repo.delete_all_user_mappings(project_id)
         deleted_rejected = repo.delete_all_rejected_similarities(project_id)
 
-        graph_data["users"] = []
-        _invalidate_smart_merge_cache()
-
-        with _save_lock:
-            _persist_project_pickle(project_id)
+        state.users = []
+        state.invalidate_cache()
 
         return {
             "ok": True,
@@ -1114,104 +1063,48 @@ async def delete_all_unified_users(project_id: str):
         )
 
 
-def _persist_project_pickle(project_id: str) -> tuple[int, int]:
-    """
-    Snapshot the current in-memory graph (including unified users) to a pickle
-    and upload it to Supabase Storage.
-
-    Returns (size_bytes, user_count). Raises on failure — callers translate to
-    HTTP responses. Caller must hold _save_lock.
-    """
-    from src.processor import upload_pickle_to_supabase
-
-    users: list[UnifiedUser] = graph_data.get("users", [])
-    to_pickle = {
-        "git": graph_data.get("git"),
-        "jira": graph_data.get("jira"),
-        "github": graph_data.get("github"),
-        "users": users,
-    }
-
-    # Break the user -> graph_data back-reference so we don't serialize the
-    # whole live dict (caches, etc.) through the user objects.
-    for user in users:
-        user.bind_graph(None)
-
-    tmp_path: Optional[Path] = None
-    # Large project graphs have deep bidirectional refs (commits <-> parents,
-    # issues <-> PRs <-> commits). Python's default recursion limit of ~1000
-    # isn't enough for pickle to walk them.
-    previous_recursion_limit = sys.getrecursionlimit()
-    try:
-        sys.setrecursionlimit(50000)
-        with tempfile.NamedTemporaryFile(suffix=".pkl", delete=False) as tmp:
-            pickle.dump(to_pickle, tmp, protocol=pickle.HIGHEST_PROTOCOL)
-            tmp_path = Path(tmp.name)
-
-        upload_pickle_to_supabase(tmp_path, current_user_id, project_id)
-        size_bytes = tmp_path.stat().st_size
-        return size_bytes, len(users)
-    finally:
-        sys.setrecursionlimit(previous_recursion_limit)
-        # Always restore live bindings, even on failure.
-        for user in users:
-            user.bind_graph(graph_data)
-        if tmp_path and tmp_path.exists():
-            try:
-                tmp_path.unlink()
-            except Exception as e:
-                logger.warning(f"Failed to remove temp pickle {tmp_path}: {e}")
-
-
 @app.post("/projects/{project_id}/save-graph-state")
 async def save_graph_state(project_id: str):
+    """Snapshot endpoint — preserved for the web-UI smart-merge button.
+
+    Chunk 19: this used to call the dormant ``_persist_project_pickle``
+    (which would have raised ``ImportError: upload_pickle_to_supabase``
+    at runtime since the v2 processor stopped exporting that symbol —
+    flagged in chunk_10_cleanup §H.2). In v2 there is no single
+    ``graph.pkl`` blob to upload: the typed Graph is persisted per
+    registry under ``/tmp/pickles/<project_id>/`` by :meth:`Graph.dump`
+    at build time, and smart-merge state lives in Supabase
+    (``unified_users`` / ``user_identity_mappings`` /
+    ``rejected_similarities``) so each apply / reject / delete call IS
+    the durable write.
+
+    The endpoint stays mounted so the existing UI button doesn't 404; it
+    now returns ``ok`` with the live user count for parity with the v1
+    response shape. If a future need surfaces to dump the typed Graph
+    on demand, call :meth:`Graph.dump` here against a fresh
+    :class:`PickleStore`.
     """
-    Snapshot the current in-memory graph (including unified users) to a pickle
-    and upload it to Supabase Storage, replacing the project's existing pickle.
+    graph = _require_loaded_graph(project_id)
+    if isinstance(graph, JSONResponse):
+        return graph
 
-    The pickle becomes a self-contained state snapshot. Supabase merge tables
-    are left intact so subsequent merges/unmerges continue to work normally.
-    """
-    if not graph_data or current_project_id != project_id:
-        return JSONResponse(
-            {"error": "Project is not loaded. Load the project first."},
-            status_code=400,
-        )
-
-    if not current_user_id:
-        return JSONResponse(
-            {"error": "No user context for the loaded project."},
-            status_code=400,
-        )
-
-    with _save_lock:
-        try:
-            size_bytes, user_count = _persist_project_pickle(project_id)
-        except Exception as e:
-            logger.error(f"Failed to save graph state: {e}", exc_info=True)
-            return JSONResponse(
-                {"error": f"Failed to save graph state: {str(e)}"},
-                status_code=500,
-            )
-
-        return {
-            "ok": True,
-            "size_mb": round(size_bytes / (1024 * 1024), 2),
-            "user_count": user_count,
-        }
+    state = smart_merge_state_store.get(project_id)
+    return {
+        "ok": True,
+        "size_mb": 0.0,  # No upload happens; field preserved for v1 wire compat.
+        "user_count": len(state.users),
+    }
 
 
 @app.post("/projects/{project_id}/authors/users/replay")
 async def replay_unified_users(project_id: str):
-    """
-    Replay persisted user mappings onto the loaded graph.
+    """Replay persisted user mappings onto the loaded graph.
+
     Called automatically on project load, but can be triggered manually.
     """
-    if not graph_data or current_project_id != project_id:
-        return JSONResponse(
-            {"error": "Project is not loaded. Load the project first."},
-            status_code=400,
-        )
+    graph = _require_loaded_graph(project_id)
+    if isinstance(graph, JSONResponse):
+        return graph
 
     try:
         result = _replay_user_mappings(project_id)
@@ -1236,15 +1129,14 @@ async def replay_unified_users(project_id: str):
 
 @app.post("/execute")
 async def execute_code(request: CodeRequest):
-    """
-    Execute arbitrary Python code against the loaded project graph.
+    """Execute arbitrary Python code against the loaded project graph.
 
     **Available variables:**
-    - `graph_data` - Dict with 'git', 'jira', 'github' project objects
+    - `graph_data` — :class:`MCPSandboxView` wrapping the loaded typed Graph
 
     **Example code:**
     ```python
-    commits = graph_data['git'].git_commit_registry.all
+    commits = graph_data.commits.all()
     print(f'Total commits: {len(commits)}')
 
     for commit in commits[:5]:
@@ -1259,12 +1151,7 @@ async def execute_code(request: CodeRequest):
         sys.stdout = stdout
 
         # Execute code with limited scope. Chunk 9: ``graph_data`` is
-        # now the :class:`MCPSandboxView` wrapping the typed v2 Graph —
-        # this is the post-refactor agent-facing surface (see
-        # ``architectural_changes.md`` §11 and the chunk 9 handoff for
-        # the mapping spec). When no project is loaded, ``graph_data``
-        # is ``None``; the agent docs already cover that case via
-        # ``get_project_status``.
+        # now the :class:`MCPSandboxView` wrapping the typed v2 Graph.
         v2_graph: Optional[Graph] = (
             graph_store.get(current_project_id) if current_project_id else None
         )
@@ -1306,42 +1193,20 @@ async def execute_code(request: CodeRequest):
 
 @app.post("/plot")
 async def generate_plot(request: CodeRequest):
-    """
-    Execute Python code that generates a matplotlib plot and return it as a JPEG image.
+    """Execute Python code that generates a matplotlib plot and return
+    it as a JPEG image.
 
     **Available variables:**
-    - `graph_data` - Dict with 'git', 'jira', 'github' project objects
-    - `plt` - matplotlib.pyplot module
-
-    **Example code:**
-    ```python
-    commits = graph_data['git'].git_commit_registry.all
-    authors = {}
-    for c in commits:
-        name = c.author.name if c.author else 'Unknown'
-        authors[name] = authors.get(name, 0) + 1
-
-    top_authors = sorted(authors.items(), key=lambda x: -x[1])[:10]
-    names, counts = zip(*top_authors)
-    plt.barh(names, counts)
-    plt.xlabel('Commits')
-    plt.title('Top 10 Contributors')
-    ```
+    - `graph_data` — :class:`MCPSandboxView` wrapping the loaded typed Graph
+    - `plt` — matplotlib.pyplot module
     """
     code = request.code
     stdout = io.StringIO()
 
     try:
-        # Redirect stdout to capture print output
         sys_stdout = sys.stdout
         sys.stdout = stdout
 
-        # Prepare isolated execution environment. Chunk 9: ``graph_data``
-        # is the :class:`MCPSandboxView` over the v2 Graph (same shape
-        # as /execute — see plan §11 mapping table). Plot helpers
-        # (find_files_with_trait / cochange_neighbors / overview_as_dict)
-        # plus the three entity-side navigators (commit_issues etc.) are
-        # bound here so matplotlib snippets can use them too.
         v2_graph: Optional[Graph] = (
             graph_store.get(current_project_id) if current_project_id else None
         )
@@ -1366,19 +1231,14 @@ async def generate_plot(request: CodeRequest):
             ),
         }
 
-        # Run user code
         exec(code, exec_globals)
 
-        # If the user didn't explicitly save/show, try to get current figure
         fig = plt.gcf()
-
-        # Save figure to memory as JPEG
         img_bytes = io.BytesIO()
         fig.savefig(img_bytes, format="jpg", bbox_inches="tight")
         img_bytes.seek(0)
         plt.close(fig)
 
-        # Return as image
         return Response(content=img_bytes.getvalue(), media_type="image/jpeg")
 
     except Exception:

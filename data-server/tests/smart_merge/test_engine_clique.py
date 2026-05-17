@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from typing import List
 
-from src.common.unified_author import SourceIdentity, UnifiedUser
+from src.smart_merge.identity import SourceIdentity, UnifiedUser
 from src.smart_merge.engine import AuthorSmartMergeEngine
 from src.smart_merge.graph import upsert_node, upsert_undirected_edge
 from src.smart_merge.repository import SmartMergeRepository

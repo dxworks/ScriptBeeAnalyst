@@ -4,7 +4,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Dict, List, Optional
 
-from src.common.unified_author import SourceIdentity
+from src.smart_merge.identity import SourceIdentity
 
 
 class SimilarityType(str, Enum):

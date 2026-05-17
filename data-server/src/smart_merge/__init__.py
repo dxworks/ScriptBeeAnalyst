@@ -1,4 +1,12 @@
 from src.smart_merge.engine import AuthorSmartMergeEngine
+from src.smart_merge.identity import SourceIdentity, UnifiedUser
+from src.smart_merge.identity_extractor import extract_all_identities
 from src.smart_merge.types import Suggestion
 
-__all__ = ["AuthorSmartMergeEngine", "Suggestion"]
+__all__ = [
+    "AuthorSmartMergeEngine",
+    "SourceIdentity",
+    "Suggestion",
+    "UnifiedUser",
+    "extract_all_identities",
+]

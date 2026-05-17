@@ -7,7 +7,7 @@ from __future__ import annotations
 import re
 from typing import Dict, List, Optional, Tuple
 
-from src.common.unified_author import SourceIdentity
+from src.smart_merge.identity import SourceIdentity
 
 GENERIC_EMAIL_DOMAINS = ["github", "users.noreply", "noreply"]
 

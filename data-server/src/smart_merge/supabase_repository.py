@@ -6,7 +6,7 @@ from __future__ import annotations
 
 from typing import Iterable, List
 
-from src.common.unified_author import SourceIdentity
+from src.smart_merge.identity import SourceIdentity
 from src.logger import get_logger
 from src.smart_merge.repository import SmartMergeRepository
 from src.smart_merge.types import RejectedPair, UserMapping

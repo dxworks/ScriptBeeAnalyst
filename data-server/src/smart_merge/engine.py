@@ -10,7 +10,7 @@ from collections import defaultdict
 from typing import Dict, Iterable, List, Optional, Set, Tuple
 from uuid import uuid4
 
-from src.common.unified_author import SourceIdentity
+from src.smart_merge.identity import SourceIdentity
 from src.logger import get_logger
 from src.smart_merge.graph import (
     clone_graph,
