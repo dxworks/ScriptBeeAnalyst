@@ -1,0 +1,99 @@
+{
+  "columns": [
+    "test_file_ratio",
+    "bugfix_commit_ratio",
+    "bugmagnet_files",
+    "test_to_prod_ratio"
+  ],
+  "entity_kind": "component",
+  "name": "testing",
+  "rows": [
+    {
+      "cells": {
+        "bugfix_commit_ratio": {
+          "highlight": null,
+          "lifetime_value": 0.6,
+          "recent_value": 0.6,
+          "trend_percent": 0.0
+        },
+        "bugmagnet_files": {
+          "highlight": null,
+          "lifetime_value": 1,
+          "recent_value": 1,
+          "trend_percent": null
+        },
+        "test_file_ratio": {
+          "highlight": null,
+          "lifetime_value": 0.3333,
+          "recent_value": 0.3333,
+          "trend_percent": null
+        },
+        "test_to_prod_ratio": {
+          "highlight": null,
+          "lifetime_value": 0.5,
+          "recent_value": 0.5,
+          "trend_percent": null
+        }
+      },
+      "entity_id": "(project)"
+    },
+    {
+      "cells": {
+        "bugfix_commit_ratio": {
+          "highlight": null,
+          "lifetime_value": 0.75,
+          "recent_value": 0.75,
+          "trend_percent": 0.0
+        },
+        "bugmagnet_files": {
+          "highlight": null,
+          "lifetime_value": 1,
+          "recent_value": 1,
+          "trend_percent": null
+        },
+        "test_file_ratio": {
+          "highlight": null,
+          "lifetime_value": 0.0,
+          "recent_value": 0.0,
+          "trend_percent": null
+        },
+        "test_to_prod_ratio": {
+          "highlight": null,
+          "lifetime_value": 0.0,
+          "recent_value": 0.0,
+          "trend_percent": null
+        }
+      },
+      "entity_id": "src"
+    },
+    {
+      "cells": {
+        "bugfix_commit_ratio": {
+          "highlight": null,
+          "lifetime_value": 0.0,
+          "recent_value": 0.0,
+          "trend_percent": null
+        },
+        "bugmagnet_files": {
+          "highlight": null,
+          "lifetime_value": 0,
+          "recent_value": 0,
+          "trend_percent": null
+        },
+        "test_file_ratio": {
+          "highlight": null,
+          "lifetime_value": 1.0,
+          "recent_value": 1.0,
+          "trend_percent": null
+        },
+        "test_to_prod_ratio": {
+          "highlight": null,
+          "lifetime_value": null,
+          "recent_value": null,
+          "trend_percent": null
+        }
+      },
+      "entity_id": "tests"
+    }
+  ]
+}

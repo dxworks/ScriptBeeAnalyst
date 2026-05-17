@@ -2,8 +2,9 @@
 
 Covers ``pace``, ``code_quality``, ``knowledge``, and ``pr_lifecycle``.
 The heavy-tier overviews (``components``, ``feature_traceability``,
-``feature_encapsulation``, ``intent_impact``, ``testing``) stay
-NotImplementedError-stubbed and are exercised by Chunk-18.
+``feature_encapsulation``, ``intent_impact``, ``testing``) shipped in
+Chunk-18; the parametrised ``test_heavy_overviews_now_render`` guard
+below asserts they no longer raise :class:`NotImplementedError`.
 
 Each medium-overview test asserts:
 
@@ -60,7 +61,10 @@ UTC = timezone.utc
 
 
 # ----------------------------------------------------------------------
-# Heavy-tier xfail markers — Chunk-18 ships those overviews.
+# Heavy-tier overviews — Chunk-18 ports. The five names below are the
+# overviews previously stubbed as :class:`NotImplementedError`; each now
+# renders an :class:`OverviewTable` with at least the synthetic
+# ``(project)`` aggregate row.
 # ----------------------------------------------------------------------
 HEAVY_NAMES = (
     "components",
@@ -72,13 +76,18 @@ HEAVY_NAMES = (
 
 
 @pytest.mark.parametrize("name", HEAVY_NAMES)
-def test_heavy_overviews_remain_deferred_until_chunk_18(name):
-    """Heavy overviews are still :class:`NotImplementedError` stubs."""
+def test_heavy_overviews_now_render(name):
+    """Each Chunk-18 overview builds without raising and emits ≥1 row."""
     cls = OVERVIEWS.get(name)
     builder = cls()
     graph, _ = build_v2_graph(f"heavy-{name}")
-    with pytest.raises(NotImplementedError):
-        builder.build(graph, EnrichmentConfig())
+    table = builder.build(graph, EnrichmentConfig())
+    assert table.name == name
+    assert len(table.columns) > 0
+    assert len(table.rows) >= 1
+    # The synthetic ``(project)`` row is always emitted on non-empty
+    # graphs and on empty stub hosts alike (mirrors Chunk-17 contract).
+    assert any(r.entity_id == "(project)" for r in table.rows)
 
 
 # ======================================================================
@@ -452,3 +461,139 @@ def test_pr_lifecycle_overview_empty_graph_emits_single_row_with_zeros():
     assert project.entity_id == "(project)"
     assert project.cells["total_prs"].lifetime_value == 0
     assert project.cells["review_turnaround_hours"].lifetime_value is None
+
+
+# ======================================================================
+# Feature traceability + feature encapsulation (Chunk 18) — coverage
+# beyond the parametrised ``test_heavy_overviews_now_render`` smoke.
+# ======================================================================
+def _seed_traceability_graph(name: str):
+    """Two commits, one carrying an issue_file link, the other unlinked."""
+    from src.common.domains.jira.models import (
+        Issue, IssueStatus, IssueType, JiraProject,
+    )
+    from src.enrichment.relations import Relation, WindowKind
+
+    now = datetime.now(UTC)
+    graph, project = build_v2_graph(name)
+    jira_project = JiraProject(
+        id=f"jp:{name}", name=name, source=SourceKind.JIRA,
+    )
+    graph.add_project(jira_project)
+    status = IssueStatus(
+        id=f"is:{name}:open", project_ref=jira_project.ref(),
+        name="Open", category="todo",
+    )
+    type_ = IssueType(
+        id=f"it:{name}:Bug", project_ref=jira_project.ref(), name="Bug",
+    )
+    graph.issue_statuses.add(status)
+    graph.issue_types.add(type_)
+    issue = Issue(
+        id=f"{name}-1", project_ref=jira_project.ref(),
+        key=f"{name}-1", summary="bug",
+        created_at=now - timedelta(days=10),
+        updated_at=now - timedelta(days=5),
+        status_ref=status.ref(), type_ref=type_.ref(),
+    )
+    graph.issues.add(issue)
+
+    alice = make_account("Alice", "a@x", project.ref())
+    graph.git_accounts.add(alice)
+    linked = make_file("src/linked.py", project.ref())
+    unlinked = make_file("src/unlinked.py", project.ref())
+    graph.files.add(linked)
+    graph.files.add(unlinked)
+
+    c_linked = make_commit(
+        f"sha-{name}-l", "linked work", alice,
+        now - timedelta(days=3), project.ref(),
+    )
+    c_unlinked = make_commit(
+        f"sha-{name}-u", "unlinked work", alice,
+        now - timedelta(days=2), project.ref(),
+    )
+    for c in (c_linked, c_unlinked):
+        graph.commits.add(c)
+    add_change(graph, c_linked, linked, added=10)
+    add_change(graph, c_unlinked, unlinked, added=5)
+
+    graph.relations.add(Relation(
+        id=Relation.canonical_id(
+            issue.ref(), linked.ref(), "issue_file", WindowKind.LIFETIME,
+        ),
+        source=issue.ref(),
+        target=linked.ref(),
+        relation_kind="issue_file",
+        window=WindowKind.LIFETIME,
+        strength=1.0,
+    ))
+    return graph, project, now
+
+
+def test_feature_traceability_commits_linked_pct_reflects_relations():
+    from src.enrichment.overviews.implementations.feature_traceability_table import (
+        FeatureTraceabilityTableBuilder,
+    )
+
+    graph, _, _ = _seed_traceability_graph("trace-mix")
+    table = FeatureTraceabilityTableBuilder().build(graph, EnrichmentConfig())
+    project = next(r for r in table.rows if r.entity_id == "(project)")
+    # 1 of 2 commits has an issue link → 50%.
+    assert project.cells["commits_linked_pct"].lifetime_value == 50.0
+    # mean_issues_per_component on the project row = total distinct / components.
+    assert project.cells["mean_issues_per_component"].lifetime_value >= 1
+
+
+def _seed_encapsulation_graph(name: str):
+    """Five files in src/ with one wide+deep commit touching them all."""
+    now = datetime.now(UTC)
+    graph, project = build_v2_graph(name)
+    graph.__dict__["recent_cutoff"] = now - timedelta(days=30)
+
+    alice = make_account("Alice", "a@x", project.ref())
+    graph.git_accounts.add(alice)
+
+    files = []
+    for i in range(5):
+        f = make_file(f"src/file_{i}.py", project.ref())
+        graph.files.add(f)
+        files.append(f)
+
+    wide_commit = make_commit(
+        "wc", "broad sweep", alice,
+        now - timedelta(days=5), project.ref(),
+    )
+    graph.commits.add(wide_commit)
+    for f in files:
+        add_change(graph, wide_commit, f, added=120)
+    return graph, project, now
+
+
+def test_feature_encapsulation_wide_commit_pct_uses_config_threshold():
+    from dataclasses import replace as dc_replace
+
+    from src.enrichment.overviews.implementations.feature_encapsulation_table import (
+        FeatureEncapsulationTableBuilder,
+    )
+
+    graph, _, _ = _seed_encapsulation_graph("encap")
+    # Run pipeline so :class:`ComponentResolverMetric` emits the
+    # ``component_membership`` relations the overview needs.
+    run_pipeline(graph, EnrichmentConfig())
+    cfg = dc_replace(
+        EnrichmentConfig(),
+        feature_encapsulation_wide_files_min=5,
+        feature_encapsulation_deep_churn_min=100,
+    )
+    table = FeatureEncapsulationTableBuilder().build(graph, cfg)
+    by_id = {r.entity_id: r for r in table.rows}
+    assert "(project)" in by_id
+    assert "src" in by_id
+
+    project = by_id["(project)"]
+    # 1 commit, all 5 files → wide, churn 5*120=600 ≥ 100 → deep.
+    assert project.cells["wide_commit_pct"].lifetime_value == 100.0
+    assert project.cells["deep_commit_pct"].lifetime_value == 100.0
+    assert project.cells["commit_count"].lifetime_value == 1
+    assert project.cells["file_count"].lifetime_value == 5

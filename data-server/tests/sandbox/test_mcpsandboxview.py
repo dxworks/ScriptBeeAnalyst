@@ -325,13 +325,15 @@ def test_overview_as_dict_populated_overview_returns_dict(view: MCPSandboxView):
     assert "total_authors" in result["rows"]["(project)"]
 
 
-def test_overview_as_dict_deferred_overview_returns_none(view: MCPSandboxView):
-    # Chunk-18 overviews (``components``, ``feature_traceability``,
-    # ``feature_encapsulation``, ``intent_impact``, ``testing``) still
-    # raise :class:`NotImplementedError`; the view swallows that and
-    # returns ``None`` per the documented fallback.
+def test_overview_as_dict_heavy_overview_now_returns_dict(view: MCPSandboxView):
+    # Chunk-18 ships the five heavy overviews. ``components`` was the
+    # canonical "deferred stub" example through Chunk 17; it now renders
+    # to a populated dict like every other registered overview, with the
+    # synthetic ``(project)`` row in ``result["rows"]``.
     result = view.overview_as_dict("components")
-    assert result is None
+    assert isinstance(result, dict)
+    assert result["name"] == "components"
+    assert "(project)" in result["rows"]
 
 
 def test_overview_as_dict_unknown_name_returns_none(view: MCPSandboxView):
