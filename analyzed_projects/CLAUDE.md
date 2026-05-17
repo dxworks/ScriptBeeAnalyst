@@ -6,18 +6,36 @@ all linked together in an in-memory graph structure.
 
 ## MCP Tools Available
 
-You have 8 tools from the `scriptbee-data` MCP server:
+You have 12 tools from the `scriptbee-data` MCP server. The four
+`list_metrics` / `list_file_metrics` / `get_code_structure_summary` /
+`get_duplication_summary` tools route through `/execute` against
+`MCPSandboxView` (per the Chunk 20 rewrite — the legacy
+`/enrichments/*` REST endpoints were deleted in Chunk 10 and are NOT
+restored). Every tool below is live.
 
 | Tool | Purpose |
 |------|---------|
-| `list_metrics` | Live catalog of every classifier, anomaly trait, relation kind, and overview table — reflects source code, no staleness. Call this once per session before exploring metrics. |
+| `list_metrics` | Live catalog of every Metric: name, family, emits_traits, emits_classifiers, emits_relations, config_fields, plus the registered overview names. Reflects source code, no staleness. Call this once per session before exploring metrics. |
 | `execute_code` | Run Python code against the project graph. Use `print()` for output. |
 | `generate_plot` | Create matplotlib visualizations. `plt` is pre-imported. Don't call `plt.show()`. |
 | `get_project_status` | Check if a project is loaded and get statistics. |
 | `load_project` | Load a project by its UUID (shown in the web UI). |
 | `list_anomalies` | Filter enrichment tags by trait_name and/or entity_kind. |
-| `get_overview_table` | Fetch an overview table by name as parsed CSV rows. |
+| `get_overview_table` | Fetch an overview table by name as parsed CSV rows. All 11 overviews live as of Chunk 18 (see "Live overview tables" below). |
 | `get_relation_edges` | Fetch a relation file as edges, sorted by strength. |
+| `list_file_metrics` | Per-file Lizard rollup (sum_nloc, max_ccn, avg_ccn, function_count, longest_function_nloc), sorted by sum_nloc desc. Empty dict when no Lizard CSV was ingested. |
+| `get_code_structure_summary` | Per-project counts from the JaFax / Codeframe (B2) layer (types, methods, fields, refs). `loaded=False` when no code-structure project exists. |
+| `get_duplication_summary` | Per-project bucket counts (external / sibling / internal) from the DuDe (B3) layer. `loaded=False` when no DuDe ingest happened. |
+| `get_quality_issues_summary` | Insider (B4) code-smell summary (counts, distinct rules, top rules). |
+
+### Live overview tables
+
+All 11 overviews can be fetched via `get_overview_table(name)` or
+`graph_data.overview_as_dict(name)` in `execute_code`:
+
+`authorship`, `code_quality`, `components`, `feature_encapsulation`,
+`feature_traceability`, `intent_impact`, `knowledge`, `nature`,
+`pace`, `pr_lifecycle`, `testing`.
 
 ## Workflow
 

@@ -323,12 +323,27 @@ class MCPSandboxView:
     # ------------------------------------------------------------------
     # Catalog helpers (mapping table rows 12, 13)
     # ------------------------------------------------------------------
-    def list_metrics(self) -> list[str]:
-        """Names of every registered :class:`Metric` subclass.
+    def list_metrics(self) -> list[dict[str, object]]:
+        """Catalog of every registered :class:`Metric` subclass.
 
         Reads the module-level :data:`METRICS` singleton. Side-loads
         ``metrics.implementations`` so the catalog is populated even
         if no caller imported the v2 pipeline yet.
+
+        Each entry::
+
+            {
+              "name":              "<Metric.name>",
+              "family":            "<short module-tail (e.g. 'anomaly_testing')>",
+              "emits_traits":      [...],
+              "emits_classifiers": [...],
+              "emits_relations":   [...],
+              "config_fields":     [...],
+            }
+
+        Replaces the broken ``GET /enrichments/catalog`` REST surface;
+        Chunk 20 wires the MCP ``list_metrics()`` tool through here via
+        ``/execute``. Read-only — never touches registry state.
         """
         # Side-load implementations so the catalog is populated.
         from src.enrichment.metrics import (  # noqa: F401
@@ -336,7 +351,27 @@ class MCPSandboxView:
         )
         from src.enrichment.metrics import METRICS
 
-        return list(METRICS.names())
+        out: list[dict[str, object]] = []
+        for cls in METRICS.all():
+            outputs = getattr(cls, "outputs", None)
+            family = cls.__module__.rsplit(".", 1)[-1]
+            out.append(
+                {
+                    "name": cls.name,
+                    "family": family,
+                    "emits_traits": list(getattr(outputs, "emits_traits", []) or []),
+                    "emits_classifiers": list(
+                        getattr(outputs, "emits_classifiers", []) or []
+                    ),
+                    "emits_relations": list(
+                        getattr(outputs, "emits_relations", []) or []
+                    ),
+                    "config_fields": list(
+                        getattr(cls, "config_fields", []) or []
+                    ),
+                }
+            )
+        return out
 
     def list_overviews(self) -> list[str]:
         """Names of every registered :class:`OverviewTableBuilder`."""
@@ -346,6 +381,220 @@ class MCPSandboxView:
         from src.enrichment.overviews.registries import OVERVIEWS
 
         return list(OVERVIEWS.names())
+
+    # ------------------------------------------------------------------
+    # Per-file Lizard metrics (Chunk 20 — was GET /enrichments/metrics/files)
+    # ------------------------------------------------------------------
+    def list_file_metrics(
+        self,
+        min_loc: float = 0.0,
+        limit: Optional[int] = None,
+        offset: int = 0,
+    ) -> dict[str, object]:
+        """Per-file Lizard complexity rows, sorted by ``sum_nloc`` desc.
+
+        Reads :attr:`Graph.file_metrics` (the Chunk-8
+        :class:`FileMetricRegistry`). One :class:`FileMetric` row exists
+        per ``(file, metric_name)`` pair; this helper pivots them back
+        into the file-level shape the legacy
+        ``GET /enrichments/metrics/files`` payload emitted::
+
+            {
+              "count": <int>,
+              "files": [
+                {
+                  "file_path":             "src/A.java",
+                  "source":                "lizard",
+                  "sum_nloc":              <float|None>,
+                  "max_ccn":               <float|None>,
+                  "avg_ccn":               <float|None>,
+                  "function_count":        <float|None>,
+                  "longest_function_nloc": <float|None>,
+                },
+                ...
+              ],
+            }
+
+        Empty result (``{"count": 0, "files": []}``) when no Lizard CSV
+        was ingested for the loaded project.
+
+        ``min_loc`` filters by ``sum_nloc``; ``limit`` / ``offset``
+        paginate the (post-sort) list. Pagination is honoured because
+        a project with thousands of files would otherwise overrun a
+        single ``/execute`` stdout buffer.
+        """
+        # Pivot one row per file: file_path -> {metric_name: value}, plus a
+        # single ``source`` string per file. Multiple sources on the same
+        # file collapse to the first one observed (Lizard is the only
+        # source today; the loop tolerates future tools.).
+        per_file: dict[str, dict[str, float]] = {}
+        sources: dict[str, str] = {}
+        for fm in self._graph.file_metrics:
+            file_path = fm.file_ref.id
+            bucket = per_file.setdefault(file_path, {})
+            bucket[fm.metric_name] = fm.value
+            sources.setdefault(file_path, fm.source)
+
+        rows: list[dict[str, object]] = []
+        for file_path, metrics in per_file.items():
+            sum_nloc = metrics.get("sum_nloc")
+            if sum_nloc is not None and sum_nloc < min_loc:
+                continue
+            rows.append(
+                {
+                    "file_path": file_path,
+                    "source": sources[file_path],
+                    "sum_nloc": sum_nloc,
+                    "max_ccn": metrics.get("max_ccn"),
+                    "avg_ccn": metrics.get("avg_ccn"),
+                    "function_count": metrics.get("function_count"),
+                    "longest_function_nloc": metrics.get("longest_function_nloc"),
+                }
+            )
+
+        # Sort by sum_nloc desc, ``None``-last for stability.
+        rows.sort(key=lambda r: (r["sum_nloc"] is None, -(r["sum_nloc"] or 0.0)))
+
+        total = len(rows)
+        if offset:
+            rows = rows[offset:]
+        if limit is not None:
+            rows = rows[:limit]
+        return {"count": total, "files": rows}
+
+    # ------------------------------------------------------------------
+    # Code structure summary (Chunk 20 — was GET /enrichments/code-structure/summary)
+    # ------------------------------------------------------------------
+    def code_structure_summary(self) -> dict[str, object]:
+        """Per-project counts from the JaFax / Codeframe (B2) layer.
+
+        Reads :attr:`Graph.code_structure_projects` to discover whether
+        any code-structure ingest happened, plus :attr:`Graph.code_types`
+        / ``.code_methods`` / ``.code_fields`` / ``.code_refs`` to roll
+        the counts up by project.
+
+        Shape::
+
+            {
+              "loaded": <bool>,
+              "source": "jafax" | "codeframe" | None,
+              "projects": [
+                {
+                  "project_id":   "...",
+                  "project_name": "...",
+                  "kind_of_source": "jafax" | "codeframe",
+                  "type_count":   <int>,
+                  "method_count": <int>,
+                  "field_count":  <int>,
+                  "ref_count":    <int>,
+                },
+                ...
+              ],
+            }
+
+        ``loaded=False`` (with ``"projects": []`` and
+        ``"source": None``) when no code-structure project exists.
+        ``source`` is the ``kind_of_source`` of the first project
+        when exactly one is loaded; ``None`` for the multi-project
+        case (caller inspects ``projects[*].kind_of_source``).
+        """
+        projects = self._graph.code_structure_projects.all()
+        if not projects:
+            return {"loaded": False, "source": None, "projects": []}
+
+        types = self._graph.code_types
+        methods = self._graph.code_methods
+        fields = self._graph.code_fields
+        refs = self._graph.code_refs
+
+        rows: list[dict[str, object]] = []
+        for p in projects:
+            p_ref = p.ref()
+            rows.append(
+                {
+                    "project_id": p.id,
+                    "project_name": p.name,
+                    "kind_of_source": p.kind_of_source,
+                    "type_count": len(types.by_project.get(p_ref, ())),
+                    "method_count": len(methods.by_project.get(p_ref, ())),
+                    "field_count": len(fields.by_project.get(p_ref, ())),
+                    "ref_count": len(refs.by_project.get(p_ref, ())),
+                }
+            )
+
+        # ``source`` is a convenience for the common single-project case.
+        canonical = projects[0].kind_of_source if len(projects) == 1 else None
+        return {"loaded": True, "source": canonical, "projects": rows}
+
+    # ------------------------------------------------------------------
+    # Duplication summary (Chunk 20 — was GET /enrichments/duplication/summary)
+    # ------------------------------------------------------------------
+    def duplication_summary(self) -> dict[str, object]:
+        """Per-project counts from the DuDe (B3) layer.
+
+        Reads :attr:`Graph.duplication_projects` and
+        :attr:`Graph.duplications` (the
+        :class:`DuplicationPairRegistry`). Pairs are bucketed by
+        :class:`DuplicationKind` (``external`` / ``sibling`` /
+        ``internal``).
+
+        Shape::
+
+            {
+              "loaded": <bool>,
+              "source": "dude" | None,
+              "projects": [
+                {
+                  "project_id":     "...",
+                  "project_name":   "...",
+                  "external_pairs": <int>,
+                  "sibling_pairs":  <int>,
+                  "internal_pairs": <int>,
+                  "total_pairs":    <int>,
+                },
+                ...
+              ],
+            }
+
+        ``loaded=False`` when no duplication project exists.
+        """
+        from src.common.domains.duplication.models import DuplicationKind
+
+        projects = self._graph.duplication_projects.all()
+        if not projects:
+            return {"loaded": False, "source": None, "projects": []}
+
+        pairs_reg = self._graph.duplications
+        rows: list[dict[str, object]] = []
+        for p in projects:
+            p_ref = p.ref()
+            project_pairs = pairs_reg.by_project.get(p_ref, ())
+            external = sum(
+                1 for pp in project_pairs
+                if pp.duplication_kind is DuplicationKind.EXTERNAL
+            )
+            sibling = sum(
+                1 for pp in project_pairs
+                if pp.duplication_kind is DuplicationKind.SIBLING
+            )
+            internal = sum(
+                1 for pp in project_pairs
+                if pp.duplication_kind is DuplicationKind.INTERNAL
+            )
+            rows.append(
+                {
+                    "project_id": p.id,
+                    "project_name": p.name,
+                    "external_pairs": external,
+                    "sibling_pairs": sibling,
+                    "internal_pairs": internal,
+                    "total_pairs": len(project_pairs),
+                }
+            )
+
+        # All duplication data today comes from DuDe; the field stays a
+        # forward-compatible hatch for future tools.
+        return {"loaded": True, "source": "dude", "projects": rows}
 
     # ------------------------------------------------------------------
     # Iteration / repr — small ergonomics

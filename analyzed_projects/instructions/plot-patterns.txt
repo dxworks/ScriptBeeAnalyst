@@ -109,18 +109,17 @@ plt.tight_layout()
 ## Example: Components churn comparison
 
 ```python
-table = overview_as_dict("components")  # TODO: depends on overview table not yet ported (Chunk 10)
+table = overview_as_dict("components")
 labels = []
 churn = []
-if table is not None:
-    for entity, cells in table["rows"].items():
-        if entity == "(project)":
-            continue
-        v = cells.get("total_churn", {}).get("lifetime_value")
-        if v in (None, "", 0):
-            continue
-        labels.append(entity)
-        churn.append(float(v))
+for entity, cells in table["rows"].items():
+    if entity == "(project)":
+        continue
+    v = cells.get("total_churn", {}).get("lifetime_value")
+    if v in (None, "", 0):
+        continue
+    labels.append(entity)
+    churn.append(float(v))
 
 # Top 10 most-churning components.
 order = sorted(range(len(labels)), key=lambda i: -churn[i])[:10]
@@ -137,17 +136,16 @@ plt.tight_layout()
 ## Example: Issue type impact (intent_impact)
 
 ```python
-table = overview_as_dict("intent_impact")  # TODO: depends on overview table not yet ported (Chunk 10)
+table = overview_as_dict("intent_impact")
 labels, churn = [], []
-if table is not None:
-    for entity, cells in table["rows"].items():
-        if entity == "(project)":
-            continue
-        v = cells.get("linked_churn", {}).get("lifetime_value")
-        if v in (None, "", 0):
-            continue
-        labels.append(entity)
-        churn.append(float(v))
+for entity, cells in table["rows"].items():
+    if entity == "(project)":
+        continue
+    v = cells.get("linked_churn", {}).get("lifetime_value")
+    if v in (None, "", 0):
+        continue
+    labels.append(entity)
+    churn.append(float(v))
 
 plt.figure(figsize=(10, 5))
 plt.bar(labels, churn)

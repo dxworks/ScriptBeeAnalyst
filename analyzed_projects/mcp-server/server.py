@@ -315,114 +315,137 @@ async def get_relation_edges(
     return edges
 
 
-@mcp.tool()
-async def list_metrics() -> dict:
-    """List every classifier, anomaly trait, relation kind, and overview table.
+async def _execute_helper(snippet: str) -> str:
+    """POST a one-line `graph_data.<helper>` call to `/execute`.
 
-    Reflects on the data-server's enrichment subpackages and returns the live
-    catalog. Source of truth: the running code — call this at the start of a
-    session to discover what's available rather than relying on potentially
-    stale documentation. Does NOT require a project to be loaded.
-
-    Returns a dict with keys:
-      - `classifiers`: [{slot, entity, values, tagger, source_file, docstring}]
-      - `traits`:      [{name, entity, family, tagger, source_file, docstring,
-                         config_fields}]
-      - `relations`:   [{kind, source_kind, target_kind, extractor, source_file,
-                         docstring}]
-      - `overviews`:   [{name, entity_kind, builder, source_file, docstring,
-                         columns}]
-      - `helpers`:     [{name, signature, purpose}] — sandbox helpers in execute_code
-      - `source_roots`: dict pointing at the canonical code locations
-      - `counts`:       per-category totals
-
-    `source_file` paths are relative to data-server/. Read those files for
-    the computational rule of any metric. `config_fields` (traits only) lists
-    matching `EnrichmentConfig` fields where the thresholds live.
+    Returns the raw stdout text (already JSON-stringified by the snippet)
+    or a string starting with ``"__ERROR__:"`` on transport / sandbox
+    failure. Per plan §1 D4 every MCP-facing helper is a method on
+    `MCPSandboxView`; the four formerly-broken tools route through
+    `/execute` rather than restoring the deleted `/enrichments/*` REST
+    routes.
     """
     async with httpx.AsyncClient(timeout=TIMEOUT) as client:
         try:
-            resp = await client.get(f"{DATA_SERVER_URL}/enrichments/catalog")
+            resp = await client.post(
+                f"{DATA_SERVER_URL}/execute",
+                json={"code": snippet},
+            )
         except httpx.ConnectError:
-            return {"error": f"Cannot connect to data-server at {DATA_SERVER_URL}"}
+            return f"__ERROR__:Cannot connect to data-server at {DATA_SERVER_URL}"
 
-    if resp.status_code != 200:
-        return {"error": f"HTTP {resp.status_code}: {resp.text}"}
-    return resp.json()
+    if resp.status_code == 200:
+        return resp.json().get("output", "")
+    if resp.status_code == 400:
+        return f"__ERROR__:{resp.json().get('error', 'Unknown error')}"
+    return f"__ERROR__:HTTP {resp.status_code}: {resp.text}"
 
 
 @mcp.tool()
-async def list_file_metrics(min_loc: int = 0, limit: int = 100) -> dict:
+async def list_metrics() -> dict:
+    """List every registered Metric subclass with its emit-shape declaration.
+
+    Calls `/execute` with `graph_data.list_metrics()` against
+    `MCPSandboxView`. Source of truth: the running code — call this at
+    the start of a session to discover what's available rather than
+    relying on potentially stale documentation. Requires a project to
+    be loaded.
+
+    Returns a dict with keys:
+      - `metrics`: [{name, family, emits_traits, emits_classifiers,
+                     emits_relations, config_fields}]
+      - `overviews`: [name, ...] — every registered overview table.
+      - `counts`: per-category totals.
+    """
+    snippet = (
+        "import json; "
+        "print(json.dumps({"
+        "'metrics': graph_data.list_metrics(), "
+        "'overviews': graph_data.list_overviews(), "
+        "'counts': {"
+        "'metrics': len(graph_data.list_metrics()), "
+        "'overviews': len(graph_data.list_overviews())"
+        "}}))"
+    )
+    output = await _execute_helper(snippet)
+    if output.startswith("__ERROR__:"):
+        return {"error": output[len("__ERROR__:") :]}
+    try:
+        return json.loads(output)
+    except json.JSONDecodeError as e:
+        return {"error": f"Sandbox response was not JSON: {e}; output={output[:200]!r}"}
+
+
+@mcp.tool()
+async def list_file_metrics(min_loc: float = 0.0, limit: int = 100) -> dict:
     """List per-file Lizard complexity metrics (LOC, max CCN, function count).
 
-    Calls `GET /enrichments/metrics/files`. Returns an empty list when no
-    Lizard CSV was ingested for the loaded project.
+    Calls `/execute` with `graph_data.list_file_metrics(...)` against
+    `MCPSandboxView`. Returns an empty list when no Lizard CSV was
+    ingested for the loaded project.
 
     Args:
         min_loc: Filter out files with sum_nloc below this threshold.
-        limit:  Cap on returned files (server already sorts by sum_nloc desc).
+        limit:  Cap on returned files (sandbox sorts by sum_nloc desc).
 
     Returns:
-        Dict with `count` and `files` (list of {file_path, source, sum_nloc,
-        max_ccn, avg_ccn, function_count, longest_function_nloc}).
+        Dict with `count` (pre-pagination total) and `files`
+        (list of {file_path, source, sum_nloc, max_ccn, avg_ccn,
+        function_count, longest_function_nloc}).
     """
-    async with httpx.AsyncClient(timeout=TIMEOUT) as client:
-        try:
-            resp = await client.get(
-                f"{DATA_SERVER_URL}/enrichments/metrics/files",
-                params={"min_loc": min_loc, "limit": limit},
-            )
-        except httpx.ConnectError:
-            return {"error": f"Cannot connect to data-server at {DATA_SERVER_URL}"}
-
-    if resp.status_code != 200:
-        return {"error": f"HTTP {resp.status_code}: {resp.text}"}
-    return resp.json()
+    snippet = (
+        f"import json; "
+        f"print(json.dumps("
+        f"graph_data.list_file_metrics(min_loc={min_loc!r}, limit={int(limit)})"
+        f"))"
+    )
+    output = await _execute_helper(snippet)
+    if output.startswith("__ERROR__:"):
+        return {"error": output[len("__ERROR__:") :]}
+    try:
+        return json.loads(output)
+    except json.JSONDecodeError as e:
+        return {"error": f"Sandbox response was not JSON: {e}; output={output[:200]!r}"}
 
 
 @mcp.tool()
 async def get_code_structure_summary() -> dict:
     """Counts of types/methods/fields/references from the JaFax (B2) layer.
 
-    Calls `GET /enrichments/code-structure/summary`. Returns
-    `{"loaded": False, "source": None}` when no JaFax/CodeFrame ingest happened.
-    Use this to discover whether structural relations (calls.file-file,
+    Calls `/execute` with `graph_data.code_structure_summary()` against
+    `MCPSandboxView`. Returns `{"loaded": False, "source": None,
+    "projects": []}` when no JaFax/Codeframe ingest happened. Use this
+    to discover whether structural relations (calls.file-file,
     coupling.file-file, etc.) are available before querying them.
     """
-    async with httpx.AsyncClient(timeout=TIMEOUT) as client:
-        try:
-            resp = await client.get(
-                f"{DATA_SERVER_URL}/enrichments/code-structure/summary",
-            )
-        except httpx.ConnectError:
-            return {"error": f"Cannot connect to data-server at {DATA_SERVER_URL}"}
-
-    if resp.status_code != 200:
-        return {"error": f"HTTP {resp.status_code}: {resp.text}"}
-    return resp.json()
+    snippet = "import json; print(json.dumps(graph_data.code_structure_summary()))"
+    output = await _execute_helper(snippet)
+    if output.startswith("__ERROR__:"):
+        return {"error": output[len("__ERROR__:") :]}
+    try:
+        return json.loads(output)
+    except json.JSONDecodeError as e:
+        return {"error": f"Sandbox response was not JSON: {e}; output={output[:200]!r}"}
 
 
 @mcp.tool()
 async def get_duplication_summary() -> dict:
-    """Counts of external pairs / internal files from the DuDe (B3) layer.
+    """Counts of external/sibling/internal pairs from the DuDe (B3) layer.
 
-    Calls `GET /enrichments/duplication/summary`. Returns
-    `{"loaded": False, "source": None}` when no DuDe ingest happened.
-    Use this to discover whether duplication relations
-    (`duplication.file-file.external`, `.sibling`, `.internal-summary`) are
-    available before querying them.
+    Calls `/execute` with `graph_data.duplication_summary()` against
+    `MCPSandboxView`. Returns `{"loaded": False, "source": None,
+    "projects": []}` when no DuDe ingest happened. Use this to discover
+    whether duplication relations (`duplication.file-file.external`,
+    `.sibling`, `.internal-summary`) are available before querying them.
     """
-    async with httpx.AsyncClient(timeout=TIMEOUT) as client:
-        try:
-            resp = await client.get(
-                f"{DATA_SERVER_URL}/enrichments/duplication/summary",
-            )
-        except httpx.ConnectError:
-            return {"error": f"Cannot connect to data-server at {DATA_SERVER_URL}"}
-
-    if resp.status_code != 200:
-        return {"error": f"HTTP {resp.status_code}: {resp.text}"}
-    return resp.json()
+    snippet = "import json; print(json.dumps(graph_data.duplication_summary()))"
+    output = await _execute_helper(snippet)
+    if output.startswith("__ERROR__:"):
+        return {"error": output[len("__ERROR__:") :]}
+    try:
+        return json.loads(output)
+    except json.JSONDecodeError as e:
+        return {"error": f"Sandbox response was not JSON: {e}; output={output[:200]!r}"}
 
 
 @mcp.tool()
