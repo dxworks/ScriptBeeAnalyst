@@ -25,6 +25,7 @@ from . import (  # noqa: F401
 from . import (  # noqa: F401
     author_classifiers,
     commit_classifiers,
+    commit_task_prefixes,
     file_classifiers,
     issue_pr_classifiers,
     pr_traits,

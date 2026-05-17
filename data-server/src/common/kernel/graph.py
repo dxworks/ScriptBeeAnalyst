@@ -39,7 +39,7 @@ from typing import (
     Tuple,
 )
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, model_validator
 
 from .entity import Entity
 from .kinds import EntityKind
@@ -106,6 +106,7 @@ from ...enrichment.tags.registries import ClassifierRegistry, TraitRegistry
 
 if TYPE_CHECKING:
     from ..pickle_store import PickleStore
+    from ...enrichment.utils.temporal import TemporalIndex
 
 
 #: Current schema version written by ``Graph.dump`` and required by
@@ -270,6 +271,13 @@ class Graph(BaseModel):
     traits:      TraitRegistry      = Field(default_factory=TraitRegistry)
     classifiers: ClassifierRegistry = Field(default_factory=ClassifierRegistry)
     relations:   RelationRegistry   = Field(default_factory=RelationRegistry)
+
+    # --- derived caches (excluded from serialization) ---
+    # Lazy :class:`TemporalIndex` cache (Phase 2 decision D2). Built on
+    # first call to :meth:`ensure_temporal_index`; survives until the
+    # Graph instance is dropped. Excluded from pickling / dump because
+    # it's a pure function of the commits registry.
+    _temporal_index: Optional["TemporalIndex"] = PrivateAttr(default=None)
 
     # ------------------------------------------------------------------
     # Backwards-compat: accept the legacy ``registries=dict`` kwarg.
@@ -449,6 +457,29 @@ class Graph(BaseModel):
                 f"(entity={type(entity).__name__})"
             )
         return reg.add(entity)
+
+    # ------------------------------------------------------------------
+    # Derived caches
+    # ------------------------------------------------------------------
+    def ensure_temporal_index(self) -> "TemporalIndex":
+        """Return a :class:`TemporalIndex` built lazily over commit
+        timestamps; cached on the instance after first call.
+
+        Per Phase 2 decision D2 (the locked API for Chunk 11). The cache
+        is intentionally NOT invalidated on commit-registry mutations:
+        v2 builds the commits registry once during the transformer phase
+        and never appends mid-pipeline. If a future workflow needs
+        cache invalidation, expose a ``reset_temporal_index()`` method
+        here — do NOT inline the build cost into every consumer.
+        """
+        if self._temporal_index is None:
+            # Local import keeps the kernel ↔ enrichment cycle broken at
+            # module-load time: enrichment.utils imports from the kernel,
+            # so the kernel can only import enrichment lazily.
+            from ...enrichment.utils.temporal import TemporalIndex
+
+            self._temporal_index = TemporalIndex.from_graph(self)
+        return self._temporal_index
 
     # ------------------------------------------------------------------
     # IO
