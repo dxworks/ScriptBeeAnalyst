@@ -267,7 +267,14 @@ def test_pipeline_defaults_to_global_catalogs(host: _StubHost) -> None:
     # empty host means substantively-ported builders also produce
     # zero relations, but they don't ERROR (they short-circuit on the
     # missing registry).
+    #
+    # Phase-2 progression: Chunks 11-14 ported every cochange / similarity
+    # builder. The remaining deferred stubs are 7 metrics targeting
+    # Chunks 15/16 (anomaly.cohesion / knowledge / structuring / testing /
+    # timezone / issue_pr.classifiers / pr.traits). The floor follows
+    # the slowest expected port — keep it ≥1 so the assertion still
+    # catches the catalog being silently emptied.
     deferred_errors = [
         e for e in result.errors if e.error_type == "NotImplementedError"
     ]
-    assert len(deferred_errors) >= 10  # the 9 cochange stubs + similarity, etc.
+    assert len(deferred_errors) >= 1

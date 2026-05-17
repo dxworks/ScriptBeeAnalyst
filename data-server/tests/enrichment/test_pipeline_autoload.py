@@ -113,7 +113,8 @@ def test_run_pipeline_against_default_catalogs_emits_via_autoload() -> None:
     }
     # 25 builders + 14 metrics = 39 attempted steps (floor).
     assert out["attempted"] >= 39, out
-    # Several deferred stubs raise NotImplementedError; we expect a
-    # double-digit error count so we know the pipeline really ran the
-    # whole catalog rather than short-circuiting.
-    assert out["errors"] >= 10, out
+    # Several deferred stubs still raise NotImplementedError (Chunks
+    # 15/16 will land the remaining 7 metric ports). After Chunk 14 the
+    # error floor dropped to single-digit — keep ≥1 so the assertion
+    # still catches silent catalog truncation.
+    assert out["errors"] >= 1, out

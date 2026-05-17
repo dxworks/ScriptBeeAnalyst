@@ -52,17 +52,24 @@ from . import (  # noqa: F401
 # Similarity builders — substantively ported.
 from . import similarity_file_names  # noqa: F401
 
-# Deferred-stub builders (NotImplementedError — see handoff "Deferred ports").
+# File-domain cochange variants (Chunk 13). MUST register BEFORE the
+# component-domain cochange variants below: ``cochange.component*`` builders
+# aggregate the file-* relations emitted earlier in the same pipeline pass
+# (the pipeline writes builder output to ``host.relations`` between
+# builders so intra-stage reads work — but only when the producer
+# registered first). The author-domain variants are NOT order-sensitive
+# (they walk commits directly via the TemporalIndex), but kept grouped
+# with file/component cochange for cohesion.
 from . import (  # noqa: F401
+    cochange_file_shared_devs,
+    cochange_file_shared_task_prefixes,
+    cochange_file_time_windowed,
     cochange_author_shared_task_prefixes,
     cochange_author_time_windowed,
     cochange_component,
     cochange_component_shared_devs,
     cochange_component_shared_task_prefixes,
     cochange_component_time_windowed,
-    cochange_file_shared_devs,
-    cochange_file_shared_task_prefixes,
-    cochange_file_time_windowed,
 )
 
 
