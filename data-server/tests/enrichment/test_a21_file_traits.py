@@ -52,12 +52,6 @@ PENDING_KNOWLEDGE = pytest.mark.xfail(
     reason="Chunk 16 ports anomaly_knowledge — NotImplementedError today.",
     strict=False,
 )
-PENDING_COHESION_ACTIVITY = pytest.mark.xfail(
-    reason="Chunk 15b will port anomaly.cohesion.activity.* (Hibernator / "
-    "Awakening / Erosion). 15a shipped coordination + size only — see "
-    "handoffs_followup/chunk_15_heavy_anomalies.md §Split.",
-    strict=False,
-)
 
 
 # ----------------------------------------------------------------------
@@ -246,7 +240,6 @@ def test_weak_ownership_does_not_fire_for_all_active_authors():
 # ----------------------------------------------------------------------
 # Cohesion family — Chunk 15
 # ----------------------------------------------------------------------
-@PENDING_COHESION_ACTIVITY
 def test_hibernator_emitted_on_dormant_file():
     now = datetime.now(UTC)
     graph, project = build_v2_graph("hib")
@@ -274,7 +267,6 @@ def test_hibernator_emitted_on_dormant_file():
     assert t.evidence["lifetime_commits"] == 6
 
 
-@PENDING_COHESION_ACTIVITY
 def test_awakening_emitted_when_dormant_then_recent():
     now = datetime.now(UTC)
     graph, project = build_v2_graph("awa")
@@ -297,7 +289,6 @@ def test_awakening_emitted_when_dormant_then_recent():
     assert t.evidence["dormant_days"] >= 7 * 12
 
 
-@PENDING_COHESION_ACTIVITY
 def test_erosion_emitted_on_declining_trend():
     now = datetime.now(UTC)
     graph, project = build_v2_graph("er")

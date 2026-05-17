@@ -566,6 +566,157 @@ def test_flicker_emitted_on_volatile_recent():
 
 
 # ======================================================================
+# AnomalyCohesionMetric (Chunk 15b) — activity sub-family
+# ======================================================================
+def test_hibernator_emitted_when_no_recent_activity():
+    """Lifetime-rich file with zero recent commits → Hibernator fires."""
+    now = datetime.now(UTC)
+    graph, project = build_v2_graph("hib-pos")
+    alice = make_account("A", "a@x", project.ref())
+    graph.git_accounts.add(alice)
+    f = make_file("src/old.py", project.ref())
+    graph.files.add(f)
+    # Anchor a recent commit elsewhere so the cutoff is well-defined.
+    other = make_file("src/other.py", project.ref())
+    graph.files.add(other)
+    recent = make_commit("anchor", "feat", alice, now - timedelta(days=2), project.ref())
+    graph.commits.add(recent)
+    add_change(graph, recent, other, added=1)
+    # 8 old commits on the target file — all outside the 90d recent window.
+    for i in range(8):
+        c = make_commit(f"old_{i}", "feat", alice,
+                        now - timedelta(days=400 + i), project.ref())
+        graph.commits.add(c)
+        add_change(graph, c, f, added=10)
+    _consume_metric(graph, AnomalyCohesionMetric())
+    t = next(
+        x for x in graph.traits.for_target(f.ref())
+        if x.name == "anomaly.cohesion.activity.Hibernator"
+    )
+    assert t.evidence["lifetime_commits"] == 8
+    assert t.evidence["recent_commits"] == 0
+
+
+def test_hibernator_skipped_when_below_lifetime_threshold():
+    """Below ``hibernator_min_lifetime_commits`` lifetime → no emit."""
+    now = datetime.now(UTC)
+    graph, project = build_v2_graph("hib-low")
+    alice = make_account("A", "a@x", project.ref())
+    graph.git_accounts.add(alice)
+    f = make_file("src/tiny.py", project.ref())
+    graph.files.add(f)
+    # Anchor a recent commit on a different file.
+    other = make_file("src/anchor.py", project.ref())
+    graph.files.add(other)
+    anchor = make_commit("anchor", "feat", alice, now - timedelta(days=2), project.ref())
+    graph.commits.add(anchor)
+    add_change(graph, anchor, other, added=1)
+    # Only 2 old commits on the target file — below the default 5.
+    for i in range(2):
+        c = make_commit(f"o_{i}", "feat", alice,
+                        now - timedelta(days=300 + i), project.ref())
+        graph.commits.add(c)
+        add_change(graph, c, f, added=5)
+    _consume_metric(graph, AnomalyCohesionMetric())
+    assert graph.traits.of_name("anomaly.cohesion.activity.Hibernator") == ()
+
+
+def test_awakening_emitted_after_dormancy():
+    """One old commit, long gap, then a recent commit → Awakening fires."""
+    now = datetime.now(UTC)
+    graph, project = build_v2_graph("awa-pos")
+    alice = make_account("A", "a@x", project.ref())
+    graph.git_accounts.add(alice)
+    f = make_file("src/wake.py", project.ref())
+    graph.files.add(f)
+    c_old = make_commit("old", "feat", alice,
+                        now - timedelta(days=400), project.ref())
+    graph.commits.add(c_old)
+    add_change(graph, c_old, f, added=20)
+    c_new = make_commit("new", "feat", alice,
+                        now - timedelta(days=3), project.ref())
+    graph.commits.add(c_new)
+    add_change(graph, c_new, f, added=15)
+    _consume_metric(graph, AnomalyCohesionMetric())
+    t = next(
+        x for x in graph.traits.for_target(f.ref())
+        if x.name == "anomaly.cohesion.activity.Awakening"
+    )
+    # Default awakening_min_dormant_weeks = 12 → 84d minimum.
+    assert t.evidence["dormant_days"] >= 84
+    assert t.evidence["recent_commits"] == 1
+
+
+def test_awakening_skipped_when_continuous_activity():
+    """Continuous low-cadence commits inside the dormancy window → no emit."""
+    now = datetime.now(UTC)
+    graph, project = build_v2_graph("awa-neg")
+    alice = make_account("A", "a@x", project.ref())
+    graph.git_accounts.add(alice)
+    f = make_file("src/steady.py", project.ref())
+    graph.files.add(f)
+    # Commits every 2 weeks across the year — no 12-week dormancy gap.
+    for i in range(26):
+        c = make_commit(f"s_{i}", "feat", alice,
+                        now - timedelta(weeks=2 * i + 1), project.ref())
+        graph.commits.add(c)
+        add_change(graph, c, f, added=2)
+    _consume_metric(graph, AnomalyCohesionMetric())
+    assert graph.traits.of_name("anomaly.cohesion.activity.Awakening") == ()
+
+
+def test_erosion_emitted_on_declining_cadence():
+    """Per-window commit counts shrink monotonically → Erosion fires."""
+    now = datetime.now(UTC)
+    graph, project = build_v2_graph("er-pos")
+    alice = make_account("A", "a@x", project.ref())
+    graph.git_accounts.add(alice)
+    f = make_file("src/decay.py", project.ref())
+    graph.files.add(f)
+    # Five 4-week windows, descending bucket counts (8/6/4/2/1).
+    schedule = [(20, 8), (16, 6), (12, 4), (8, 2), (4, 1)]
+    cid = 0
+    for weeks_back, count in schedule:
+        for _ in range(count):
+            cid += 1
+            c = make_commit(f"e_{cid}", "feat", alice,
+                            now - timedelta(weeks=weeks_back, days=cid),
+                            project.ref())
+            graph.commits.add(c)
+            add_change(graph, c, f, added=5)
+    _consume_metric(graph, AnomalyCohesionMetric())
+    t = next(
+        x for x in graph.traits.for_target(f.ref())
+        if x.name == "anomaly.cohesion.activity.Erosion"
+    )
+    assert t.evidence["slope"] <= EnrichmentConfig().erosion_trend_max
+    assert t.evidence["buckets"] >= 3
+    assert t.evidence["window_weeks"] == 4
+
+
+def test_erosion_skipped_on_flat_cadence():
+    """Roughly constant per-window commit counts → no emit."""
+    now = datetime.now(UTC)
+    graph, project = build_v2_graph("er-flat")
+    alice = make_account("A", "a@x", project.ref())
+    graph.git_accounts.add(alice)
+    f = make_file("src/flat.py", project.ref())
+    graph.files.add(f)
+    # Five 4-week windows, each with exactly 4 commits — slope ~0.
+    cid = 0
+    for weeks_back in (20, 16, 12, 8, 4):
+        for _ in range(4):
+            cid += 1
+            c = make_commit(f"e_{cid}", "feat", alice,
+                            now - timedelta(weeks=weeks_back, days=cid),
+                            project.ref())
+            graph.commits.add(c)
+            add_change(graph, c, f, added=5)
+    _consume_metric(graph, AnomalyCohesionMetric())
+    assert graph.traits.of_name("anomaly.cohesion.activity.Erosion") == ()
+
+
+# ======================================================================
 # Pipeline integration smoke
 # ======================================================================
 def test_pipeline_emits_chunk_15_traits_in_one_pass():
