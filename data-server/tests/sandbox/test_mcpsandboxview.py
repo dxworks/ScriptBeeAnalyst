@@ -310,12 +310,27 @@ def test_list_overviews_nonempty(view: MCPSandboxView):
 
 
 # ----------------------------------------------------------------------
-# Mapping table row 11: overview_as_dict — skeletal stub fallback
+# Mapping table row 11: overview_as_dict
 # ----------------------------------------------------------------------
-def test_overview_as_dict_stub_returns_none(view: MCPSandboxView):
-    # Every chunk-7 overview's ``build()`` raises NotImplementedError;
-    # the view swallows that and returns None per the documented fallback.
+def test_overview_as_dict_populated_overview_returns_dict(view: MCPSandboxView):
+    # ``authorship`` is fully implemented as of Chunk 17 — the view
+    # forwards the rendered :class:`OverviewTable` as a JSON-ready dict
+    # (``rows`` is keyed by entity_id; one row per top-level folder +
+    # the synthetic ``(project)`` row).
     result = view.overview_as_dict("authorship")
+    assert isinstance(result, dict)
+    assert result["name"] == "authorship"
+    assert "(project)" in result["rows"]
+    # The rendered (project) row mirrors the ``COLUMNS`` spec.
+    assert "total_authors" in result["rows"]["(project)"]
+
+
+def test_overview_as_dict_deferred_overview_returns_none(view: MCPSandboxView):
+    # Chunk-18 overviews (``components``, ``feature_traceability``,
+    # ``feature_encapsulation``, ``intent_impact``, ``testing``) still
+    # raise :class:`NotImplementedError`; the view swallows that and
+    # returns ``None`` per the documented fallback.
+    result = view.overview_as_dict("components")
     assert result is None
 
 
