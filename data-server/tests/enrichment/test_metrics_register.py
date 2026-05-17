@@ -20,11 +20,11 @@ _EXPECTED_NAMES = {
     "anomaly.complexity",         # Chunk 12
     "anomaly.coupling",           # Chunk 12
     "anomaly.quality_issues",     # Chunk 12
-    # Deferred-stub metrics — flip as Chunks 15 / 16 land.
-    "anomaly.cohesion",
+    "anomaly.cohesion",           # Chunk 15a (coordination + size; activity → 15b)
+    "anomaly.structuring",        # Chunk 15
+    "anomaly.testing",            # Chunk 15
+    # Deferred-stub metrics — flip as Chunks 15b / 16 land.
     "anomaly.knowledge",
-    "anomaly.structuring",
-    "anomaly.testing",
     "anomaly.timezone",
     "issue_pr.classifiers",
     "pr.traits",

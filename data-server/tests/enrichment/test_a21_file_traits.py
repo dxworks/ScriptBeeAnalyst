@@ -52,16 +52,10 @@ PENDING_KNOWLEDGE = pytest.mark.xfail(
     reason="Chunk 16 ports anomaly_knowledge — NotImplementedError today.",
     strict=False,
 )
-PENDING_COHESION = pytest.mark.xfail(
-    reason="Chunk 15 ports anomaly_cohesion — NotImplementedError today.",
-    strict=False,
-)
-PENDING_TESTING = pytest.mark.xfail(
-    reason="Chunk 15 ports anomaly_testing — NotImplementedError today.",
-    strict=False,
-)
-PENDING_STRUCTURING = pytest.mark.xfail(
-    reason="Chunk 15 ports anomaly_structuring — NotImplementedError today.",
+PENDING_COHESION_ACTIVITY = pytest.mark.xfail(
+    reason="Chunk 15b will port anomaly.cohesion.activity.* (Hibernator / "
+    "Awakening / Erosion). 15a shipped coordination + size only — see "
+    "handoffs_followup/chunk_15_heavy_anomalies.md §Split.",
     strict=False,
 )
 
@@ -252,7 +246,7 @@ def test_weak_ownership_does_not_fire_for_all_active_authors():
 # ----------------------------------------------------------------------
 # Cohesion family — Chunk 15
 # ----------------------------------------------------------------------
-@PENDING_COHESION
+@PENDING_COHESION_ACTIVITY
 def test_hibernator_emitted_on_dormant_file():
     now = datetime.now(UTC)
     graph, project = build_v2_graph("hib")
@@ -280,7 +274,7 @@ def test_hibernator_emitted_on_dormant_file():
     assert t.evidence["lifetime_commits"] == 6
 
 
-@PENDING_COHESION
+@PENDING_COHESION_ACTIVITY
 def test_awakening_emitted_when_dormant_then_recent():
     now = datetime.now(UTC)
     graph, project = build_v2_graph("awa")
@@ -303,7 +297,7 @@ def test_awakening_emitted_when_dormant_then_recent():
     assert t.evidence["dormant_days"] >= 7 * 12
 
 
-@PENDING_COHESION
+@PENDING_COHESION_ACTIVITY
 def test_erosion_emitted_on_declining_trend():
     now = datetime.now(UTC)
     graph, project = build_v2_graph("er")
@@ -329,7 +323,6 @@ def test_erosion_emitted_on_declining_trend():
     assert t.evidence["slope"] <= EnrichmentConfig().erosion_trend_max
 
 
-@PENDING_COHESION
 def test_flicker_emitted_on_volatile_recent_window():
     now = datetime.now(UTC)
     graph, project = build_v2_graph("fl")
@@ -351,7 +344,6 @@ def test_flicker_emitted_on_volatile_recent_window():
     assert t.evidence["recent_interval_cv"] >= 1.2
 
 
-@PENDING_COHESION
 def test_frequent_changer_lifetime():
     now = datetime.now(UTC)
     graph, project = build_v2_graph("fc")
@@ -376,7 +368,6 @@ def test_frequent_changer_lifetime():
 # ----------------------------------------------------------------------
 # Testing family — Chunk 15
 # ----------------------------------------------------------------------
-@PENDING_TESTING
 def test_refactoring_magnet_emitted_on_many_refactor_commits():
     now = datetime.now(UTC)
     graph, project = build_v2_graph("rm")
@@ -401,7 +392,6 @@ def test_refactoring_magnet_emitted_on_many_refactor_commits():
 # ----------------------------------------------------------------------
 # Structuring family — Chunk 15
 # ----------------------------------------------------------------------
-@PENDING_STRUCTURING
 def test_identical_filenames_emitted_per_file():
     now = datetime.now(UTC)
     graph, project = build_v2_graph("idf")
