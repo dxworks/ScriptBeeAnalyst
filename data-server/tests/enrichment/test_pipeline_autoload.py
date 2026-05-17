@@ -111,10 +111,11 @@ def test_run_pipeline_against_default_catalogs_emits_via_autoload() -> None:
         line.split("=", 1)[0]: int(line.split("=", 1)[1])
         for line in result.stdout.strip().splitlines()
     }
-    # 25 builders + 14 metrics = 39 attempted steps (floor).
+    # 25 builders + 15 metrics = 40 attempted steps (floor).
     assert out["attempted"] >= 39, out
-    # Several deferred stubs still raise NotImplementedError (Chunks
-    # 15/16 will land the remaining 7 metric ports). After Chunk 14 the
-    # error floor dropped to single-digit — keep ≥1 so the assertion
-    # still catches silent catalog truncation.
-    assert out["errors"] >= 1, out
+    # End of Phase 2 (post-Chunk-16): every metric is substantively
+    # ported and every builder either runs or short-circuits on missing
+    # registries. No :class:`NotImplementedError` is expected. The
+    # ``attempted`` floor above already catches silent catalog
+    # truncation; here we pin the metric port to "complete".
+    assert out["errors"] == 0, out

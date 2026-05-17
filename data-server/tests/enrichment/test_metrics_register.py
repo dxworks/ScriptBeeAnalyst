@@ -11,7 +11,7 @@ from src.enrichment.metrics import METRICS, Metric, MetricRegistry
 
 
 _EXPECTED_NAMES = {
-    # Substantively-ported metrics (Chunks 7, 11, 12).
+    # Substantively-ported metrics (Chunks 7, 11, 12, 15, 16).
     "file.classifiers",
     "commit.classifiers",
     "commit_task_prefixes",       # Chunk 11
@@ -20,14 +20,13 @@ _EXPECTED_NAMES = {
     "anomaly.complexity",         # Chunk 12
     "anomaly.coupling",           # Chunk 12
     "anomaly.quality_issues",     # Chunk 12
-    "anomaly.cohesion",           # Chunk 15a (coordination + size; activity → 15b)
+    "anomaly.cohesion",           # Chunk 15a + 15b
     "anomaly.structuring",        # Chunk 15
     "anomaly.testing",            # Chunk 15
-    # Deferred-stub metrics — flip as Chunks 15b / 16 land.
-    "anomaly.knowledge",
-    "anomaly.timezone",
-    "issue_pr.classifiers",
-    "pr.traits",
+    "anomaly.knowledge",          # Chunk 16
+    "anomaly.timezone",           # Chunk 16
+    "issue_pr.classifiers",       # Chunk 16
+    "pr.traits",                  # Chunk 16
 }
 
 

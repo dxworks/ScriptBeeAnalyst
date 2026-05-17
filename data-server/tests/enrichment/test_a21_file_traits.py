@@ -48,10 +48,8 @@ UTC = timezone.utc
 
 
 # Markers — each pending chunk flips its tests to passing.
-PENDING_KNOWLEDGE = pytest.mark.xfail(
-    reason="Chunk 16 ports anomaly_knowledge — NotImplementedError today.",
-    strict=False,
-)
+# Chunk 16 landed ``anomaly.knowledge``; the PENDING_KNOWLEDGE marker is
+# retired (all six knowledge tests below are unconditional now).
 
 
 # ----------------------------------------------------------------------
@@ -78,7 +76,6 @@ def _run(graph: Graph) -> None:
 # ----------------------------------------------------------------------
 # Knowledge family — Chunk 16
 # ----------------------------------------------------------------------
-@PENDING_KNOWLEDGE
 def test_accumulator_emitted_when_many_positive_windows():
     now = datetime.now(UTC)
     graph, project = build_v2_graph("acc")
@@ -102,7 +99,6 @@ def test_accumulator_emitted_when_many_positive_windows():
     assert t.evidence["positive_windows"] >= 6
 
 
-@PENDING_KNOWLEDGE
 def test_polarised_ownership_emitted_with_two_dominant_authors():
     now = datetime.now(UTC)
     graph, project = build_v2_graph("pol")
@@ -134,7 +130,6 @@ def test_polarised_ownership_emitted_with_two_dominant_authors():
     assert "anomaly.knowledge.BusFactor1" not in names
 
 
-@PENDING_KNOWLEDGE
 def test_owner_churn_emitted_when_dominant_author_changes():
     now = datetime.now(UTC)
     graph, project = build_v2_graph("oc")
@@ -161,7 +156,6 @@ def test_owner_churn_emitted_when_dominant_author_changes():
     assert t.evidence["lifetime_owner"] != t.evidence["recent_owner"]
 
 
-@PENDING_KNOWLEDGE
 def test_solitaire_emitted_when_one_active_rest_idle():
     now = datetime.now(UTC)
     graph, project = build_v2_graph("sol")
@@ -186,7 +180,6 @@ def test_solitaire_emitted_when_one_active_rest_idle():
     assert _trait(traits, "anomaly.knowledge.Solitaire") is not None
 
 
-@PENDING_KNOWLEDGE
 def test_team_churn_emitted_when_recent_set_differs():
     now = datetime.now(UTC)
     graph, project = build_v2_graph("tc")
@@ -215,7 +208,6 @@ def test_team_churn_emitted_when_recent_set_differs():
     assert t.evidence["jaccard_distance"] >= 0.5
 
 
-@PENDING_KNOWLEDGE
 def test_weak_ownership_does_not_fire_for_all_active_authors():
     """All recent churn from active authors → WeakOwnership must NOT fire."""
     now = datetime.now(UTC)

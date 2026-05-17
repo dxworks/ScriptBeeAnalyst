@@ -248,11 +248,12 @@ def test_pipeline_result_is_pydantic_dumpable(host: _StubHost) -> None:
 def test_pipeline_defaults_to_global_catalogs(host: _StubHost) -> None:
     """Omitting ``builders``/``metrics`` reads :data:`BUILDERS` / :data:`METRICS`.
 
-    Importing the implementation packages registers ~24 builders + ~14
+    Importing the implementation packages registers ~25 builders + ~15
     metrics; running the pipeline against the empty host should
-    therefore touch a non-trivial number of names. Every deferred stub
-    raises :class:`NotImplementedError` which is captured in ``errors``
-    rather than aborting — verified here.
+    therefore touch a non-trivial number of names. After Chunks 15/16
+    every metric is substantively ported — no ``NotImplementedError``
+    is expected from the metric stage; substantively-ported builders
+    likewise short-circuit on the missing registry instead of erroring.
     """
     # Side-effect imports — register every implementation.
     import src.enrichment.relations.implementations  # noqa: F401
@@ -263,18 +264,13 @@ def test_pipeline_defaults_to_global_catalogs(host: _StubHost) -> None:
     # We don't pin the exact counts (chunks 8+ may add more) but we
     # demand the catalogs aren't empty.
     assert len(result.builders_run) + len(result.errors) >= 10
-    # Stubs raise NotImplementedError; the pipeline records them. The
-    # empty host means substantively-ported builders also produce
-    # zero relations, but they don't ERROR (they short-circuit on the
-    # missing registry).
-    #
-    # Phase-2 progression: Chunks 11-14 ported every cochange / similarity
-    # builder. The remaining deferred stubs are 7 metrics targeting
-    # Chunks 15/16 (anomaly.cohesion / knowledge / structuring / testing /
-    # timezone / issue_pr.classifiers / pr.traits). The floor follows
-    # the slowest expected port — keep it ≥1 so the assertion still
-    # catches the catalog being silently emptied.
+    # Phase-2 end state (post-Chunk-16): no more
+    # :class:`NotImplementedError` deferrals across builders or metrics.
+    # If a future chunk re-introduces a stub the count tips above zero;
+    # if catalogue auto-import silently truncates, ``builders_run`` +
+    # ``metrics_run`` drops below the floor asserted above. Both edges
+    # are caught.
     deferred_errors = [
         e for e in result.errors if e.error_type == "NotImplementedError"
     ]
-    assert len(deferred_errors) >= 1
+    assert deferred_errors == []
