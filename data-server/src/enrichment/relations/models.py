@@ -38,7 +38,9 @@ edits. We intentionally do not ``from ..tags.base import EvidenceValue``.
 from __future__ import annotations
 
 from enum import StrEnum
-from typing import ClassVar, TypeAliasType
+from typing import ClassVar
+
+from typing_extensions import TypeAliasType
 
 from src.common.kernel import Entity, EntityKind, EntityRef
 

@@ -252,17 +252,22 @@ async def health_check():
 
 @app.get("/projects/current")
 async def get_current_project():
-    """Get information about the currently loaded project."""
+    """Get information about the currently loaded project.
+
+    Returns HTTP 200 in both states (loaded / not-loaded). The
+    "no project loaded" case is communicated via the ``loaded`` flag in
+    the JSON body rather than a 404 — the web-ui polls this endpoint on
+    every navigation, and a 4xx response caused noisy red console errors
+    even when handled correctly client-side.
+    """
     graph = (
         graph_store.get(current_project_id) if current_project_id else None
     )
     if graph is None or not current_project_id:
-        return JSONResponse(
-            {"message": "No project currently loaded"},
-            status_code=404
-        )
+        return {"loaded": False}
     state = smart_merge_state_store.get(current_project_id)
     return {
+        "loaded": True,
         "project_id": current_project_id,
         "project_name": current_project_name,
         "user_id": current_user_id,

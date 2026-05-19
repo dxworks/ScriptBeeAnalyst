@@ -1,0 +1,2 @@
+{"error":"_downloaded_files_to_bundles: the legacy reader → v2 bundle bridge is deferred to Chunk 10's cleanup (per Chunk 8 brief). Until then, v2 graphs are built from pre-assembled entity bundles passed to build_graph_from_bundles() — see Chunk-8 tests in tests/chunk_08/ for the shape.","deferred":true}
+HTTP 501

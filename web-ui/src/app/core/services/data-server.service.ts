@@ -46,8 +46,24 @@ export interface HealthResponse {
 
 export interface CurrentProjectResponse {
   project_id: string;
+  project_name?: string;
   user_id: string;
   stats: {
+    git_commits: number;
+    jira_issues: number;
+    github_prs: number;
+  };
+}
+
+// Raw response shape from data-server GET /projects/current.
+// The server now always returns 200; the `loaded` flag distinguishes
+// "a project is loaded" from "nothing is loaded right now".
+interface CurrentProjectResponseRaw {
+  loaded: boolean;
+  project_id?: string;
+  project_name?: string;
+  user_id?: string;
+  stats?: {
     git_commits: number;
     jira_issues: number;
     github_prs: number;
@@ -226,11 +242,23 @@ export class DataServerService {
   async getCurrentProject(): Promise<CurrentProjectResponse | null> {
     try {
       const response = await firstValueFrom(
-        this.http.get<CurrentProjectResponse>(`${this.baseUrl}/projects/current`)
+        this.http.get<CurrentProjectResponseRaw>(`${this.baseUrl}/projects/current`)
       );
-      return response;
+      // Server now returns 200 with `loaded: false` instead of a 404
+      // when no project is in memory. Translate that to null so callers
+      // see the same shape as before.
+      if (!response || !response.loaded || !response.project_id) {
+        return null;
+      }
+      return {
+        project_id: response.project_id,
+        project_name: response.project_name,
+        user_id: response.user_id ?? '',
+        stats: response.stats ?? { git_commits: 0, jira_issues: 0, github_prs: 0 },
+      };
     } catch (err) {
-      // 404 means no project is loaded, which is not an error
+      // Legacy 404 path (older data-server build still returning 404 for
+      // "no project loaded") — treat as "no project".
       if (err instanceof HttpErrorResponse && err.status === 404) {
         return null;
       }

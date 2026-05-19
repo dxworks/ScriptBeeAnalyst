@@ -63,12 +63,19 @@ if __name__ == "__main__" and __package__ is None:
 
 from supabase import Client, create_client
 
+from src.common.domains.code_structure.bridge import build_code_structure_bundle
 from src.common.domains.code_structure.transformer import CodeStructureTransformer
+from src.common.domains.duplication.bridge import build_duplication_bundle
 from src.common.domains.duplication.transformer import DuplicationTransformer
+from src.common.domains.git.bridge import build_git_bundle
 from src.common.domains.git.transformer import GitTransformer
+from src.common.domains.github.bridge import build_github_bundle
 from src.common.domains.github.transformer import GitHubTransformer
+from src.common.domains.jira.bridge import build_jira_bundle
 from src.common.domains.jira.transformer import JiraTransformer
+from src.common.domains.metrics_lizard.bridge import build_lizard_bundle
 from src.common.domains.metrics_lizard.transformer import LizardMetricsTransformer
+from src.common.domains.quality.bridge import build_quality_bundle
 from src.common.domains.quality.transformer import QualityTransformer
 from src.common.domains.transformer import Transformer, TransformResult
 from src.common.kernel import Graph
@@ -356,17 +363,77 @@ def _downloaded_files_to_bundles(
     ``src/quality_miner/`` — ~3000 LOC of plumbing the chunk-7 brief
     explicitly defers to Chunk 10's cleanup.
 
-    Today this function raises :class:`NotImplementedError` so the
-    supabase polling loop surfaces a clear "not yet wired" error rather
-    than silently producing an empty graph.
+    Each bridge module under ``src/common/domains/<x>/bridge.py`` exports
+    a ``build_<x>_bundle(path, ...) -> Mapping`` callable that parses the
+    raw payload and emits the entity-bundle shape its sibling Transformer
+    consumes. We invoke them per-source and assemble the dispatch dict.
+
+    Multi-repo: only the first git repo is fed today (the v2 dispatcher
+    is keyed by SourceKind, so a single bundle per source). The other
+    repos are logged as skipped — a richer multi-repo pass is left for
+    a follow-up that lifts the dispatcher signature.
     """
-    raise NotImplementedError(
-        "_downloaded_files_to_bundles: the legacy reader → v2 bundle "
-        "bridge is deferred to Chunk 10's cleanup (per Chunk 8 brief). "
-        "Until then, v2 graphs are built from pre-assembled entity "
-        "bundles passed to build_graph_from_bundles() — see Chunk-8 "
-        "tests in tests/chunk_08/ for the shape."
-    )
+    bundles: Dict[SourceKind, Mapping] = {}
+
+    # Pick the repo_name used by per-repo bridges (lizard / code-structure /
+    # duplication / quality). Falls back to project_name when no git
+    # repo was uploaded.
+    if downloaded.git_files:
+        repo_name = downloaded.git_files[0][0]
+        if len(downloaded.git_files) > 1:
+            extras = [r for r, _ in downloaded.git_files[1:]]
+            logger.warning(
+                "Multi-repo git bundle not supported yet — using %r, "
+                "skipping %s",
+                repo_name,
+                extras,
+            )
+    else:
+        repo_name = project_name
+
+    if downloaded.git_files:
+        _, git_path = downloaded.git_files[0]
+        bundles[SourceKind.GIT] = build_git_bundle(
+            git_path, repo_name, project_name
+        )
+
+    if downloaded.jira_file is not None:
+        bundles[SourceKind.JIRA] = build_jira_bundle(
+            downloaded.jira_file, project_name
+        )
+
+    if downloaded.github_file is not None:
+        bundles[SourceKind.GITHUB] = build_github_bundle(
+            downloaded.github_file, project_name
+        )
+
+    if downloaded.lizard_file is not None:
+        bundles[SourceKind.LIZARD] = build_lizard_bundle(
+            downloaded.lizard_file, repo_name, project_name
+        )
+
+    if downloaded.jafax_file is not None:
+        bundles[SourceKind.CODE_STRUCTURE] = build_code_structure_bundle(
+            downloaded.jafax_file, repo_name, project_name
+        )
+
+    if (
+        downloaded.dude_external_file is not None
+        or downloaded.dude_internal_file is not None
+    ):
+        bundles[SourceKind.DUPLICATION] = build_duplication_bundle(
+            downloaded.dude_external_file,
+            downloaded.dude_internal_file,
+            repo_name,
+            project_name,
+        )
+
+    if downloaded.quality_issues_file is not None:
+        bundles[SourceKind.QUALITY] = build_quality_bundle(
+            downloaded.quality_issues_file, repo_name, project_name
+        )
+
+    return bundles
 
 
 def build_graph(

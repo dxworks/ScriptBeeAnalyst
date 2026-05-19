@@ -359,11 +359,17 @@ export class ProjectDetailComponent implements OnInit, OnDestroy {
     const projectId = this.selectedProjectId();
     if (!projectId) return;
 
+    // Snapshot into a plain array BEFORE the first await. The caller
+    // (onFileSelect) synchronously resets `input.value = ''` after this
+    // method returns its initial Promise, which clears the live FileList
+    // and would otherwise truncate the loop to a single file.
+    const files = Array.from(fileList);
+
     const invalidFiles: string[] = [];
     const oversizedFiles: string[] = [];
 
-    for (let i = 0; i < fileList.length; i++) {
-      const file = fileList[i];
+    for (let i = 0; i < files.length; i++) {
+      const file = files[i];
 
       // Validate filename
       if (!isValidSerializedFileName(file.name)) {

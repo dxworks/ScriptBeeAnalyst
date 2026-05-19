@@ -117,7 +117,11 @@ export class FileService {
       query = query.is('repo_name', null);
     }
 
-    const { data, error } = await query.single();
+    // Use maybeSingle() rather than single() so that "0 rows" returns
+    // { data: null, error: null } instead of a 406 PGRST116 error. The
+    // 406 caused noisy console errors and aborted the surrounding
+    // multi-file staging loop on a fresh project.
+    const { data, error } = await query.maybeSingle();
 
     if (error || !data) {
       return null;
