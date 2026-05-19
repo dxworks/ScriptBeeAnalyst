@@ -78,78 +78,127 @@ def _parse_external_csv(
     csv_path: Path,
     project_ref: EntityRef,
     repo_name: str,
-) -> List[DuplicationPair]:
+) -> tuple[List[DuplicationPair], bool, bool]:
     """Parse a DuDe external-duplication CSV into :class:`DuplicationPair`.
 
-    The CSV has no header — three columns: ``file_a_path``,
-    ``file_b_path``, ``total_block_length`` (an int, the v2
-    ``token_count`` rename). Blank rows are skipped silently. Rows that
-    fail to parse a numeric block-length are skipped with the row left
-    out of the bundle.
+    The CSV's first three positional columns remain ``file_a_path``,
+    ``file_b_path``, ``total_block_length`` (the v2 ``token_count``
+    rename). To stay backwards-compatible with header-less DuDe exports
+    we sniff the first row: if it parses as a numeric third column the
+    file is treated as header-less; otherwise the row is the header and
+    we look for optional ``repo_name_a`` / ``repo_name_b`` columns.
+
+    Blank rows are skipped silently. Rows that fail to parse a numeric
+    block-length are skipped with the row left out of the bundle.
+
+    Returns ``(pairs, any_row_seen, all_rows_self_repo)`` so the caller
+    can surface the dispatcher-level self-described signal.
     """
     pairs: List[DuplicationPair] = []
+    any_row_seen = False
+    all_rows_self_repo = True
+
     with csv_path.open("r", newline="", encoding="utf-8") as handle:
-        reader = csv.reader(handle)
-        for row in reader:
-            if not row or len(row) < 3:
-                continue
-            file_a_path = row[0].strip()
-            file_b_path = row[1].strip()
-            if not file_a_path or not file_b_path:
-                continue
-            try:
-                token_count = int(row[2].strip())
-            except (ValueError, IndexError):
-                continue
+        rows = list(csv.reader(handle))
 
-            # File ids are repo-scoped post-F1 — prefix the bare paths
-            # the DuDe CSV carries so refs resolve via FileRegistry.get.
-            file_a_id = File.make_id(repo_name, file_a_path)
-            file_b_id = File.make_id(repo_name, file_b_path)
-            file_a_ref = EntityRef(kind=EntityKind.FILE, id=file_a_id)
-            file_b_ref = EntityRef(kind=EntityKind.FILE, id=file_b_id)
-            # Canonicalise the pair so (a, b) and (b, a) collapse.
-            pair_id = DuplicationPair.make_id(file_a_ref.id, file_b_ref.id)
-            # After canonicalisation, line up the refs to match the id
-            # ordering. Keeps the registry's ``by_file_a`` / ``by_file_b``
-            # indexes deterministic.
-            a_id, b_id = sorted((file_a_ref.id, file_b_ref.id))
-            canonical_a = EntityRef(kind=EntityKind.FILE, id=a_id)
-            canonical_b = EntityRef(kind=EntityKind.FILE, id=b_id)
+    if not rows:
+        return pairs, any_row_seen, all_rows_self_repo
 
-            pairs.append(
-                DuplicationPair(
-                    id=pair_id,
-                    project_ref=project_ref,
-                    file_a_ref=canonical_a,
-                    file_b_ref=canonical_b,
-                    token_count=token_count,
-                    block_count=1,
-                    duplication_kind=_classify_external(a_id, b_id),
-                )
+    # Detect optional header. DuDe historically emits no header, so we
+    # only treat row 0 as a header when its third cell is non-numeric.
+    header: Optional[List[str]] = None
+    data_rows: List[List[str]]
+    first = rows[0]
+    if first and len(first) >= 3:
+        try:
+            int(first[2].strip())
+            data_rows = rows
+        except (ValueError, IndexError):
+            header = [c.strip() for c in first]
+            data_rows = rows[1:]
+    else:
+        data_rows = rows
+
+    repo_a_idx = header.index("repo_name_a") if header and "repo_name_a" in header else None
+    repo_b_idx = header.index("repo_name_b") if header and "repo_name_b" in header else None
+
+    for row in data_rows:
+        if not row or len(row) < 3:
+            continue
+        file_a_path = row[0].strip()
+        file_b_path = row[1].strip()
+        if not file_a_path or not file_b_path:
+            continue
+        try:
+            token_count = int(row[2].strip())
+        except (ValueError, IndexError):
+            continue
+
+        any_row_seen = True
+
+        raw_repo_a = row[repo_a_idx].strip() if repo_a_idx is not None and repo_a_idx < len(row) else ""
+        raw_repo_b = row[repo_b_idx].strip() if repo_b_idx is not None and repo_b_idx < len(row) else ""
+        if raw_repo_a:
+            repo_a_used = raw_repo_a
+        else:
+            repo_a_used = repo_name
+            all_rows_self_repo = False
+        if raw_repo_b:
+            repo_b_used = raw_repo_b
+        else:
+            repo_b_used = repo_name
+            all_rows_self_repo = False
+
+        # File ids are repo-scoped post-F1 — prefix the bare paths
+        # the DuDe CSV carries so refs resolve via FileRegistry.get.
+        file_a_id = File.make_id(repo_a_used, file_a_path)
+        file_b_id = File.make_id(repo_b_used, file_b_path)
+        file_a_ref = EntityRef(kind=EntityKind.FILE, id=file_a_id)
+        file_b_ref = EntityRef(kind=EntityKind.FILE, id=file_b_id)
+        # Canonicalise the pair so (a, b) and (b, a) collapse.
+        pair_id = DuplicationPair.make_id(file_a_ref.id, file_b_ref.id)
+        a_id, b_id = sorted((file_a_ref.id, file_b_ref.id))
+        canonical_a = EntityRef(kind=EntityKind.FILE, id=a_id)
+        canonical_b = EntityRef(kind=EntityKind.FILE, id=b_id)
+
+        pairs.append(
+            DuplicationPair(
+                id=pair_id,
+                project_ref=project_ref,
+                file_a_ref=canonical_a,
+                file_b_ref=canonical_b,
+                token_count=token_count,
+                block_count=1,
+                duplication_kind=_classify_external(a_id, b_id),
             )
-    return pairs
+        )
+    return pairs, any_row_seen, all_rows_self_repo
 
 
 def _parse_internal_json(
     json_path: Path,
     project_ref: EntityRef,
     repo_name: str,
-) -> List[DuplicationPair]:
+) -> tuple[List[DuplicationPair], bool, bool]:
     """Parse a DuDe internal-duplication JSON into self-pair entities.
 
-    Each top-level object has ``{"file", "name", "category", "value"}``.
-    ``value`` is the duplicated line-count inside that single file. We
-    emit it as a self-pair :class:`DuplicationPair`
-    (``file_a_ref == file_b_ref``) tagged
-    :data:`DuplicationKind.INTERNAL`, per the model docstring.
+    Each top-level object has ``{"file", "name", "category", "value"}``,
+    plus an **optional** ``"repo_name"`` field used to anchor the entry
+    when the upload spans multiple repos. We emit each entry as a
+    self-pair :class:`DuplicationPair` (``file_a_ref == file_b_ref``)
+    tagged :data:`DuplicationKind.INTERNAL`.
+
+    Returns ``(pairs, any_row_seen, all_rows_self_repo)`` so the caller
+    can surface the dispatcher-level self-described signal.
     """
     with json_path.open("r", encoding="utf-8") as handle:
         payload = json.load(handle)
     if not isinstance(payload, Iterable):
-        return []
+        return [], False, True
 
     pairs: List[DuplicationPair] = []
+    any_row_seen = False
+    all_rows_self_repo = True
     for entry in payload:
         if not isinstance(entry, Mapping):
             continue
@@ -162,8 +211,16 @@ def _parse_internal_json(
         except (TypeError, ValueError):
             continue
 
+        any_row_seen = True
+        raw_repo = entry.get("repo_name")
+        if isinstance(raw_repo, str) and raw_repo.strip():
+            repo_used = raw_repo.strip()
+        else:
+            repo_used = repo_name
+            all_rows_self_repo = False
+
         file_ref = EntityRef(
-            kind=EntityKind.FILE, id=File.make_id(repo_name, file_path)
+            kind=EntityKind.FILE, id=File.make_id(repo_used, file_path)
         )
         pair_id = DuplicationPair.make_id(file_ref.id, file_ref.id)
         pairs.append(
@@ -177,7 +234,7 @@ def _parse_internal_json(
                 duplication_kind=DuplicationKind.INTERNAL,
             )
         )
-    return pairs
+    return pairs, any_row_seen, all_rows_self_repo
 
 
 # ---------------------------------------------------------------------------
@@ -232,14 +289,29 @@ def build_duplication_bundle(
     project_ref = project.ref()
 
     pairs: List[DuplicationPair] = []
+    any_row_seen = False
+    all_rows_self_repo = True
     if external_csv is not None:
-        pairs.extend(_parse_external_csv(external_csv, project_ref, repo_name))
+        ext_pairs, ext_seen, ext_self = _parse_external_csv(
+            external_csv, project_ref, repo_name
+        )
+        pairs.extend(ext_pairs)
+        any_row_seen = any_row_seen or ext_seen
+        if ext_seen and not ext_self:
+            all_rows_self_repo = False
     if internal_json is not None:
-        pairs.extend(_parse_internal_json(internal_json, project_ref, repo_name))
+        int_pairs, int_seen, int_self = _parse_internal_json(
+            internal_json, project_ref, repo_name
+        )
+        pairs.extend(int_pairs)
+        any_row_seen = any_row_seen or int_seen
+        if int_seen and not int_self:
+            all_rows_self_repo = False
 
     return {
         "project": project,
         "duplication_pairs": pairs,
+        "_meta": {"all_rows_self_repo": bool(any_row_seen and all_rows_self_repo)},
     }
 
 

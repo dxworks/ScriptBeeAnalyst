@@ -50,7 +50,7 @@ from __future__ import annotations
 
 import csv
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Mapping
+from typing import Any, Dict, Iterable, List, Mapping, Tuple
 
 from ...kernel import EntityKind, EntityRef
 from ...people import SourceKind
@@ -91,16 +91,20 @@ def build_lizard_bundle(
         Filesystem path to a Lizard ``--csv`` export.
     repo_name:
         Stable identifier for the repository the CSV was measured against
-        (used as the :class:`LizardMetricsProject` ``id`` and to normalise
-        the CSV's absolute file paths into repo-relative ``File`` ids).
+        (used as the :class:`LizardMetricsProject` ``id`` and as the
+        **fallback** anchor for any CSV row that does not carry its own
+        ``repo_name`` column).
     project_name:
         Display ``name`` on the :class:`LizardMetricsProject`. Defaults to
         ``"Project"`` if the caller has no better label.
 
     Returns
     -------
-    Mapping with the keys :class:`LizardMetricsTransformer` expects:
-    ``{"project", "file_metrics"}``.
+    Mapping with the keys :class:`LizardMetricsTransformer` expects
+    (``{"project", "file_metrics"}``) plus a ``"_meta"`` entry the
+    dispatcher pops before transform. ``_meta["all_rows_self_repo"]`` is
+    ``True`` iff every parsed row carried its own non-empty ``repo_name``
+    column (no fallback was needed).
     """
     project = LizardMetricsProject(
         id=repo_name,
@@ -109,25 +113,30 @@ def build_lizard_bundle(
     )
     project_ref = project.ref()
 
-    # Group raw function rows by their repo-relative file path. Using a
-    # dict preserves insertion order so the resulting :class:`FileMetric`
-    # rows come out in the order the CSV first mentions each file -- nice
-    # for diffability in tests.
-    functions_by_file: Dict[str, List[FunctionMetric]] = {}
+    # Group rows by (repo_used, repo-relative file path) so files coming
+    # from different repos but sharing the same relative path don't
+    # collide. Insertion order is preserved for stable test output.
+    functions_by_key: Dict[Tuple[str, str], List[FunctionMetric]] = {}
 
+    any_row_seen = False
+    all_rows_self_repo = True
     for row in _iter_function_rows(file_path):
-        rel_path = _normalize_file_path(row["file"], repo_name)
-        functions_by_file.setdefault(rel_path, []).append(
+        any_row_seen = True
+        row_repo = (row.get("repo_name") or "").strip()
+        if row_repo:
+            repo_used = row_repo
+        else:
+            repo_used = repo_name
+            all_rows_self_repo = False
+        rel_path = _normalize_file_path(row["file"], repo_used)
+        functions_by_key.setdefault((repo_used, rel_path), []).append(
             _function_metric_from_row(row)
         )
 
     file_metrics: List[FileMetric] = []
-    for rel_path, functions in functions_by_file.items():
-        # File ids are repo-scoped post-F1 (see git.File.make_id) so
-        # the FileMetric.file_ref must point at the prefixed id to
-        # resolve via FileRegistry.get / .by_file.
+    for (repo_used, rel_path), functions in functions_by_key.items():
         file_ref = EntityRef(
-            kind=EntityKind.FILE, id=File.make_id(repo_name, rel_path)
+            kind=EntityKind.FILE, id=File.make_id(repo_used, rel_path)
         )
         file_metrics.extend(
             _aggregate_file_metrics(rel_path, file_ref, project_ref, functions)
@@ -136,6 +145,7 @@ def build_lizard_bundle(
     return {
         "project": project,
         "file_metrics": file_metrics,
+        "_meta": {"all_rows_self_repo": bool(any_row_seen and all_rows_self_repo)},
     }
 
 

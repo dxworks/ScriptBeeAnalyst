@@ -185,6 +185,91 @@ def test_method_file_ref_none_when_container_unknown(tmp_path: Path):
     assert code_method.file_ref is None
 
 
+def test_per_row_repo_overrides_anchor(tmp_path: Path):
+    # Class["repo"] wins over the function-level anchor.
+    entries: List[Any] = [
+        {
+            "type": "Class",
+            "id": 19,
+            "name": "Foo",
+            "pack": "com.example",
+            "fileName": "/repos/other/other/src/Foo.java",
+            "repo": "other",
+            "containedMethods": [25],
+            "containedFields": [],
+        },
+        {
+            "type": "Method",
+            "id": 25,
+            "name": "run",
+            "container": 19,
+            "signature": "run()",
+        },
+    ]
+    bundle = build_code_structure_bundle(
+        _write_jafax(tmp_path, entries), REPO_NAME
+    )
+    [code_type] = bundle["code_types"]
+    [code_method] = bundle["code_methods"]
+    # File ref must point at "other", NOT the anchor "zeppelin".
+    assert code_type.file_ref is not None
+    assert code_type.file_ref.id == File.make_id("other", "src/Foo.java")
+    assert code_method.file_ref == code_type.file_ref
+    assert bundle["_meta"]["all_rows_self_repo"] is True
+
+
+def test_mixed_rows_some_self_repo(tmp_path: Path):
+    entries: List[Any] = [
+        {
+            "type": "Class",
+            "id": 19,
+            "name": "Foo",
+            "pack": "com.example",
+            "fileName": "/repos/other/other/src/Foo.java",
+            "repo": "other",
+            "containedMethods": [],
+            "containedFields": [],
+        },
+        {
+            "type": "Class",
+            "id": 20,
+            "name": "Bar",
+            "pack": "com.example",
+            "fileName": "/repos/zeppelin/zeppelin/src/Bar.java",
+            "containedMethods": [],
+            "containedFields": [],
+        },
+    ]
+    bundle = build_code_structure_bundle(
+        _write_jafax(tmp_path, entries), REPO_NAME
+    )
+    types_by_name = {t.simple_name: t for t in bundle["code_types"]}
+    assert types_by_name["Foo"].file_ref.id == File.make_id("other", "src/Foo.java")
+    # Bar had no `repo` field -> fell back to anchor.
+    assert types_by_name["Bar"].file_ref.id == File.make_id(REPO_NAME, "src/Bar.java")
+    assert bundle["_meta"]["all_rows_self_repo"] is False
+
+
+def test_all_rows_fallback_when_no_repo_field(tmp_path: Path):
+    entries: List[Any] = [
+        {
+            "type": "Class",
+            "id": 19,
+            "name": "Foo",
+            "pack": "com.example",
+            "fileName": "/repos/zeppelin/zeppelin/src/Foo.java",
+            "containedMethods": [],
+            "containedFields": [],
+        },
+    ]
+    bundle = build_code_structure_bundle(
+        _write_jafax(tmp_path, entries), REPO_NAME
+    )
+    [code_type] = bundle["code_types"]
+    assert code_type.file_ref.id == File.make_id(REPO_NAME, "src/Foo.java")
+    assert bundle["_meta"]["all_rows_self_repo"] is False
+
+
 def test_missing_filename_logs_single_warning(tmp_path, caplog):
     entries: List[Any] = [
         {

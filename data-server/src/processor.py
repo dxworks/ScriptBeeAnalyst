@@ -55,7 +55,7 @@ import sys
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Dict, List, Mapping, Optional, Tuple
+from typing import Any, Dict, List, Mapping, Optional, Tuple
 
 # Add parent directory to path if running as script.
 if __name__ == "__main__" and __package__ is None:
@@ -382,6 +382,13 @@ def _downloaded_files_to_bundles(
     repo's name (the one the upstream tools most likely scanned) and
     emit a warning so the operator knows which repo the metrics will
     bind to.
+
+    Each dependent bridge attaches a ``"_meta"`` entry to its bundle
+    reporting ``all_rows_self_repo`` — when every parsed row carried
+    its own ``repo_name`` no fallback was needed and the warning is
+    suppressed for that bundle. The ``"_meta"`` key is popped before
+    handing the bundle to its transformer so the strict bundle-key
+    validation in :meth:`Transformer.collect_bundle` stays happy.
     """
     bundles: Dict[SourceKind, List[Mapping]] = {}
 
@@ -398,25 +405,6 @@ def _downloaded_files_to_bundles(
         for repo, git_path in downloaded.git_files:
             git_bundles.append(build_git_bundle(git_path, repo, project_name))
         bundles[SourceKind.GIT] = git_bundles
-        if (
-            len(downloaded.git_files) > 1
-            and (
-                downloaded.lizard_file is not None
-                or downloaded.jafax_file is not None
-                or downloaded.dude_external_file is not None
-                or downloaded.dude_internal_file is not None
-                or downloaded.quality_issues_file is not None
-            )
-        ):
-            other_repos = [r for r, _ in downloaded.git_files[1:]]
-            logger.warning(
-                "Multiple git repos uploaded (%s) but lizard/code-structure/"
-                "duplication/quality bridges take a single repo anchor — "
-                "binding those refs to %r; data from %s will not resolve",
-                [r for r, _ in downloaded.git_files],
-                repo_name,
-                other_repos,
-            )
 
     if downloaded.jira_file is not None:
         bundles[SourceKind.JIRA] = [
@@ -428,37 +416,69 @@ def _downloaded_files_to_bundles(
             build_github_bundle(downloaded.github_file, project_name)
         ]
 
+    # Track per-source whether the bundle was fully self-described so
+    # we can suppress the multi-repo warning when every row of every
+    # dependent artefact carried its own ``repo_name``.
+    self_repo_by_source: Dict[str, bool] = {}
+
+    def _capture_meta(source_label: str, bundle: Dict[str, Any]) -> Mapping[str, Any]:
+        meta = bundle.pop("_meta", None) or {}
+        self_repo_by_source[source_label] = bool(meta.get("all_rows_self_repo"))
+        return bundle
+
     if downloaded.lizard_file is not None:
-        bundles[SourceKind.LIZARD] = [
+        bundle = dict(
             build_lizard_bundle(downloaded.lizard_file, repo_name, project_name)
-        ]
+        )
+        bundles[SourceKind.LIZARD] = [_capture_meta("lizard", bundle)]
 
     if downloaded.jafax_file is not None:
-        bundles[SourceKind.CODE_STRUCTURE] = [
+        bundle = dict(
             build_code_structure_bundle(
                 downloaded.jafax_file, repo_name, project_name
             )
-        ]
+        )
+        bundles[SourceKind.CODE_STRUCTURE] = [_capture_meta("code_structure", bundle)]
 
     if (
         downloaded.dude_external_file is not None
         or downloaded.dude_internal_file is not None
     ):
-        bundles[SourceKind.DUPLICATION] = [
+        bundle = dict(
             build_duplication_bundle(
                 downloaded.dude_external_file,
                 downloaded.dude_internal_file,
                 repo_name,
                 project_name,
             )
-        ]
+        )
+        bundles[SourceKind.DUPLICATION] = [_capture_meta("duplication", bundle)]
 
     if downloaded.quality_issues_file is not None:
-        bundles[SourceKind.QUALITY] = [
+        bundle = dict(
             build_quality_bundle(
                 downloaded.quality_issues_file, repo_name, project_name
             )
-        ]
+        )
+        bundles[SourceKind.QUALITY] = [_capture_meta("quality", bundle)]
+
+    # Multi-repo warning: only fire for bundles that had at least one
+    # row fall back to the function-level anchor. Bundles where every
+    # row carried its own repo_name resolve correctly without any
+    # rebinding so the warning would be a false alarm.
+    if len(downloaded.git_files) > 1 and self_repo_by_source:
+        falling_back = [src for src, self_ok in self_repo_by_source.items() if not self_ok]
+        if falling_back:
+            other_repos = [r for r, _ in downloaded.git_files[1:]]
+            logger.warning(
+                "Multiple git repos uploaded (%s) but %s bridge(s) have "
+                "rows without a self-describing repo_name — binding "
+                "fallback refs to %r; data from %s will not resolve",
+                [r for r, _ in downloaded.git_files],
+                falling_back,
+                repo_name,
+                other_repos,
+            )
 
     return bundles
 

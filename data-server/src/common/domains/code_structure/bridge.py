@@ -244,7 +244,7 @@ def build_code_structure_bundle(
         cid: _fully_qualified_name(raw) for cid, raw in classes_by_id.items()
     }
 
-    code_types, file_ref_by_class_id = _build_code_types(
+    code_types, file_ref_by_class_id, all_classes_self_repo = _build_code_types(
         classes_by_id, project_ref, repo_name
     )
     code_methods = _build_code_methods(
@@ -269,6 +269,7 @@ def build_code_structure_bundle(
         "code_methods": code_methods,
         "code_fields": code_fields,
         "code_refs": code_refs,
+        "_meta": {"all_rows_self_repo": all_classes_self_repo},
     }
 
 
@@ -293,11 +294,14 @@ def _build_code_types(
     classes_by_id: Mapping[int, Mapping[str, Any]],
     project_ref: EntityRef,
     repo_name: str,
-) -> tuple[List[CodeType], Dict[str, EntityRef]]:
+) -> tuple[List[CodeType], Dict[str, EntityRef], bool]:
     out: List[CodeType] = []
     file_ref_by_class_id: Dict[str, EntityRef] = {}
     missing_file_name_warned = False
+    any_class_seen = False
+    all_classes_self_repo = True
     for rid, raw in classes_by_id.items():
+        any_class_seen = True
         parent_refs: List[EntityRef] = []
         super_class = raw.get("superClass")
         if isinstance(super_class, int) and super_class in classes_by_id:
@@ -317,13 +321,22 @@ def _build_code_types(
             if isinstance(fid, int)
         ]
 
+        # Per-row repo override: Class["repo"] wins if non-empty,
+        # otherwise we fall back to the function-level anchor.
+        raw_repo = raw.get("repo")
+        if isinstance(raw_repo, str) and raw_repo.strip():
+            repo_used = raw_repo.strip()
+        else:
+            repo_used = repo_name
+            all_classes_self_repo = False
+
         file_ref: Optional[EntityRef] = None
         file_name = raw.get("fileName")
         if isinstance(file_name, str) and file_name:
-            rel_path = _normalize_file_path(file_name, repo_name)
+            rel_path = _normalize_file_path(file_name, repo_used)
             file_ref = EntityRef(
                 kind=EntityKind.FILE,
-                id=File.make_id(repo_name, rel_path),
+                id=File.make_id(repo_used, rel_path),
             )
         elif not missing_file_name_warned:
             logger.warning(
@@ -353,7 +366,7 @@ def _build_code_types(
                 modifiers=_normalize_modifiers(raw.get("modifiers")),
             )
         )
-    return out, file_ref_by_class_id
+    return out, file_ref_by_class_id, bool(any_class_seen and all_classes_self_repo)
 
 
 def _build_code_methods(

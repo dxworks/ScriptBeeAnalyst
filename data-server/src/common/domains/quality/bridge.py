@@ -121,6 +121,8 @@ def build_quality_bundle(
     project_ref = project.ref()
 
     issues: List[QualityIssue] = []
+    any_row_seen = False
+    all_rows_self_repo = True
     for idx, row in enumerate(_coerce_rows(payload, file_path)):
         if not isinstance(row, Mapping):
             raise ValueError(
@@ -134,9 +136,19 @@ def build_quality_bundle(
                 f"keys: {missing}. Row keys: {list(row.keys())}."
             )
 
+        any_row_seen = True
         rule_id = str(row["name"])
         category = str(row["category"])
         raw_file = str(row["file"])
+
+        # Per-row repo override: row["repo_name"] wins if non-empty,
+        # otherwise fall back to the function-level anchor.
+        raw_repo = row.get("repo_name")
+        if isinstance(raw_repo, str) and raw_repo.strip():
+            repo_used = raw_repo.strip()
+        else:
+            repo_used = repo_name
+            all_rows_self_repo = False
 
         # Insider's "value" is the occurrence count for the (rule, file)
         # pair. Default to 1 to keep parity with the entity contract when
@@ -153,7 +165,7 @@ def build_quality_bundle(
                 id=_issue_id(project.id, raw_file, rule_id, idx),
                 project_ref=project_ref,
                 file_ref=EntityRef(
-                    kind=EntityKind.FILE, id=File.make_id(repo_name, raw_file)
+                    kind=EntityKind.FILE, id=File.make_id(repo_used, raw_file)
                 ),
                 rule_id=rule_id,
                 category=category,
@@ -170,7 +182,11 @@ def build_quality_bundle(
             )
         )
 
-    return {"project": project, "quality_issues": issues}
+    return {
+        "project": project,
+        "quality_issues": issues,
+        "_meta": {"all_rows_self_repo": bool(any_row_seen and all_rows_self_repo)},
+    }
 
 
 __all__ = ["build_quality_bundle"]
