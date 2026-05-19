@@ -51,7 +51,6 @@ data-server/src/notebook_flat_graph/pickle_data/*
 data-server/test-input/*
 data-server/src/inspector_git/examples/gitlog_full.json
 data-server/src/inspector_git/guidelines.txt
-data-server/test_client.py
 
 # Chat UI specific
 chat-ui/.env
