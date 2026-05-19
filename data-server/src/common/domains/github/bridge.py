@@ -10,6 +10,8 @@ bundle shape ``GitHubTransformer.transform()`` consumes::
         "project":         GitHubProject(...),
         "users":           [GitHubUser, ...],
         "pull_requests":   [PullRequest, ...],
+        "reviews":         [Review, ...],
+        "review_comments": [ReviewComment, ...],
         "commits":         [GitHubCommit, ...],
     }
 
@@ -28,20 +30,22 @@ Design choices:
   consumers downstream (e.g. :class:`PRTraitsMetric`) compare
   case-insensitively (``state.lower() == "open"``).
 
-* **Reviews / review-comments.** The transformer's ``_BUCKET_SPECS``
-  lists ``reviews`` and ``review_comments`` as accepted bundle keys, but
-  the v2 bundle shape the dispatcher contract requires (and the
-  ``_github_bundle()`` test fixture) is the four-key form above.
-  Reviews and review-comments are not produced by this bridge today —
-  the legacy reader DTO doesn't carry a stable ``review_id``, and the
-  v2 :class:`Review` model uses an ordinal-based composite id that the
-  Phase-2 GitHubTransformer.transform DTO path will own. Keeping the
-  bundle to the four canonical keys keeps the bridge faithful to the
-  test fixture and the legacy build path (which also dropped reviews
-  at the entity level).
+* **Reviews / review-comments.** Built from ``raw_pr.reviews`` and
+  ``review.comments``. The DTO doesn't expose a stable per-review id,
+  so :meth:`Review.make_id` derives one from ``(pr_number, ordinal)``
+  where ``ordinal`` is the review's position in the PR's review stream.
+  ``ReviewComment.id`` is the comment's URL — stable across re-ingests.
+  ``PrReviewerBuilder`` reads ``pr.review_refs`` to attach
+  ``"source": "Review.author"`` provenance on ``pr_reviewer`` relations;
+  before this bridge populated reviews, it fell back to a proxy path
+  off ``merged_by_ref + assignee_refs``.
+  ``submittedAt`` in the DTO is typed ``Any`` — sometimes a parsed
+  datetime, sometimes the raw ISO string, sometimes ``None``; we accept
+  the first two via :func:`_coerce_datetime` and drop ``None``.
 """
 from __future__ import annotations
 
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Mapping, Optional
 
@@ -59,7 +63,28 @@ from .models import (
     GitHubProject,
     GitHubUser,
     PullRequest,
+    Review,
+    ReviewComment,
 )
+
+
+def _coerce_datetime(value: Any) -> Optional[datetime]:
+    """``Review.submittedAt`` is typed ``Any`` in the reader DTO; it
+    comes through either pre-parsed (datetime), as an ISO-8601 string
+    Pydantic would accept, or as ``None``. Normalise to
+    ``Optional[datetime]`` so the v2 :class:`Review` model accepts it
+    without further coercion."""
+    if value is None or isinstance(value, datetime):
+        return value
+    if isinstance(value, str):
+        # Pydantic-compatible ISO-8601 parser; let an invalid string
+        # propagate so the bridge fails loud rather than silently
+        # dropping reviews.
+        try:
+            return datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except ValueError:
+            return None
+    return None
 
 
 def build_github_bundle(
@@ -132,6 +157,8 @@ def build_github_bundle(
 
     pull_requests: List[PullRequest] = []
     commits: List[GitHubCommit] = []
+    reviews: List[Review] = []
+    review_comments: List[ReviewComment] = []
 
     for raw_pr in raw.pullRequests:
         author = _intern_user(raw_pr.createdBy)
@@ -151,14 +178,12 @@ def build_github_bundle(
             if r is not None
         ]
 
-        # Walk every nested author so the dedup table is complete
-        # *before* we hand the bundle to the transformer.
+        # Intern PR-level comment authors so the dedup table is complete
+        # before we hand the bundle to the transformer. Review and
+        # review-comment authors are interned inline below as part of
+        # entity construction.
         for comment in raw_pr.comments:
             _intern_user(comment.author)
-        for review in raw_pr.reviews:
-            _intern_user(review.user)
-            for review_comment in review.comments:
-                _intern_user(review_comment.author)
 
         pr = PullRequest(
             id=PullRequest.make_id(raw_pr.number),
@@ -191,12 +216,56 @@ def build_github_bundle(
             commit_refs.append(gh_commit.ref())
         pr.commit_refs = commit_refs
 
+        # Reviews + their inline comments. Per-PR ordinal numbering gives
+        # us a stable Review id (Review.make_id) since the DTO doesn't
+        # expose a stable review id. ReviewComment id is its URL.
+        pr_review_refs: List = []
+        pr_review_comment_refs: List = []
+        for ordinal, raw_review in enumerate(raw_pr.reviews):
+            review_author = _intern_user(raw_review.user)
+            rev = Review(
+                id=Review.make_id(raw_pr.number, ordinal),
+                pull_request_ref=pr_ref,
+                ordinal=ordinal,
+                state=raw_review.state,
+                body=raw_review.body or "",
+                submitted_at=_coerce_datetime(raw_review.submittedAt),
+                author_ref=review_author.ref() if review_author else None,
+            )
+            rev_ref = rev.ref()
+
+            rc_refs: List = []
+            for raw_rc in raw_review.comments:
+                rc_author = _intern_user(raw_rc.author)
+                rc = ReviewComment(
+                    id=raw_rc.url,
+                    review_ref=rev_ref,
+                    pull_request_ref=pr_ref,
+                    url=raw_rc.url,
+                    body=raw_rc.body,
+                    created_at=raw_rc.createdAt,
+                    updated_at=raw_rc.updatedAt,
+                    author_ref=rc_author.ref() if rc_author else None,
+                )
+                review_comments.append(rc)
+                rc_refs.append(rc.ref())
+            rev.review_comment_refs = rc_refs
+
+            reviews.append(rev)
+            pr_review_refs.append(rev_ref)
+            pr_review_comment_refs.extend(rc_refs)
+
+        pr.review_refs = pr_review_refs
+        pr.review_comment_refs = pr_review_comment_refs
+
         pull_requests.append(pr)
 
     return {
         "project": project,
         "users": list(users_by_url.values()),
         "pull_requests": pull_requests,
+        "reviews": reviews,
+        "review_comments": review_comments,
         "commits": commits,
     }
 
