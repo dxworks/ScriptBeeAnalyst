@@ -41,10 +41,11 @@ AND as methods on this view, so legacy snippets that call e.g.
 """
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Iterator, Optional
+from collections import Counter
+from typing import TYPE_CHECKING, Iterator, Literal, Optional
 
 from src.common.kernel import EntityKind, EntityRef
-from src.enrichment.relations.models import WindowKind
+from src.enrichment.relations.models import Relation, WindowKind
 from src.enrichment.tags.base import Classifier, Tag, Trait
 
 if TYPE_CHECKING:
@@ -595,6 +596,286 @@ class MCPSandboxView:
         # All duplication data today comes from DuDe; the field stays a
         # forward-compatible hatch for future tools.
         return {"loaded": True, "source": "dude", "projects": rows}
+
+    # ------------------------------------------------------------------
+    # Discoverability — list_registries (P0)
+    # ------------------------------------------------------------------
+    def list_registries(self) -> list[dict[str, object]]:
+        """Inventory of every typed registry on the underlying Graph.
+
+        Driven by :data:`src.common.kernel.graph._FIELD_SPECS` so the
+        list stays in sync as new domains are added (no manual
+        maintenance here). Each entry::
+
+            {
+              "name":           "<graph field name>",
+              "entity_kind":    "<EntityKind value>",
+              "registry_type":  "<Registry subclass name>",
+              "count":          <int>,
+              "indexes":        ["by_X", "by_Y", ...],
+            }
+
+        Use this from ``/execute`` to discover what's queryable —
+        especially useful for fields not surfaced as explicit
+        properties on the view (everything beyond ``commits`` /
+        ``files`` / ``issues`` / ``pull_requests`` reaches the
+        underlying Graph via ``__getattr__``).
+        """
+        from src.common.kernel.graph import _FIELD_SPECS
+
+        out: list[dict[str, object]] = []
+        for name, _cls, kind, _disk in _FIELD_SPECS:
+            reg = getattr(self._graph, name)
+            specs = getattr(type(reg), "indexes", []) or []
+            index_names = [s.name for s in specs]
+            out.append(
+                {
+                    "name": name,
+                    "entity_kind": kind.value,
+                    "registry_type": type(reg).__name__,
+                    "count": len(reg),
+                    "indexes": index_names,
+                }
+            )
+        return out
+
+    # ------------------------------------------------------------------
+    # Per-entity helpers (P1)
+    # ------------------------------------------------------------------
+    def traits_for(
+        self, ref: EntityRef, name: Optional[str] = None
+    ) -> list[Trait]:
+        """Every :class:`Trait` whose ``target`` is ``ref``.
+
+        Optionally filter by trait name (matches ``trait.name == name``).
+        Wraps :meth:`TraitRegistry.for_target` so callers don't have to
+        reach through ``graph_data.traits.for_target(ref)``.
+        """
+        traits = self._graph.traits.for_target(ref)
+        if name is None:
+            return list(traits)
+        return [t for t in traits if getattr(t, "name", None) == name]
+
+    def relations_for(
+        self,
+        ref: EntityRef,
+        kind: Optional[str] = None,
+        window: Optional[WindowKind | str] = None,
+        direction: Literal["out", "in", "both"] = "both",
+    ) -> list[Relation]:
+        """Relations involving ``ref``, filtered by kind/window/direction.
+
+        * ``direction="out"`` — relations whose ``source == ref``
+        * ``direction="in"``  — relations whose ``target == ref``
+        * ``direction="both"`` (default) — union of the two, deduped
+
+        ``kind`` filters by ``relation_kind`` exact-match. ``window``
+        accepts either :class:`WindowKind` or its bare string value.
+        """
+        rels: list[Relation] = []
+        if direction in ("out", "both"):
+            rels.extend(self._graph.relations.for_source(ref))
+        if direction in ("in", "both"):
+            rels.extend(self._graph.relations.for_target(ref))
+        if direction == "both" and rels:
+            # Dedup by id when a relation is both source-side and
+            # target-side (self-relations, mostly).
+            seen: set[str] = set()
+            deduped: list[Relation] = []
+            for r in rels:
+                if r.id in seen:
+                    continue
+                seen.add(r.id)
+                deduped.append(r)
+            rels = deduped
+        if kind is not None:
+            rels = [r for r in rels if r.relation_kind == kind]
+        if window is not None:
+            win = (
+                WindowKind(window)
+                if isinstance(window, str) and not isinstance(window, WindowKind)
+                else window
+            )
+            rels = [r for r in rels if r.window == win]
+        return rels
+
+    def metrics_for_file(self, file_id: str) -> dict[str, float]:
+        """All Lizard-style metrics for one file, pivoted by metric name.
+
+        Returns ``{metric_name: value}`` (e.g. ``{"sum_nloc": 220.0,
+        "max_ccn": 11.0, ...}``). Empty dict when the file has no
+        recorded metrics. Same shape as one row of
+        :meth:`list_file_metrics` but for a single file.
+        """
+        out: dict[str, float] = {}
+        for fm in self._graph.file_metrics:
+            if fm.file_ref.id == file_id:
+                out[fm.metric_name] = fm.value
+        return out
+
+    # ------------------------------------------------------------------
+    # Per-domain summary helpers (P2)
+    #
+    # Same shape pattern as the existing ``code_structure_summary`` /
+    # ``duplication_summary``: ``{loaded, source, projects: [...]}``
+    # with per-project counts. ``loaded=False`` for empty graphs.
+    # ------------------------------------------------------------------
+    def quality_summary(self) -> dict[str, object]:
+        """Per-project counts from the quality (Insider/Sonar) layer."""
+        projects = self._graph.quality_projects.all()
+        if not projects:
+            return {"loaded": False, "source": None, "projects": []}
+
+        issues_reg = self._graph.quality_issues
+        rows: list[dict[str, object]] = []
+        for p in projects:
+            p_ref = p.ref()
+            issues = issues_reg.by_project.get(p_ref, ())
+            by_severity = Counter(
+                i.severity for i in issues if i.severity is not None
+            )
+            by_category = Counter(i.category for i in issues)
+            by_rule = Counter(i.rule_id for i in issues)
+            rows.append(
+                {
+                    "project_id": p.id,
+                    "project_name": p.name,
+                    "source_tool": p.source_tool,
+                    "issue_count": len(issues),
+                    "by_severity": dict(by_severity),
+                    "by_category": dict(by_category),
+                    "top_rules": by_rule.most_common(10),
+                }
+            )
+
+        canonical = projects[0].source_tool if len(projects) == 1 else None
+        return {"loaded": True, "source": canonical, "projects": rows}
+
+    def github_summary(self) -> dict[str, object]:
+        """Per-project counts of GitHub PRs, reviews, comments, commits."""
+        projects = self._graph.github_projects.all()
+        if not projects:
+            return {"loaded": False, "source": None, "projects": []}
+
+        prs_reg = self._graph.pull_requests
+        reviews_reg = self._graph.reviews
+        rcs_reg = self._graph.review_comments
+        commits_reg = self._graph.github_commits
+        users_reg = self._graph.github_users
+
+        rows: list[dict[str, object]] = []
+        for p in projects:
+            p_ref = p.ref()
+            prs = prs_reg.by_project.get(p_ref, ())
+            users = users_reg.by_project.get(p_ref, ())
+            pr_states = Counter(pr.state for pr in prs)
+
+            reviews_total = 0
+            review_states: Counter[str] = Counter()
+            rc_total = 0
+            commits_total = 0
+            for pr in prs:
+                pr_ref = pr.ref()
+                pr_reviews = reviews_reg.by_pull_request.get(pr_ref, ())
+                reviews_total += len(pr_reviews)
+                for rv in pr_reviews:
+                    review_states[rv.state] += 1
+                rc_total += len(rcs_reg.by_pull_request.get(pr_ref, ()))
+                commits_total += len(commits_reg.by_pull_request.get(pr_ref, ()))
+
+            rows.append(
+                {
+                    "project_id": p.id,
+                    "project_name": p.name,
+                    "users": len(users),
+                    "pull_requests": len(prs),
+                    "pr_by_state": dict(pr_states),
+                    "reviews": reviews_total,
+                    "review_by_state": dict(review_states),
+                    "review_comments": rc_total,
+                    "commits": commits_total,
+                }
+            )
+
+        return {"loaded": True, "source": "github", "projects": rows}
+
+    def jira_summary(self) -> dict[str, object]:
+        """Per-project counts of JIRA issues, users, statuses, types."""
+        projects = self._graph.jira_projects.all()
+        if not projects:
+            return {"loaded": False, "source": None, "projects": []}
+
+        issues_reg = self._graph.issues
+        users_reg = self._graph.jira_users
+        statuses_reg = self._graph.issue_statuses
+        types_reg = self._graph.issue_types
+
+        rows: list[dict[str, object]] = []
+        for p in projects:
+            p_ref = p.ref()
+            issues = issues_reg.by_project.get(p_ref, ())
+            by_status: Counter[str] = Counter()
+            by_type: Counter[str] = Counter()
+            for issue in issues:
+                if issue.status_ref is not None:
+                    status = statuses_reg.get(issue.status_ref.id)
+                    by_status[status.name if status else "<unknown>"] += 1
+                if issue.type_ref is not None:
+                    itype = types_reg.get(issue.type_ref.id)
+                    by_type[itype.name if itype else "<unknown>"] += 1
+
+            rows.append(
+                {
+                    "project_id": p.id,
+                    "project_name": p.name,
+                    "users": len(users_reg.by_project.get(p_ref, ())),
+                    "issues": len(issues),
+                    "statuses_defined": len(statuses_reg.by_project.get(p_ref, ())),
+                    "types_defined": len(types_reg.by_project.get(p_ref, ())),
+                    "by_status": dict(by_status),
+                    "by_type": dict(by_type),
+                }
+            )
+
+        return {"loaded": True, "source": "jira", "projects": rows}
+
+    def git_summary(self) -> dict[str, object]:
+        """Per-project counts of git commits, files, changes, accounts."""
+        projects = self._graph.git_projects.all()
+        if not projects:
+            return {"loaded": False, "source": None, "projects": []}
+
+        commits_reg = self._graph.commits
+        files_reg = self._graph.files
+        accounts_reg = self._graph.git_accounts
+        changes_reg = self._graph.changes
+
+        rows: list[dict[str, object]] = []
+        for p in projects:
+            p_ref = p.ref()
+            commits = commits_reg.by_project.get(p_ref, ())
+            files = files_reg.by_project.get(p_ref, ())
+            accounts = accounts_reg.by_project.get(p_ref, ())
+
+            # Changes have no by_project index; aggregate by walking
+            # commit -> changes per commit (cheap; one dict lookup per
+            # commit, dominated by commit count which is ~thousands).
+            changes_total = 0
+            for c in commits:
+                changes_total += len(changes_reg.by_commit.get(c.ref(), ()))
+
+            rows.append(
+                {
+                    "project_id": p.id,
+                    "project_name": p.name,
+                    "commits": len(commits),
+                    "files": len(files),
+                    "accounts": len(accounts),
+                    "changes": changes_total,
+                }
+            )
+
+        return {"loaded": True, "source": "git", "projects": rows}
 
     # ------------------------------------------------------------------
     # Iteration / repr — small ergonomics

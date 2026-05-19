@@ -77,6 +77,19 @@ tags     = graph_data.tags_for(file_ref)                  # traits + classifiers
 bug_files = graph_data.find_files_with_trait("anomaly.testing.BugMagnet")
 prod_files = graph_data.find_files_with_classifier("role", "production")
 neighbors = graph_data.cochange_neighbors("src/app.py", "lifetime", limit=10)
+
+# Discoverability + per-entity helpers + per-domain summaries
+registries  = graph_data.list_registries()                  # 33 typed registries with index names
+traits      = graph_data.traits_for(file_ref)               # or filter by name
+traits_only = graph_data.traits_for(file_ref, name="anomaly.testing.BugMagnet")
+rels_out    = graph_data.relations_for(file_ref, direction="out")
+cochange    = graph_data.relations_for(file_ref, kind="cochange", window="lifetime")
+file_mets   = graph_data.metrics_for_file("src/app.py")     # {sum_nloc: ..., max_ccn: ...}
+
+git_stats    = graph_data.git_summary()
+github_stats = graph_data.github_summary()                  # PRs, reviews, comments, commits per project
+jira_stats   = graph_data.jira_summary()
+quality      = graph_data.quality_summary()
 ```
 
 ## Detailed Documentation
