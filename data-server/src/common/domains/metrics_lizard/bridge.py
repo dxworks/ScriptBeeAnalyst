@@ -54,6 +54,7 @@ from typing import Any, Dict, Iterable, List, Mapping
 
 from ...kernel import EntityKind, EntityRef
 from ...people import SourceKind
+from ..git.models import File
 from .models import FileMetric, FunctionMetric, LizardMetricsProject
 
 
@@ -122,7 +123,12 @@ def build_lizard_bundle(
 
     file_metrics: List[FileMetric] = []
     for rel_path, functions in functions_by_file.items():
-        file_ref = EntityRef(kind=EntityKind.FILE, id=rel_path)
+        # File ids are repo-scoped post-F1 (see git.File.make_id) so
+        # the FileMetric.file_ref must point at the prefixed id to
+        # resolve via FileRegistry.get / .by_file.
+        file_ref = EntityRef(
+            kind=EntityKind.FILE, id=File.make_id(repo_name, rel_path)
+        )
         file_metrics.extend(
             _aggregate_file_metrics(rel_path, file_ref, project_ref, functions)
         )

@@ -50,6 +50,7 @@ def _build_small_graph() -> Graph:
     )
     commit = Commit(
         id="abc",
+        sha="abc",
         project_ref=git_ref,
         message="initial",
         author_date=datetime(2024, 1, 1, tzinfo=timezone.utc),

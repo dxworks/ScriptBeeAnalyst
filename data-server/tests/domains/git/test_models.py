@@ -146,6 +146,7 @@ def test_commit_construct_with_entity_refs():
     parent_ref = EntityRef(kind=EntityKind.COMMIT, id="parent-sha")
     c = Commit(
         id="abc123",
+        sha="abc123",
         project_ref=PROJECT_REF,
         message="init",
         author_date=datetime(2024, 1, 1, tzinfo=timezone.utc),
@@ -173,6 +174,7 @@ def test_commit_does_not_accept_python_author_object():
     with pytest.raises(ValidationError):
         Commit(
             id="c1",
+            sha="c1",
             project_ref=PROJECT_REF,
             message="m",
             author_date=datetime(2024, 1, 1, tzinfo=timezone.utc),
@@ -189,6 +191,7 @@ def test_commit_rejects_legacy_changes_field():
     with pytest.raises(ValidationError):
         Commit(
             id="c1",
+            sha="c1",
             project_ref=PROJECT_REF,
             message="m",
             author_date=datetime(2024, 1, 1, tzinfo=timezone.utc),
@@ -202,6 +205,7 @@ def test_commit_rejects_legacy_changes_field():
 def test_commit_default_parents_empty_list():
     c = Commit(
         id="root",
+        sha="root",
         project_ref=PROJECT_REF,
         message="root",
         author_date=datetime(2024, 1, 1, tzinfo=timezone.utc),

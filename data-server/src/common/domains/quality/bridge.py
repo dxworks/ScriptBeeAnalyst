@@ -37,6 +37,7 @@ from typing import Any, Iterable, List, Mapping
 
 from ...kernel import EntityKind, EntityRef
 from ...people import SourceKind
+from ..git.models import File
 from .models import QualityIssue, QualityProject
 
 
@@ -151,7 +152,9 @@ def build_quality_bundle(
             QualityIssue(
                 id=_issue_id(project.id, raw_file, rule_id, idx),
                 project_ref=project_ref,
-                file_ref=EntityRef(kind=EntityKind.FILE, id=raw_file),
+                file_ref=EntityRef(
+                    kind=EntityKind.FILE, id=File.make_id(repo_name, raw_file)
+                ),
                 rule_id=rule_id,
                 category=category,
                 source_tool="insider",

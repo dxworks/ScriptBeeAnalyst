@@ -86,6 +86,7 @@ def _make_commit(
 ) -> Commit:
     c = Commit(
         id=sha,
+        sha=sha,
         project_ref=gp.ref(),
         message=message,
         author_date=_utc(),

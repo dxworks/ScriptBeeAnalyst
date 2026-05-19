@@ -89,6 +89,7 @@ def _make_commit(
 ) -> Commit:
     return Commit(
         id=sha,
+        sha=sha,
         project_ref=_PROJECT_REF,
         message=f"commit {sha}",
         author_date=when,

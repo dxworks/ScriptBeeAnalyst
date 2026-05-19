@@ -94,6 +94,7 @@ def _make_account() -> GitAccount:
 def _make_commit(sha: str, *, author: GitAccount, when: datetime) -> Commit:
     return Commit(
         id=sha,
+        sha=sha,
         project_ref=_PROJECT_REF,
         message=f"commit {sha}",
         author_date=when,

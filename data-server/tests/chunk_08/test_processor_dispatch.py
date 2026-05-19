@@ -69,6 +69,7 @@ def _git_bundle():
     file = File(id="src/app.py", project_ref=project_ref, path="src/app.py", extension="py")
     commit = Commit(
         id="abc",
+        sha="abc",
         project_ref=project_ref,
         message="init",
         author_date=datetime(2024, 1, 1, tzinfo=timezone.utc),
@@ -261,9 +262,9 @@ def test_build_graph_from_bundles_runs_pipeline_with_full_catalog():
     graph, result = build_graph_from_bundles(
         "smoke",
         {
-            SourceKind.GIT: _git_bundle(),
-            SourceKind.JIRA: _jira_bundle(),
-            SourceKind.GITHUB: _github_bundle(),
+            SourceKind.GIT: [_git_bundle()],
+            SourceKind.JIRA: [_jira_bundle()],
+            SourceKind.GITHUB: [_github_bundle()],
         },
         config=DEFAULT_CONFIG,
     )

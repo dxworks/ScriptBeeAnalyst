@@ -37,7 +37,9 @@ Derivation strategy
   Choice §3). Same semantic, no per-call extra graph state.
 * ``pr_commits``: walks ``pr.commit_refs`` → :class:`GitHubCommit`
   (via ``graph.github_commits.get(...)``) → ``.sha`` → git
-  :class:`Commit` (via ``graph.commits.get(sha)``). Same join the
+  :class:`Commit` (via :class:`CommitRegistry.by_sha`). The bare-SHA
+  index keeps this join repo-agnostic now that git Commit ids are
+  repo-scoped (``{repo}:{sha}``). Same join the
   :class:`~src.enrichment.relations.implementations.pr_file.PrFileBuilder`
   performs internally.
 * ``issue_commits``: re-runs the commit-message regex against this
@@ -136,19 +138,33 @@ def pr_commits(pr: "PullRequest", graph_data: GraphLike) -> list["Commit"]:
     if github_commits is None or commits is None:
         return []
 
+    # Post-F1: git Commit.id is repo-scoped (``{repo}:{sha}``) so a
+    # bare-SHA lookup goes through CommitRegistry.by_sha (multi-valued
+    # because two repos can carry the same subtree SHA). For a typical
+    # one-repo project the inner list has one element; multi-repo
+    # projects emit one git Commit per repo for the same SHA.
+    sha_index = getattr(commits, "by_sha", None)
+
     refs = getattr(pr, "commit_refs", None) or []
     out: list["Commit"] = []
-    seen_shas: set[str] = set()
+    seen_ids: set[str] = set()
     for ref in refs:
         gh_commit = github_commits.get(ref.id)
         if gh_commit is None:
             continue
         sha = getattr(gh_commit, "sha", None)
-        if not sha or sha in seen_shas:
+        if not sha:
             continue
-        seen_shas.add(sha)
-        git_commit = commits.get(sha)
-        if git_commit is not None:
+        if sha_index is not None:
+            matches = sha_index.get(sha, ())
+        else:
+            # Defensive fallback: tolerate registries that haven't been
+            # rebuilt with the by_sha index yet (e.g. legacy pickles).
+            matches = ()
+        for git_commit in matches:
+            if git_commit.id in seen_ids:
+                continue
+            seen_ids.add(git_commit.id)
             out.append(git_commit)
     return out
 

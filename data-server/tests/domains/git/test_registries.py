@@ -64,6 +64,7 @@ def _commit(
     parents = parents or []
     return Commit(
         id=sha,
+        sha=sha,
         project_ref=project_ref,
         message=f"commit {sha}",
         author_date=datetime(2024, 1, 1, tzinfo=timezone.utc),

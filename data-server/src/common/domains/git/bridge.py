@@ -18,14 +18,20 @@ Key translation choices (see Chunk 8 brief):
 * :class:`GitAccount` ids are the canonical ``"Name <email>"`` composite
   built via :meth:`GitAccount.make_id` and deduplicated across both
   author and committer slots so the same person isn't instantiated
-  twice.
-* :class:`File` ids are the *path* of the file (per ``models.File``
-  docstring). When a change is a RENAME, both ``old_path`` and
-  ``new_path`` are registered as separate :class:`File` entities — the
-  rename-chain follow-up that collapses them lives in the transformer
-  layer, not here.
+  twice. NOT repo-scoped — the same person contributing to two repos
+  is one :class:`GitAccount` (downstream smart-merge collapses cross-source
+  identities, including across repos).
+* :class:`Commit` ids are repo-scoped via :meth:`Commit.make_id`
+  (``{repo_name}:{sha}``); ``Commit.sha`` carries the bare SHA for
+  joins from the GitHub side, indexed via :class:`CommitRegistry.by_sha`.
+* :class:`File` ids are repo-scoped via :meth:`File.make_id`
+  (``{repo_name}::{path}``); ``File.path`` carries the bare path.
+  When a change is a RENAME, both ``old_path`` and ``new_path`` are
+  registered as separate :class:`File` entities — the rename-chain
+  follow-up that collapses them lives in the transformer layer, not here.
 * :class:`Change` ids come from :meth:`Change.make_id` so they're
-  deterministic across re-runs.
+  deterministic across re-runs. (Change ids include the commit's
+  repo-scoped id, so they're naturally repo-scoped too.)
 * :class:`Hunk` ids come from :meth:`Hunk.make_id` with the change-local
   ordinal (0-based position inside the change's hunk list).
 * Legacy :class:`ChangeType` / :class:`LineOperation` enums (plain
@@ -171,16 +177,18 @@ def build_git_bundle(
 
         # ``parent_ids`` from the reader is a ``split(" ")`` result — for
         # root commits that's a single empty string, which we drop.
+        # Parents live in the same repo, so they use the same repo_name
+        # prefix for their composite id.
         parent_refs = [
-            # Parent commits are themselves :class:`Commit` entities;
-            # build the ref via their canonical id (the sha).
-            _commit_ref_for(parent_sha)
+            _commit_ref_for(repo_name, parent_sha)
             for parent_sha in commit_dto.parent_ids
             if parent_sha
         ]
 
+        commit_sha = commit_dto.id
         commit = Commit(
-            id=commit_dto.id,
+            id=Commit.make_id(repo_name, commit_sha),
+            sha=commit_sha,
             project_ref=project_ref,
             message=commit_dto.message,
             author_date=author_date,
@@ -206,7 +214,8 @@ def build_git_bundle(
                 else old_path
             )
             file_entity = _intern_file(
-                files_by_path, file_path_for_id, project_ref, change_dto.is_binary
+                files_by_path, repo_name, file_path_for_id,
+                project_ref, change_dto.is_binary,
             )
 
             change = Change(
@@ -217,7 +226,7 @@ def build_git_bundle(
                 old_path=old_path,
                 new_path=new_path,
                 parent_commit_ref=(
-                    _commit_ref_for(change_dto.parent_commit_id)
+                    _commit_ref_for(repo_name, change_dto.parent_commit_id)
                     if change_dto.parent_commit_id
                     else None
                 ),
@@ -288,11 +297,16 @@ def _intern_account(
 
 def _intern_file(
     cache: Dict[str, File],
+    repo_name: str,
     path: str,
     project_ref: Any,
     is_binary: bool,
 ) -> File:
-    """Return a cached :class:`File` for ``path``.
+    """Return a cached :class:`File` for ``(repo_name, path)``.
+
+    The cache key is the bare path (cheap and matches the legacy semantics
+    of "same path across commits collapses to one File"). The constructed
+    :class:`File`'s id is repo-scoped (:meth:`File.make_id`).
 
     If the same path appears twice across commits (typical) we keep the
     *first* :class:`File` we built. ``is_binary`` is OR-ed so a path that
@@ -301,7 +315,7 @@ def _intern_file(
     existing = cache.get(path)
     if existing is None:
         existing = File(
-            id=path,
+            id=File.make_id(repo_name, path),
             project_ref=project_ref,
             path=path,
             is_binary=is_binary,
@@ -315,19 +329,17 @@ def _intern_file(
     return existing
 
 
-def _commit_ref_for(sha: str):
-    """Build an :class:`EntityRef` to a :class:`Commit` by its sha.
+def _commit_ref_for(repo_name: str, sha: str):
+    """Build an :class:`EntityRef` to a :class:`Commit` by its repo-scoped id.
 
     We don't keep a dict of commits here — refs are pure value objects
     keyed by ``(kind, id)``, so this avoids forcing parent commits to be
     parsed before their children.
     """
-    # ``Commit.ref()`` would need an instance; use the ref factory shape
-    # directly. ``Entity.ref`` returns ``EntityRef(kind=cls.kind, id=...)``
-    # for a constructed entity; here we mirror the same construction.
+    # ``Commit.ref()`` would need an instance; mirror its construction.
     from ...kernel import EntityRef
 
-    return EntityRef(kind=Commit.kind, id=sha)
+    return EntityRef(kind=Commit.kind, id=Commit.make_id(repo_name, sha))
 
 
 __all__ = ["build_git_bundle"]

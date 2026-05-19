@@ -46,6 +46,7 @@ def _build_entity_bundle() -> dict:
     )
     commit = Commit(
         id="abc",
+        sha="abc",
         project_ref=project_ref,
         message="m",
         author_date=datetime(2024, 1, 1, tzinfo=timezone.utc),

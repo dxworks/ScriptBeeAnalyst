@@ -111,6 +111,13 @@ class CommitRegistry(Registry[Commit, str]):
                          parent gets a bucket containing every child commit
                          that lists it — descendants traversal in O(1) per
                          hop (replaces legacy ``GitCommit.children``).
+    * ``by_sha``       — bare-SHA lookup (multi-valued because the same
+                         SHA can legitimately exist in two repos when
+                         F1's repo-scoped Commit.id allows multi-repo
+                         graphs). Mirrors :class:`GitHubCommitRegistry.by_sha`
+                         so cross-source joins (``GitHubCommit.sha`` →
+                         git :class:`Commit`) work without knowing the
+                         owning repo at the join site.
     """
 
     indexes = [
@@ -118,6 +125,7 @@ class CommitRegistry(Registry[Commit, str]):
         IndexSpec(name="by_committer", key_fn=lambda c: c.committer_ref, multi=True),
         IndexSpec(name="by_project", key_fn=lambda c: c.project_ref, multi=True),
         IndexSpec(name="by_parent", key_fn=lambda c: c.parent_refs, multi=True),
+        IndexSpec(name="by_sha", key_fn=lambda c: c.sha, multi=True),
     ]
 
     def get_id(self, entity: Commit) -> str:

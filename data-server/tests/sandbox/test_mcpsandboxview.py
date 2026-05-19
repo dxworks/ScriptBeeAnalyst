@@ -67,6 +67,7 @@ def small_graph() -> Graph:
     )
     commit = Commit(
         id="sha1234",  # acts as both git commit id AND GitHubCommit.sha
+        sha="sha1234",
         project_ref=git_ref,
         message="Fix JIR-1: tidy up parser",
         author_date=datetime(2024, 1, 1, tzinfo=timezone.utc),

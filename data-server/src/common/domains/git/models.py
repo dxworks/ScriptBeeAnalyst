@@ -155,7 +155,22 @@ class Commit(Entity):
 
     Field mapping vs legacy ``GitCommit``:
 
-    * ``id`` (sha)             — unchanged.
+    * ``id``                   — repo-scoped composite ``f"{repo_name}:{sha}"``
+                                  built via :meth:`Commit.make_id`. Pre-F1
+                                  this was the bare SHA, but two repos in
+                                  the same graph can share subtree SHAs,
+                                  which would silently overwrite registry
+                                  entries. The scoped id keeps both repos
+                                  addressable while leaving cross-source
+                                  joins (GitHub.sha → git Commit) routed
+                                  through the :class:`CommitRegistry.by_sha`
+                                  index, not through string id equality.
+    * ``sha``                  — explicit copy of the bare SHA; same value
+                                  as the suffix of ``id`` but kept as a
+                                  named field so :class:`CommitRegistry`
+                                  can index by it and downstream code can
+                                  read ``commit.sha`` without parsing the
+                                  id.
     * ``project_ref``          — was ``project: Optional[GitProject]``.
     * ``message``              — unchanged.
     * ``author_date``          — unchanged.
@@ -176,6 +191,7 @@ class Commit(Entity):
     kind: ClassVar[EntityKind] = EntityKind.COMMIT
 
     project_ref: EntityRef
+    sha: str
     message: str
     author_date: datetime
     committer_date: datetime
@@ -185,21 +201,34 @@ class Commit(Entity):
     branch_id: int = 0
     repo_size: int = 0
 
+    @staticmethod
+    def make_id(repo_name: str, sha: str) -> str:
+        """Repo-scoped commit id. ``{repo_name}:{sha}``."""
+        return f"{repo_name}:{sha}"
+
 
 class File(Entity):
     """A file tracked across a Git history.
 
     Field mapping vs legacy ``File``:
 
-    * ``id``               — was a generated ``uuid.UUID``; in v2 we use the
-                             file path (legacy's "last known new_file_name"
-                             played that role implicitly). Path is stable
-                             across renames once the transformer follows
-                             the rename chain (Chunk 8 wiring).
+    * ``id``               — repo-scoped composite ``f"{repo_name}::{path}"``
+                             built via :meth:`File.make_id` (F1). The bare
+                             ``path`` remains the natural identifier within
+                             a single repo; the ``::`` separator avoids
+                             colliding with ``Commit.id``'s single-colon
+                             convention. Pre-F1 this was just the path;
+                             two repos uploaded to the same project that
+                             share file paths (extremely common — every
+                             ``README.md`` / ``pom.xml`` / ``Makefile``)
+                             would overwrite each other in the registry.
     * ``project_ref``      — was ``project: Optional[GitProject]``.
-    * ``path``             — explicit copy of the path used as id; redundant
-                             with ``id`` but kept so consumers don't have to
-                             round-trip through the id semantics.
+    * ``path``             — bare path, no repo prefix. Use this for
+                             extension extraction, dirname comparisons,
+                             external joins (Lizard CSV / JaFax JSON /
+                             DuDe CSV all carry bare paths). The
+                             ``project_ref`` disambiguates which repo
+                             this path belongs to.
     * ``is_binary``        — unchanged.
     * ``changes``          — DROPPED. Reverse lookup via
                              :class:`ChangeRegistry.by_file`.
@@ -218,6 +247,16 @@ class File(Entity):
     path: str
     is_binary: bool = False
     extension: Optional[str] = None
+
+    @staticmethod
+    def make_id(repo_name: str, path: str) -> str:
+        """Repo-scoped file id. ``{repo_name}::{path}``.
+
+        The double-colon separator (vs Commit's single colon) keeps the
+        two namespaces visually distinct and avoids ambiguity when a
+        path happens to start with a single colon-prefixed segment.
+        """
+        return f"{repo_name}::{path}"
 
     @staticmethod
     def derive_extension(path: str) -> Optional[str]:

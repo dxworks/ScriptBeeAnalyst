@@ -184,17 +184,24 @@ def apply_transform_result(graph: Graph, result: TransformResult) -> None:
 # ---------------------------------------------------------------------------
 def build_graph_from_bundles(
     project_id: str,
-    bundles: Mapping[SourceKind, Mapping],
+    bundles: Mapping[SourceKind, List[Mapping]],
     *,
     config: Optional[EnrichmentConfig] = None,
 ) -> Tuple[Graph, PipelineResult]:
     """Build a :class:`Graph` from pre-built per-source entity bundles.
 
     This is the canonical v2-native build path. Each ``bundles[source]``
-    is the Mapping form documented by the source's transformer (see e.g.
-    :class:`GitTransformer`'s module docstring). The returned tuple is
-    ``(graph, pipeline_result)`` — the pipeline result carries per-step
-    success / error rows so callers can surface them.
+    is a **list** of bundle Mappings (one per repo / per source file —
+    typically a single-element list for non-git sources, but git can
+    carry multiple bundles when a project has multiple repos uploaded).
+    Each bundle is dispatched through its source's transformer and
+    merged into the same typed :class:`Graph`. Per-domain registries
+    handle multi-bundle merging naturally because entity ids are
+    repo-scoped (see :meth:`git.Commit.make_id` / :meth:`git.File.make_id`).
+
+    Pre-F1 the signature was ``Mapping[SourceKind, Mapping]`` and only
+    one git bundle could survive; the dispatcher logged a warning for
+    the dropped repos.
 
     Parameters
     ----------
@@ -202,10 +209,10 @@ def build_graph_from_bundles(
         UUID-ish identifier for the project. Stored on the Graph's
         ``project_id`` field and used as the storage key.
     bundles
-        Mapping of :class:`SourceKind` → raw bundle. Only sources present
-        in the dict have transformers invoked; missing sources are
-        skipped (the resulting Graph just has empty registries for those
-        domains).
+        Mapping of :class:`SourceKind` → list of raw bundles. Only
+        sources present in the dict have transformers invoked; missing
+        sources are skipped (the resulting Graph just has empty
+        registries for those domains).
     config
         Optional :class:`EnrichmentConfig` passed through to the
         pipeline. Defaults to :data:`DEFAULT_CONFIG`.
@@ -215,10 +222,11 @@ def build_graph_from_bundles(
 
     graph = Graph(project_id=project_id)
 
-    for source, bundle in bundles.items():
+    for source, source_bundles in bundles.items():
         transformer = get_transformer(source)
-        result = transformer.transform(bundle)
-        apply_transform_result(graph, result)
+        for bundle in source_bundles:
+            result = transformer.transform(bundle)
+            apply_transform_result(graph, result)
 
     pipeline_result = run_pipeline(graph, config)
     return graph, pipeline_result
@@ -351,87 +359,106 @@ def save_graph_to_disk(graph: Graph) -> Path:
 # ---------------------------------------------------------------------------
 def _downloaded_files_to_bundles(
     downloaded: DownloadedFiles, project_name: str = "Project"
-) -> Mapping[SourceKind, Mapping]:
+) -> Mapping[SourceKind, List[Mapping]]:
     """Translate :class:`DownloadedFiles` into per-source entity bundles.
-
-    **Deferred port.** This is the legacy → v2 bridge: walking each raw
-    payload (iglog bytes, Jira/GitHub JSON, JaFax/DuDe/Insider/Lizard
-    files) and producing the entity-bundle Mappings v2 transformers
-    accept. The original legacy code lives in ``src/inspector_git/``,
-    ``src/jira_miner/``, ``src/github_miner/``, ``src/lizard_miner/``,
-    ``src/codestructure_miner/``, ``src/dude_miner/``,
-    ``src/quality_miner/`` — ~3000 LOC of plumbing the chunk-7 brief
-    explicitly defers to Chunk 10's cleanup.
 
     Each bridge module under ``src/common/domains/<x>/bridge.py`` exports
     a ``build_<x>_bundle(path, ...) -> Mapping`` callable that parses the
     raw payload and emits the entity-bundle shape its sibling Transformer
     consumes. We invoke them per-source and assemble the dispatch dict.
 
-    Multi-repo: only the first git repo is fed today (the v2 dispatcher
-    is keyed by SourceKind, so a single bundle per source). The other
-    repos are logged as skipped — a richer multi-repo pass is left for
-    a follow-up that lifts the dispatcher signature.
-    """
-    bundles: Dict[SourceKind, Mapping] = {}
+    Multi-repo (F1): every uploaded ``.iglog`` is processed; the git
+    bundle list carries one entry per repo. Entity ids on the git side
+    are repo-scoped (:meth:`git.Commit.make_id` / :meth:`git.File.make_id`)
+    so multiple repos coexist without collisions in :class:`CommitRegistry`
+    / :class:`FileRegistry`. Cross-source SHA joins (GitHub → git) go
+    through :class:`CommitRegistry.by_sha` so they remain repo-agnostic.
 
-    # Pick the repo_name used by per-repo bridges (lizard / code-structure /
-    # duplication / quality). Falls back to project_name when no git
-    # repo was uploaded.
+    Dependent bridges (lizard, code-structure, duplication, quality) each
+    take a single ``repo_name`` because their input artefacts (one CSV
+    per project, one JSON per project) carry bare file paths with no
+    repo discriminator. With multiple iglogs uploaded but only one
+    dependent artefact, we anchor the dependent bridge to the first
+    repo's name (the one the upstream tools most likely scanned) and
+    emit a warning so the operator knows which repo the metrics will
+    bind to.
+    """
+    bundles: Dict[SourceKind, List[Mapping]] = {}
+
+    # Pick the repo_name dependent bridges (lizard / code-structure /
+    # duplication / quality) bind their refs against. Falls back to
+    # project_name when no git repo was uploaded.
     if downloaded.git_files:
         repo_name = downloaded.git_files[0][0]
-        if len(downloaded.git_files) > 1:
-            extras = [r for r, _ in downloaded.git_files[1:]]
-            logger.warning(
-                "Multi-repo git bundle not supported yet — using %r, "
-                "skipping %s",
-                repo_name,
-                extras,
-            )
     else:
         repo_name = project_name
 
     if downloaded.git_files:
-        _, git_path = downloaded.git_files[0]
-        bundles[SourceKind.GIT] = build_git_bundle(
-            git_path, repo_name, project_name
-        )
+        git_bundles: List[Mapping] = []
+        for repo, git_path in downloaded.git_files:
+            git_bundles.append(build_git_bundle(git_path, repo, project_name))
+        bundles[SourceKind.GIT] = git_bundles
+        if (
+            len(downloaded.git_files) > 1
+            and (
+                downloaded.lizard_file is not None
+                or downloaded.jafax_file is not None
+                or downloaded.dude_external_file is not None
+                or downloaded.dude_internal_file is not None
+                or downloaded.quality_issues_file is not None
+            )
+        ):
+            other_repos = [r for r, _ in downloaded.git_files[1:]]
+            logger.warning(
+                "Multiple git repos uploaded (%s) but lizard/code-structure/"
+                "duplication/quality bridges take a single repo anchor — "
+                "binding those refs to %r; data from %s will not resolve",
+                [r for r, _ in downloaded.git_files],
+                repo_name,
+                other_repos,
+            )
 
     if downloaded.jira_file is not None:
-        bundles[SourceKind.JIRA] = build_jira_bundle(
-            downloaded.jira_file, project_name
-        )
+        bundles[SourceKind.JIRA] = [
+            build_jira_bundle(downloaded.jira_file, project_name)
+        ]
 
     if downloaded.github_file is not None:
-        bundles[SourceKind.GITHUB] = build_github_bundle(
-            downloaded.github_file, project_name
-        )
+        bundles[SourceKind.GITHUB] = [
+            build_github_bundle(downloaded.github_file, project_name)
+        ]
 
     if downloaded.lizard_file is not None:
-        bundles[SourceKind.LIZARD] = build_lizard_bundle(
-            downloaded.lizard_file, repo_name, project_name
-        )
+        bundles[SourceKind.LIZARD] = [
+            build_lizard_bundle(downloaded.lizard_file, repo_name, project_name)
+        ]
 
     if downloaded.jafax_file is not None:
-        bundles[SourceKind.CODE_STRUCTURE] = build_code_structure_bundle(
-            downloaded.jafax_file, repo_name, project_name
-        )
+        bundles[SourceKind.CODE_STRUCTURE] = [
+            build_code_structure_bundle(
+                downloaded.jafax_file, repo_name, project_name
+            )
+        ]
 
     if (
         downloaded.dude_external_file is not None
         or downloaded.dude_internal_file is not None
     ):
-        bundles[SourceKind.DUPLICATION] = build_duplication_bundle(
-            downloaded.dude_external_file,
-            downloaded.dude_internal_file,
-            repo_name,
-            project_name,
-        )
+        bundles[SourceKind.DUPLICATION] = [
+            build_duplication_bundle(
+                downloaded.dude_external_file,
+                downloaded.dude_internal_file,
+                repo_name,
+                project_name,
+            )
+        ]
 
     if downloaded.quality_issues_file is not None:
-        bundles[SourceKind.QUALITY] = build_quality_bundle(
-            downloaded.quality_issues_file, repo_name, project_name
-        )
+        bundles[SourceKind.QUALITY] = [
+            build_quality_bundle(
+                downloaded.quality_issues_file, repo_name, project_name
+            )
+        ]
 
     return bundles
 

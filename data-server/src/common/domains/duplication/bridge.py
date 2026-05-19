@@ -52,6 +52,7 @@ from typing import Any, Iterable, List, Mapping, Optional
 
 from ...kernel import EntityKind, EntityRef
 from ...people import SourceKind
+from ..git.models import File
 from .models import DuplicationKind, DuplicationPair, DuplicationProject
 
 
@@ -76,6 +77,7 @@ def _classify_external(file_a_path: str, file_b_path: str) -> DuplicationKind:
 def _parse_external_csv(
     csv_path: Path,
     project_ref: EntityRef,
+    repo_name: str,
 ) -> List[DuplicationPair]:
     """Parse a DuDe external-duplication CSV into :class:`DuplicationPair`.
 
@@ -100,8 +102,12 @@ def _parse_external_csv(
             except (ValueError, IndexError):
                 continue
 
-            file_a_ref = EntityRef(kind=EntityKind.FILE, id=file_a_path)
-            file_b_ref = EntityRef(kind=EntityKind.FILE, id=file_b_path)
+            # File ids are repo-scoped post-F1 — prefix the bare paths
+            # the DuDe CSV carries so refs resolve via FileRegistry.get.
+            file_a_id = File.make_id(repo_name, file_a_path)
+            file_b_id = File.make_id(repo_name, file_b_path)
+            file_a_ref = EntityRef(kind=EntityKind.FILE, id=file_a_id)
+            file_b_ref = EntityRef(kind=EntityKind.FILE, id=file_b_id)
             # Canonicalise the pair so (a, b) and (b, a) collapse.
             pair_id = DuplicationPair.make_id(file_a_ref.id, file_b_ref.id)
             # After canonicalisation, line up the refs to match the id
@@ -128,6 +134,7 @@ def _parse_external_csv(
 def _parse_internal_json(
     json_path: Path,
     project_ref: EntityRef,
+    repo_name: str,
 ) -> List[DuplicationPair]:
     """Parse a DuDe internal-duplication JSON into self-pair entities.
 
@@ -155,7 +162,9 @@ def _parse_internal_json(
         except (TypeError, ValueError):
             continue
 
-        file_ref = EntityRef(kind=EntityKind.FILE, id=file_path)
+        file_ref = EntityRef(
+            kind=EntityKind.FILE, id=File.make_id(repo_name, file_path)
+        )
         pair_id = DuplicationPair.make_id(file_ref.id, file_ref.id)
         pairs.append(
             DuplicationPair(
@@ -224,9 +233,9 @@ def build_duplication_bundle(
 
     pairs: List[DuplicationPair] = []
     if external_csv is not None:
-        pairs.extend(_parse_external_csv(external_csv, project_ref))
+        pairs.extend(_parse_external_csv(external_csv, project_ref, repo_name))
     if internal_json is not None:
-        pairs.extend(_parse_internal_json(internal_json, project_ref))
+        pairs.extend(_parse_internal_json(internal_json, project_ref, repo_name))
 
     return {
         "project": project,
