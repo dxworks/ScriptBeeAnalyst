@@ -90,6 +90,9 @@ git_stats    = graph_data.git_summary()
 github_stats = graph_data.github_summary()                  # PRs, reviews, comments, commits per project
 jira_stats   = graph_data.jira_summary()
 quality      = graph_data.quality_summary()
+
+# `graph_data.duplication_pairs` is an alias for `graph_data.duplications`
+# (legacy compat — both return the same DuplicationPairRegistry).
 ```
 
 ## Detailed Documentation

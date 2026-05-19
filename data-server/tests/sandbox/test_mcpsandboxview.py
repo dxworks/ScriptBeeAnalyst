@@ -384,3 +384,263 @@ def test_repr_summarises_view(view: MCPSandboxView):
 
 def test_iter_yields_main_registry_names(view: MCPSandboxView):
     assert list(view) == ["commits", "files", "issues", "pull_requests"]
+
+
+# ----------------------------------------------------------------------
+# duplication_pairs alias (legacy compat)
+# ----------------------------------------------------------------------
+def test_duplication_pairs_alias_returns_same_registry(view: MCPSandboxView):
+    assert view.duplication_pairs is view._graph.duplications
+    assert view.duplication_pairs is view.duplications
+
+
+# ----------------------------------------------------------------------
+# list_registries — 33 typed registries
+# ----------------------------------------------------------------------
+def test_list_registries_lists_all_33_fields(view: MCPSandboxView):
+    from src.common.kernel.graph import _FIELD_SPECS
+
+    entries = view.list_registries()
+    assert isinstance(entries, list)
+    assert len(entries) == len(_FIELD_SPECS)
+    for entry in entries:
+        assert "name" in entry
+        assert "entity_kind" in entry
+        assert "registry_type" in entry
+        assert "count" in entry
+        assert "indexes" in entry
+
+
+# ----------------------------------------------------------------------
+# traits_for / relations_for / metrics_for_file (P1 helpers)
+# ----------------------------------------------------------------------
+def test_traits_for_returns_traits_for_ref(view: MCPSandboxView):
+    file_a_ref = EntityRef(kind=EntityKind.FILE, id="src/a.py")
+    traits = view.traits_for(file_a_ref)
+    assert len(traits) == 1
+    assert traits[0].name == "anomaly.testing.BugMagnet"
+    # Name filter narrows.
+    assert view.traits_for(file_a_ref, name="anomaly.testing.BugMagnet") == traits
+    assert view.traits_for(file_a_ref, name="other") == []
+
+
+def test_relations_for_returns_relations_filtered_by_kind(view: MCPSandboxView):
+    file_a_ref = EntityRef(kind=EntityKind.FILE, id="src/a.py")
+    rels = view.relations_for(file_a_ref, kind="cochange")
+    assert len(rels) == 1
+    assert rels[0].relation_kind == "cochange"
+    # Direction filter.
+    out_rels = view.relations_for(file_a_ref, direction="out")
+    assert len(out_rels) == 1
+    # Unknown kind filters all out.
+    assert view.relations_for(file_a_ref, kind="nope") == []
+
+
+def test_metrics_for_file_returns_dict(small_graph: Graph):
+    from src.common.domains.git.models import GitProject
+    from src.common.domains.metrics_lizard.models import (
+        FileMetric,
+        LizardMetricsProject,
+    )
+
+    lizard_project = LizardMetricsProject(
+        id="lz1", name="zep-lz", source=SourceKind.GIT
+    )
+    lz_ref = lizard_project.ref()
+    file_a_ref = EntityRef(kind=EntityKind.FILE, id="src/a.py")
+    fm = FileMetric(
+        id=FileMetric.make_id("src/a.py", "sum_nloc"),
+        project_ref=lz_ref,
+        file_ref=file_a_ref,
+        metric_name="sum_nloc",
+        value=220.0,
+    )
+    small_graph.add_project(lizard_project)
+    small_graph.file_metrics.add(fm)
+
+    view = MCPSandboxView(small_graph)
+    metrics = view.metrics_for_file("src/a.py")
+    assert isinstance(metrics, dict)
+    assert metrics == {"sum_nloc": 220.0}
+    # Unknown file is empty.
+    assert view.metrics_for_file("nope.py") == {}
+
+
+# ----------------------------------------------------------------------
+# list_file_metrics
+# ----------------------------------------------------------------------
+def test_list_file_metrics_returns_names(small_graph: Graph):
+    from src.common.domains.metrics_lizard.models import (
+        FileMetric,
+        LizardMetricsProject,
+    )
+
+    lizard_project = LizardMetricsProject(
+        id="lz1", name="zep-lz", source=SourceKind.GIT
+    )
+    lz_ref = lizard_project.ref()
+    file_a_ref = EntityRef(kind=EntityKind.FILE, id="src/a.py")
+    for name, value in [("sum_nloc", 220.0), ("max_ccn", 11.0)]:
+        small_graph.file_metrics.add(
+            FileMetric(
+                id=FileMetric.make_id("src/a.py", name),
+                project_ref=lz_ref,
+                file_ref=file_a_ref,
+                metric_name=name,
+                value=value,
+            )
+        )
+    small_graph.add_project(lizard_project)
+
+    view = MCPSandboxView(small_graph)
+    result = view.list_file_metrics()
+    assert isinstance(result, dict)
+    assert result["count"] == 1
+    assert result["files"][0]["file_path"] == "src/a.py"
+    assert result["files"][0]["sum_nloc"] == 220.0
+    assert result["files"][0]["max_ccn"] == 11.0
+
+
+# ----------------------------------------------------------------------
+# Per-domain summary helpers — empty-graph branch + populated shape
+# ----------------------------------------------------------------------
+def _summary_shape_keys() -> set[str]:
+    return {"loaded", "source", "projects"}
+
+
+def test_git_summary_returns_expected_shape(view: MCPSandboxView):
+    result = view.git_summary()
+    assert set(result.keys()) == _summary_shape_keys()
+    assert result["loaded"] is True
+    assert result["source"] == "git"
+    assert isinstance(result["projects"], list)
+    assert len(result["projects"]) == 1
+
+
+def test_git_summary_empty_graph_returns_not_loaded():
+    empty = Graph(project_id="empty")
+    result = MCPSandboxView(empty).git_summary()
+    assert result == {"loaded": False, "source": None, "projects": []}
+
+
+def test_github_summary_returns_expected_shape(view: MCPSandboxView):
+    result = view.github_summary()
+    assert set(result.keys()) == _summary_shape_keys()
+    assert result["loaded"] is True
+    assert result["source"] == "github"
+    assert len(result["projects"]) == 1
+
+
+def test_github_summary_empty_graph_returns_not_loaded():
+    empty = Graph(project_id="empty")
+    result = MCPSandboxView(empty).github_summary()
+    assert result == {"loaded": False, "source": None, "projects": []}
+
+
+def test_jira_summary_returns_expected_shape(view: MCPSandboxView):
+    result = view.jira_summary()
+    assert set(result.keys()) == _summary_shape_keys()
+    assert result["loaded"] is True
+    assert result["source"] == "jira"
+    assert len(result["projects"]) == 1
+
+
+def test_jira_summary_empty_graph_returns_not_loaded():
+    empty = Graph(project_id="empty")
+    result = MCPSandboxView(empty).jira_summary()
+    assert result == {"loaded": False, "source": None, "projects": []}
+
+
+def test_quality_summary_returns_expected_shape(small_graph: Graph):
+    from src.common.domains.quality.models import QualityIssue, QualityProject
+
+    q_project = QualityProject(
+        id="qp1", name="zep-q", source=SourceKind.GIT, source_tool="insider"
+    )
+    q_ref = q_project.ref()
+    file_a_ref = EntityRef(kind=EntityKind.FILE, id="src/a.py")
+    q_issue = QualityIssue(
+        id="qi-1",
+        project_ref=q_ref,
+        file_ref=file_a_ref,
+        rule_id="StubImplementer",
+        category="design",
+    )
+    small_graph.add_project(q_project)
+    small_graph.quality_issues.add(q_issue)
+
+    result = MCPSandboxView(small_graph).quality_summary()
+    assert set(result.keys()) == _summary_shape_keys()
+    assert result["loaded"] is True
+    assert result["source"] == "insider"
+    assert len(result["projects"]) == 1
+    assert result["projects"][0]["issue_count"] == 1
+
+
+def test_quality_summary_empty_graph_returns_not_loaded():
+    empty = Graph(project_id="empty")
+    result = MCPSandboxView(empty).quality_summary()
+    assert result == {"loaded": False, "source": None, "projects": []}
+
+
+def test_code_structure_summary_returns_expected_shape(small_graph: Graph):
+    from src.common.domains.code_structure.models import CodeStructureProject
+
+    cs_project = CodeStructureProject(
+        id="csp1",
+        name="zep-cs",
+        source=SourceKind.GIT,
+        kind_of_source="jafax",
+    )
+    small_graph.add_project(cs_project)
+
+    result = MCPSandboxView(small_graph).code_structure_summary()
+    assert set(result.keys()) == _summary_shape_keys()
+    assert result["loaded"] is True
+    assert result["source"] == "jafax"
+    assert len(result["projects"]) == 1
+
+
+def test_code_structure_summary_empty_graph_returns_not_loaded():
+    empty = Graph(project_id="empty")
+    result = MCPSandboxView(empty).code_structure_summary()
+    assert result == {"loaded": False, "source": None, "projects": []}
+
+
+def test_duplication_summary_returns_expected_shape(small_graph: Graph):
+    from src.common.domains.duplication.models import (
+        DuplicationKind,
+        DuplicationPair,
+        DuplicationProject,
+    )
+
+    dup_project = DuplicationProject(
+        id="dp1", name="zep-dup", source=SourceKind.GIT
+    )
+    dup_ref = dup_project.ref()
+    file_a_ref = EntityRef(kind=EntityKind.FILE, id="src/a.py")
+    file_b_ref = EntityRef(kind=EntityKind.FILE, id="src/b.py")
+    pair = DuplicationPair(
+        id=DuplicationPair.make_id("src/a.py", "src/b.py"),
+        project_ref=dup_ref,
+        file_a_ref=file_a_ref,
+        file_b_ref=file_b_ref,
+        token_count=42,
+        duplication_kind=DuplicationKind.EXTERNAL,
+    )
+    small_graph.add_project(dup_project)
+    small_graph.duplications.add(pair)
+
+    result = MCPSandboxView(small_graph).duplication_summary()
+    assert set(result.keys()) == _summary_shape_keys()
+    assert result["loaded"] is True
+    assert result["source"] == "dude"
+    assert len(result["projects"]) == 1
+    assert result["projects"][0]["external_pairs"] == 1
+    assert result["projects"][0]["total_pairs"] == 1
+
+
+def test_duplication_summary_empty_graph_returns_not_loaded():
+    empty = Graph(project_id="empty")
+    result = MCPSandboxView(empty).duplication_summary()
+    assert result == {"loaded": False, "source": None, "projects": []}

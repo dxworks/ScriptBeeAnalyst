@@ -124,6 +124,11 @@ class MCPSandboxView:
         """
         return self._graph.files
 
+    @property
+    def duplication_pairs(self):
+        """Alias for duplications (legacy compat)."""
+        return self._graph.duplications
+
     # ------------------------------------------------------------------
     # Read-through to the underlying graph
     #
