@@ -40,7 +40,7 @@ from __future__ import annotations
 from enum import StrEnum
 from typing import ClassVar
 
-from typing_extensions import TypeAliasType
+from typing import TypeAliasType
 
 from src.common.kernel import Entity, EntityKind, EntityRef
 
