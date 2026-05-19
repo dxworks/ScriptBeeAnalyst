@@ -64,11 +64,13 @@ caller supplies.
 from __future__ import annotations
 
 import json
+import logging
 from pathlib import Path
 from typing import Any, Dict, List, Mapping, Optional
 
 from ...kernel import EntityKind, EntityRef
 from ...people import SourceKind
+from ..git.models import File
 from .models import (
     CodeField,
     CodeMethod,
@@ -76,6 +78,9 @@ from .models import (
     CodeStructureProject,
     CodeType,
 )
+
+
+logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
@@ -155,6 +160,26 @@ def _fully_qualified_name(raw: Mapping[str, Any]) -> str:
     return name or pack
 
 
+def _normalize_file_path(absolute_path: str, repo_name: str) -> str:
+    """Reduce a JaFax absolute path to the repo-relative form used by git.
+
+    Mirrors the lizard bridge's ``_normalize_file_path`` (see
+    ``metrics_lizard/bridge.py``): strips everything up to and including
+    the **last** ``/<repo_name>/<repo_name>/`` segment, falling back to
+    a single ``/<repo_name>/`` strip. Returns the input verbatim if
+    neither anchor matches.
+    """
+    doubled = f"/{repo_name}/{repo_name}/"
+    idx = absolute_path.rfind(doubled)
+    if idx != -1:
+        return absolute_path[idx + len(doubled):]
+    single = f"/{repo_name}/"
+    idx = absolute_path.rfind(single)
+    if idx != -1:
+        return absolute_path[idx + len(single):]
+    return absolute_path
+
+
 # ---------------------------------------------------------------------------
 # Public bridge entry point
 # ---------------------------------------------------------------------------
@@ -219,12 +244,17 @@ def build_code_structure_bundle(
         cid: _fully_qualified_name(raw) for cid, raw in classes_by_id.items()
     }
 
-    code_types = _build_code_types(classes_by_id, project_ref)
+    code_types, file_ref_by_class_id = _build_code_types(
+        classes_by_id, project_ref, repo_name
+    )
     code_methods = _build_code_methods(
-        methods_by_id, class_fqn_by_id, project_ref
+        methods_by_id, class_fqn_by_id, file_ref_by_class_id, project_ref
     )
     code_fields = _build_code_fields(
-        attributes_by_id, class_fqn_by_id, project_ref
+        attributes_by_id,
+        class_fqn_by_id,
+        file_ref_by_class_id,
+        project_ref,
     )
     code_refs = _build_code_refs(
         classes_by_id,
@@ -262,8 +292,11 @@ def _read_jafax(file_path: Path) -> List[Mapping[str, Any]]:
 def _build_code_types(
     classes_by_id: Mapping[int, Mapping[str, Any]],
     project_ref: EntityRef,
-) -> List[CodeType]:
+    repo_name: str,
+) -> tuple[List[CodeType], Dict[str, EntityRef]]:
     out: List[CodeType] = []
+    file_ref_by_class_id: Dict[str, EntityRef] = {}
+    missing_file_name_warned = False
     for rid, raw in classes_by_id.items():
         parent_refs: List[EntityRef] = []
         super_class = raw.get("superClass")
@@ -284,14 +317,34 @@ def _build_code_types(
             if isinstance(fid, int)
         ]
 
+        file_ref: Optional[EntityRef] = None
+        file_name = raw.get("fileName")
+        if isinstance(file_name, str) and file_name:
+            rel_path = _normalize_file_path(file_name, repo_name)
+            file_ref = EntityRef(
+                kind=EntityKind.FILE,
+                id=File.make_id(repo_name, rel_path),
+            )
+        elif not missing_file_name_warned:
+            logger.warning(
+                "JaFax Class rows missing 'fileName' for repo %r; "
+                "CodeType.file_ref will be None for affected classes.",
+                repo_name,
+            )
+            missing_file_name_warned = True
+
+        type_id = _type_id(rid)
+        if file_ref is not None:
+            file_ref_by_class_id[type_id] = file_ref
+
         out.append(
             CodeType(
-                id=_type_id(rid),
+                id=type_id,
                 project_ref=project_ref,
                 fully_qualified_name=_fully_qualified_name(raw),
                 simple_name=raw.get("name") or "",
                 type_category=_type_category(raw),
-                file_ref=None,
+                file_ref=file_ref,
                 is_external=bool(raw.get("isExternal", False)),
                 is_type_parameter=bool(raw.get("isTypeParameter", False)),
                 parent_refs=parent_refs,
@@ -300,20 +353,23 @@ def _build_code_types(
                 modifiers=_normalize_modifiers(raw.get("modifiers")),
             )
         )
-    return out
+    return out, file_ref_by_class_id
 
 
 def _build_code_methods(
     methods_by_id: Mapping[int, Mapping[str, Any]],
     class_fqn_by_id: Mapping[int, str],
+    file_ref_by_class_id: Mapping[str, EntityRef],
     project_ref: EntityRef,
 ) -> List[CodeMethod]:
     out: List[CodeMethod] = []
     for rid, raw in methods_by_id.items():
         type_ref: Optional[EntityRef] = None
+        file_ref: Optional[EntityRef] = None
         container = raw.get("container")
         if isinstance(container, int) and container in class_fqn_by_id:
             type_ref = _type_ref(container)
+            file_ref = file_ref_by_class_id.get(_type_id(container))
 
         return_type: Optional[str] = None
         rt = raw.get("returnType")
@@ -343,7 +399,7 @@ def _build_code_methods(
                 project_ref=project_ref,
                 name=raw.get("name") or "",
                 type_ref=type_ref,
-                file_ref=None,
+                file_ref=file_ref,
                 signature=raw.get("signature") or "",
                 return_type=return_type,
                 parameters=parameters,
@@ -361,6 +417,7 @@ def _build_code_methods(
 def _build_code_fields(
     attributes_by_id: Mapping[int, Mapping[str, Any]],
     class_fqn_by_id: Mapping[int, str],
+    file_ref_by_class_id: Mapping[str, EntityRef],
     project_ref: EntityRef,
 ) -> List[CodeField]:
     out: List[CodeField] = []
@@ -375,9 +432,11 @@ def _build_code_fields(
             continue
 
         type_ref: Optional[EntityRef] = None
+        file_ref: Optional[EntityRef] = None
         container = raw.get("container")
         if isinstance(container, int) and container in class_fqn_by_id:
             type_ref = _type_ref(container)
+            file_ref = file_ref_by_class_id.get(_type_id(container))
 
         declared_type: Optional[str] = None
         cls_id = raw.get("class")
@@ -390,7 +449,7 @@ def _build_code_fields(
                 project_ref=project_ref,
                 name=raw.get("name") or "",
                 type_ref=type_ref,
-                file_ref=None,
+                file_ref=file_ref,
                 declared_type=declared_type,
                 modifiers=_normalize_modifiers(raw.get("modifiers")),
             )
