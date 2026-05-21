@@ -23,6 +23,8 @@ services:
       - ./src:/app/src:ro
       # Mount workspace for AI agent scaffolding
       - ../analyzed_projects/projects:/workspace/projects
+      # Shared per-registry pickles produced by the processor
+      - scriptbee-pickles:/tmp/pickles
     command: uvicorn src.server:app --host 0.0.0.0 --port 8001 --reload
     restart: unless-stopped
 
@@ -48,5 +50,10 @@ services:
     volumes:
       # Mount source for development (hot reload)
       - ./src:/app/src:ro
+      # Shared per-registry pickles consumed by the data-server
+      - scriptbee-pickles:/tmp/pickles
     command: python -u -m src.processor
     restart: unless-stopped
+
+volumes:
+  scriptbee-pickles:
