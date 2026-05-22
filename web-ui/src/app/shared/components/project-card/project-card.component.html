@@ -1,10 +1,20 @@
-<div class="project-card card">
+<div class="project-card card" [class.loaded]="isLoaded()">
   <div class="card-body">
     <!-- Header -->
     <div class="project-header">
       <div class="project-info">
         <h3 class="project-name">{{ project().name }}</h3>
-        <span class="badge" [class]="getStatusClass()">{{ getStatusLabel() }}</span>
+        <div class="project-meta">
+          <span class="badge" [class]="getStatusClass()">{{ getStatusLabel() }}</span>
+          @if (isLoaded()) {
+            <span class="loaded-tag" title="Currently loaded in data server">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round">
+                <polyline points="20 6 9 17 4 12"/>
+              </svg>
+              Loaded
+            </span>
+          }
+        </div>
       </div>
       <div class="project-actions">
         <button class="btn-icon" title="Edit" (click)="onEdit()">
@@ -29,22 +39,11 @@
       <p class="project-description">{{ project().description }}</p>
     }
 
-    <!-- View button -->
-    <div class="project-tags">
-      <button class="btn btn-ghost btn-sm" (click)="onView()">
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-          <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/>
-          <circle cx="12" cy="12" r="3"/>
-        </svg>
-        View
-      </button>
-    </div>
-
     <!-- Footer -->
     <div class="project-footer">
       <span class="project-date">Updated {{ formatDate(project().updated_at) }}</span>
       <div class="project-buttons">
-        <button class="btn btn-secondary btn-sm" (click)="onUpload()">
+        <button class="btn btn-ghost btn-sm" (click)="onUpload()" title="Upload files">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
             <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
             <polyline points="17 8 12 3 7 8"/>
@@ -52,15 +51,51 @@
           </svg>
           Upload
         </button>
+        @if (canProcess()) {
+          <button class="btn btn-secondary btn-sm" (click)="onProcess()" title="Process uploaded data">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/>
+            </svg>
+            Process
+          </button>
+        }
+        @if (isLoaded()) {
+          <button
+            class="btn btn-secondary btn-sm"
+            (click)="onUnload()"
+            [disabled]="unloading()"
+            title="Unload project from data server memory"
+          >
+            @if (unloading()) {
+              <div class="spinner-tiny spinner-tiny-dark"></div>
+              Unloading...
+            } @else {
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/>
+                <polyline points="16 17 21 12 16 7"/>
+                <line x1="21" y1="12" x2="9" y2="12"/>
+              </svg>
+              Unload
+            }
+          </button>
+        }
         <button
           class="btn btn-primary btn-sm"
-          (click)="onOpenChat()"
-          [disabled]="project().status !== 'ready'"
+          (click)="onOpen()"
+          [disabled]="!canOpen() || opening()"
+          [title]="canOpen() ? (isLoaded() ? 'Open project workspace' : 'Load project into memory') : 'Project must be processed first'"
         >
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>
-          </svg>
-          Open Chat
+          @if (opening()) {
+            <div class="spinner-tiny"></div>
+            Loading...
+          } @else {
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/>
+              <polyline points="15 3 21 3 21 9"/>
+              <line x1="10" y1="14" x2="21" y2="3"/>
+            </svg>
+            {{ isLoaded() ? 'Open' : 'Load' }}
+          }
         </button>
       </div>
     </div>

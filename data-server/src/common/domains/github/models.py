@@ -79,6 +79,9 @@ class GitHubUser(Account):
                             :class:`PullRequestRegistry.by_author` /
                             ``by_merged_by`` (the assignee link can
                             stay a Relation when Chunk 7 needs it).
+
+    Resolver methods (auto-generated, see ``kernel/entity.py``):
+        ``.project(graph)`` -> ``GitHubProject | None``
     """
 
     kind: ClassVar[EntityKind] = EntityKind.GITHUB_USER
@@ -140,6 +143,16 @@ class PullRequest(Entity):
     * ``issues`` / ``git_commits``    — DROPPED. Cross-source links move
                                         into :class:`RelationRegistry`
                                         (Chunk 7).
+
+    Resolver methods (auto-generated, see ``kernel/entity.py``):
+        ``.project(graph)``             -> ``GitHubProject | None``
+        ``.author(graph)``              -> ``GitHubUser | None``
+        ``.merged_by(graph)``           -> ``GitHubUser | None``
+        ``.assignees(graph)``           -> ``list[GitHubUser]``
+        ``.requested_reviewers(graph)`` -> ``list[GitHubUser]``
+        ``.commits(graph)``             -> ``list[GitHubCommit]``
+        ``.reviews(graph)``             -> ``list[Review]``
+        ``.review_comments(graph)``     -> ``list[ReviewComment]``
     """
 
     kind: ClassVar[EntityKind] = EntityKind.PULL_REQUEST
@@ -201,6 +214,11 @@ class Review(Entity):
     Plan §1.1 lists ``EntityKind.REVIEW``, so reviews are first-class
     entities (and Chunk 7's relation builders can attach traits to
     specific reviews).
+
+    Resolver methods (auto-generated, see ``kernel/entity.py``):
+        ``.pull_request(graph)``    -> ``PullRequest | None``
+        ``.author(graph)``          -> ``GitHubUser | None``
+        ``.review_comments(graph)`` -> ``list[ReviewComment]``
     """
 
     kind: ClassVar[EntityKind] = EntityKind.REVIEW
@@ -251,6 +269,11 @@ class ReviewComment(Entity):
                              plan-§4 entity list suggests they exist
                              where the GitHub API exposes them. Default
                              ``None`` keeps backwards compat.
+
+    Resolver methods (auto-generated, see ``kernel/entity.py``):
+        ``.review(graph)``       -> ``Review | None``
+        ``.pull_request(graph)`` -> ``PullRequest | None``
+        ``.author(graph)``       -> ``GitHubUser | None``
     """
 
     kind: ClassVar[EntityKind] = EntityKind.REVIEW_COMMENT
@@ -299,6 +322,10 @@ class GitHubCommit(Entity):
     * ``pull_requests``       — DROPPED (was the back-pointer list).
                                 Reverse lookup via
                                 :class:`GitHubCommitRegistry.by_pull_request`.
+
+    Resolver methods (auto-generated, see ``kernel/entity.py``):
+        ``.pull_request(graph)`` -> ``PullRequest | None``
+        ``.author(graph)``       -> ``GitHubUser | None``
     """
 
     kind: ClassVar[EntityKind] = EntityKind.GITHUB_COMMIT

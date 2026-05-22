@@ -47,8 +47,8 @@
 // Project grid
 .project-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(350px, 1fr));
-  gap: var(--spacing-lg);
+  grid-template-columns: repeat(auto-fill, minmax(400px, 1fr));
+  gap: var(--spacing-xl);
 }
 
 // States
@@ -106,7 +106,7 @@
 
   p {
     margin: 0 0 var(--spacing-lg) 0;
-    max-width: 300px;
+    max-width: 360px;
   }
 }
 

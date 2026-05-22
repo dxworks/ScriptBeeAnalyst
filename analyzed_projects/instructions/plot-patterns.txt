@@ -44,9 +44,10 @@ from collections import Counter
 
 author_counts = Counter()
 for commit in graph_data.commits.all():
-    account = graph_data.git_accounts.get(commit.author_ref.id)
-    if account is not None:
-        author_counts[account.name] += 1
+    # `.author(graph_data)` is the generated resolver for `author_ref`.
+    author = commit.author(graph_data)
+    if author is not None:
+        author_counts[author.name] += 1
 
 top_authors = author_counts.most_common(10)
 names, counts = zip(*top_authors) if top_authors else ([], [])
@@ -64,9 +65,9 @@ plt.tight_layout()
 from collections import Counter
 
 type_counts = Counter()
-# Resolve each issue's type via the issue_types registry.
+# `.type(graph_data)` is the generated resolver for `type_ref`.
 for issue in graph_data.issues.all():
-    issue_type = graph_data.issue_types.get(issue.type_ref.id)
+    issue_type = issue.type(graph_data)
     if issue_type is not None:
         type_counts[issue_type.name] += 1
 

@@ -1,0 +1,191 @@
+<div class="modal-backdrop" (click)="onBackdropClick($event)">
+  <div class="modal">
+    <div class="modal-header">
+      <div>
+        <h3 class="modal-title">Upload Files</h3>
+        <p class="modal-subtitle">{{ project().name }}</p>
+      </div>
+      <button class="modal-close" (click)="onClose()" [disabled]="uploadingFiles()">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <path d="M18 6L6 18M6 6l12 12"/>
+        </svg>
+      </button>
+    </div>
+
+    <div class="modal-body upload-modal-body">
+      <!-- Upload Zone -->
+      <div
+        class="upload-zone"
+        (drop)="onFileDrop($event)"
+        (dragover)="onDragOver($event)"
+      >
+        <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+          <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+          <polyline points="17 8 12 3 7 8"/>
+          <line x1="12" y1="3" x2="12" y2="15"/>
+        </svg>
+        <h3>Drag and drop files here</h3>
+        <p class="text-secondary">or</p>
+        <label class="btn btn-primary">
+          Browse Files
+          <input
+            type="file"
+            multiple
+            accept=".json,.iglog,.csv,.jsonl"
+            (change)="onFileSelect($event)"
+            hidden
+          />
+        </label>
+        <p class="upload-hint">
+          Expected files (max {{ fileService.getMaxFileSizeMB() }}MB):
+          *.iglog (one per repo), github.json, jira.json,
+          &lt;repo&gt;-lizard.csv, &lt;repo&gt;-codeframe.jsonl,
+          &lt;repo&gt;-external_duplication.csv,
+          &lt;repo&gt;-internal_duplication.json,
+          &lt;repo&gt;-code_smells.json,
+          &lt;repo&gt;-chronos-tags.json
+        </p>
+      </div>
+
+      <!-- Staged Files -->
+      @if (stagedFiles().length > 0) {
+        <div class="staged-files">
+          <div class="staged-header">
+            <h3>Ready to Upload</h3>
+            <div class="staged-actions">
+              <button class="btn btn-ghost btn-sm" (click)="clearStagedFiles()" [disabled]="uploadingFiles()">
+                Cancel All
+              </button>
+              <button class="btn btn-primary btn-sm" (click)="uploadStagedFiles()" [disabled]="uploadingFiles()">
+                @if (uploadingFiles()) {
+                  <div class="spinner-tiny"></div>
+                  Uploading...
+                } @else {
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+                    <polyline points="17 8 12 3 7 8"/>
+                    <line x1="12" y1="3" x2="12" y2="15"/>
+                  </svg>
+                  Upload All
+                }
+              </button>
+            </div>
+          </div>
+          <div class="file-cards">
+            @for (staged of stagedFiles(); track staged.file.name) {
+              <div class="file-card" [class.uploading]="staged.status === 'uploading'" [class.error]="staged.status === 'error'">
+                <div class="file-icon">
+                  <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M13 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/>
+                    <polyline points="13 2 13 9 20 9"/>
+                  </svg>
+                </div>
+                <div class="file-info">
+                  <span class="file-name">{{ staged.file.name }}</span>
+                  <span class="file-meta">
+                    {{ fileService.formatFileSize(staged.file.size) }}
+                    @if (staged.status === 'uploading') {
+                      <span class="text-warning"> · Uploading...</span>
+                    }
+                    @if (staged.status === 'error') {
+                      <span class="text-error"> · {{ staged.error }}</span>
+                    }
+                  </span>
+                </div>
+                <button
+                  class="btn-icon btn-icon-danger"
+                  title="Remove"
+                  (click)="removeStagedFile(staged)"
+                  [disabled]="staged.status === 'uploading'"
+                >
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <line x1="18" y1="6" x2="6" y2="18"/>
+                    <line x1="6" y1="6" x2="18" y2="18"/>
+                  </svg>
+                </button>
+              </div>
+            }
+          </div>
+        </div>
+      }
+
+      <!-- Uploaded Files -->
+      <div class="file-list">
+        <h3>Uploaded Files</h3>
+        @if (filesLoading()) {
+          <div class="file-list-loading">
+            <div class="spinner-small"></div>
+          </div>
+        } @else if (projectFiles().length === 0) {
+          <div class="file-list-empty">
+            <p class="text-muted">No files uploaded yet</p>
+          </div>
+        } @else {
+          <div class="file-cards">
+            @for (file of projectFiles(); track file.id) {
+              <div class="file-card">
+                <div class="file-icon">
+                  <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M13 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/>
+                    <polyline points="13 2 13 9 20 9"/>
+                  </svg>
+                </div>
+                <div class="file-info">
+                  <span class="file-name">{{ file.name }}</span>
+                  <span class="file-meta">
+                    {{ fileService.formatFileSize(file.size_bytes) }} · Uploaded {{ formatDate(file.created_at) }}
+                  </span>
+                </div>
+                <div class="file-actions">
+                  <button class="btn-icon" title="Download" (click)="downloadFile(file)">
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                      <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+                      <polyline points="7 10 12 15 17 10"/>
+                      <line x1="12" y1="15" x2="12" y2="3"/>
+                    </svg>
+                  </button>
+                  <button class="btn-icon btn-icon-danger" title="Delete" (click)="confirmDeleteFile(file)">
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                      <polyline points="3 6 5 6 21 6"/>
+                      <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>
+                      <line x1="10" y1="11" x2="10" y2="17"/>
+                      <line x1="14" y1="11" x2="14" y2="17"/>
+                    </svg>
+                  </button>
+                </div>
+              </div>
+            }
+          </div>
+        }
+      </div>
+    </div>
+
+    <div class="modal-footer">
+      <button class="btn btn-secondary" (click)="onClose()" [disabled]="uploadingFiles()">Close</button>
+    </div>
+  </div>
+</div>
+
+@if (showReplaceModal()) {
+  <app-confirmation-modal
+    title="Replace File?"
+    [message]="'A ' + getFileTypeLabel(fileToReplace()!.existing.file_type) + ' file already exists. Uploading this file will replace the existing one and require reprocessing of the project.'"
+    confirmText="Replace"
+    cancelText="Cancel"
+    type="warning"
+    (confirmed)="confirmReplaceFile()"
+    (cancelled)="cancelReplaceFile()"
+  />
+}
+
+@if (showDeleteModal()) {
+  <app-confirmation-modal
+    title="Delete File?"
+    [message]="'Are you sure you want to delete ' + fileToDelete()!.name + '? This action cannot be undone and will require reprocessing of the project.'"
+    confirmText="Delete"
+    cancelText="Cancel"
+    type="danger"
+    (confirmed)="deleteFile()"
+    (cancelled)="cancelDeleteFile()"
+  />
+}

@@ -38,6 +38,15 @@ Sandbox helpers (``find_files_with_trait``, ``cochange_neighbors``,
 in the ``/execute`` scope (per the Chunk-7 / Chunk-8 helper plumbing)
 AND as methods on this view, so legacy snippets that call e.g.
 ``graph_data.find_files_with_trait(name)`` still work.
+
+Entity-side ``*_ref`` resolvers
+-------------------------------
+
+Every typed entity carries auto-generated resolver methods for its
+``*_ref`` / ``*_refs`` fields — ``commit.author(graph_data)``,
+``pr.commits(graph_data)``, etc. (see
+``src/common/kernel/entity.py``). Prefer those over
+``graph_data.<registry>.get(ref.id)`` inside ``/execute`` snippets.
 """
 from __future__ import annotations
 

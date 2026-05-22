@@ -105,6 +105,10 @@ class QualityIssue(Entity):
                              ranges" without dereferencing
                              ``project_ref``. The transformer copies the
                              project's value when emitting each row.
+
+    Resolver methods (auto-generated, see ``kernel/entity.py``):
+        ``.project(graph)`` -> ``QualityProject | None``
+        ``.file(graph)``    -> ``File | None``
     """
 
     kind: ClassVar[EntityKind] = EntityKind.QUALITY_ISSUE

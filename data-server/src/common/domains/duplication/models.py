@@ -123,6 +123,11 @@ class DuplicationPair(Entity):
                                 binary "duplicated or not" tool); kept
                                 optional so future tools (CPD / Sonar
                                 duplications) can populate it.
+
+    Resolver methods (auto-generated, see ``kernel/entity.py``):
+        ``.project(graph)`` -> ``DuplicationProject | None``
+        ``.file_a(graph)``  -> ``File | None``
+        ``.file_b(graph)``  -> ``File | None``
     """
 
     kind: ClassVar[EntityKind] = EntityKind.DUPLICATION_PAIR

@@ -103,15 +103,27 @@ cat > "$WORKSPACE/opencode.json" << 'OJEOF'
     }
   },
   "instructions": [
-    "../../instructions/guide.txt",
-    "../../../data-server/src/common/base_models.py",
-    "../../../data-server/src/common/git_models.py",
-    "../../../data-server/src/common/jira_models.py",
-    "../../../data-server/src/common/github_models.py",
-    "../../../data-server/src/common/registries.py",
-    "../../../data-server/src/common/project_linkers.py",
+    "../../instructions/compass.md",
     "../../instructions/query-examples.txt",
-    "../../instructions/plot-patterns.txt"
+    "../../instructions/plot-patterns.txt",
+    "../../../data-server/src/common/kernel/entity.py",
+    "../../../data-server/src/common/kernel/ref.py",
+    "../../../data-server/src/common/kernel/kinds.py",
+    "../../../data-server/src/common/kernel/graph.py",
+    "../../../data-server/src/common/people/account.py",
+    "../../../data-server/src/common/people/unified.py",
+    "../../../data-server/src/common/projects/project.py",
+    "../../../data-server/src/common/domains/git/models.py",
+    "../../../data-server/src/common/domains/github/models.py",
+    "../../../data-server/src/common/domains/jira/models.py",
+    "../../../data-server/src/common/domains/code_structure/models.py",
+    "../../../data-server/src/common/domains/duplication/models.py",
+    "../../../data-server/src/common/domains/quality/models.py",
+    "../../../data-server/src/common/domains/metrics_lizard/models.py",
+    "../../../data-server/src/common/domains/components/models.py",
+    "../../../data-server/src/common/domains/app_inspector/models.py",
+    "../../../data-server/src/sandbox/inject.py",
+    "../../../data-server/src/sandbox/helpers.py"
   ]
 }
 OJEOF

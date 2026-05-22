@@ -80,6 +80,10 @@ class AppTag(Entity):
     * ``tag``          — full dotted taxonomy string, e.g.
                          ``appinspector.OS.Network.Connection.Socket``.
     * ``strength``     — integer strength as emitted by App Inspector.
+
+    Resolver methods (auto-generated, see ``kernel/entity.py``):
+        ``.project(graph)`` -> ``AppInspectorProject | None``
+        ``.file(graph)``    -> ``File | None``
     """
 
     kind: ClassVar[EntityKind] = EntityKind.APP_TAG

@@ -10,6 +10,39 @@ per session to see the current catalog — new metrics show up there automatical
 If a name in this file no longer appears in `list_metrics()`, the metric was renamed;
 treat the example as a pattern template.
 
+## Resolving `*_ref` fields — prefer the short form
+
+Every entity field named `*_ref` / `*_refs` has an auto-generated method that
+takes the graph and returns the resolved entity (or list). Use that instead of
+manually looking up the registry by id.
+
+```python
+# BEFORE (verbose, error-prone):
+account = graph_data.git_accounts.get(commit.author_ref.id)
+if account is not None:
+    print(account.email)
+
+# AFTER (short, equivalent):
+author = commit.author(graph_data)
+if author is not None:
+    print(author.email)
+
+# Multi-hop walks chain naturally:
+# BEFORE
+pr = graph_data.pull_requests.get(...)
+commit = graph_data.github_commits.get(pr.commit_refs[0].id)
+author = graph_data.github_users.get(commit.author_ref.id)
+# AFTER
+author = pr.commits(graph_data)[0].author(graph_data)
+```
+
+Naming rule: strip the trailing `_ref` (singular) or `_refs` (list, then append
+`s`). `author_ref` → `author(graph)`, `parent_refs` → `parents(graph)`,
+`commit_refs` → `commits(graph)`, `review_comment_refs` → `review_comments(graph)`.
+Each entity class in `domains/*/models.py` lists its generated methods in the
+docstring. The verbose `graph_data.<registry>.get(ref.id)` form still works and is
+the right escape hatch when you need to dispatch on `EntityKind` directly.
+
 ---
 
 ## 1. Project overview: name and commit count
@@ -48,14 +81,17 @@ from collections import defaultdict
 user_issue_count = defaultdict(set)
 
 for commit in graph_data.commits.all():
+    author = commit.author(graph_data)
+    if author is None:
+        continue
     for issue in commit_issues(commit, graph_data):
-        user_issue_count[commit.author_ref.id].add(issue.key)
+        user_issue_count[author.name].add(issue.key)
 
 if user_issue_count:
-    author_id, issues = max(
+    author_name, issues = max(
         user_issue_count.items(), key=lambda kv: len(kv[1])
     )
-    print(f"Author {author_id} contributed to {len(issues)} Jira issues (the most).")
+    print(f"Author {author_name} contributed to {len(issues)} Jira issues (the most).")
 else:
     print("No user found with associated issues.")
 ```
@@ -69,19 +105,16 @@ from collections import Counter
 # of commit_issues (issue_commits), and count file touches per commit.
 bug_file_counter = Counter()
 
-bug_type = next(
-    (t for t in graph_data.issue_types.all() if t.name.lower() == "bug"),
-    None,
-)
-if bug_type is not None:
-    bug_type_id = bug_type.id
-    for issue in graph_data.issues.all():
-        if issue.type_ref.id != bug_type_id:
-            continue
-        for commit in issue_commits(issue, graph_data):
-            # graph.changes.by_commit is the ChangeRegistry's per-commit index.
-            for change in graph_data.changes.by_commit[commit.ref()]:
-                bug_file_counter[change.file_ref.id] += 1
+for issue in graph_data.issues.all():
+    issue_type = issue.type(graph_data)
+    if issue_type is None or issue_type.name.lower() != "bug":
+        continue
+    for commit in issue_commits(issue, graph_data):
+        # graph.changes.by_commit is the ChangeRegistry's per-commit index.
+        for change in graph_data.changes.by_commit[commit.ref()]:
+            f = change.file(graph_data)
+            if f is not None:
+                bug_file_counter[f.path] += 1
 
 print("Top 5 bug magnet files:")
 for fname, count in bug_file_counter.most_common(5):
@@ -375,10 +408,11 @@ from collections import Counter
 
 author_counts = Counter()
 for commit in graph_data.commits.all():
-    # Resolve the author EntityRef to the typed GitAccount entity.
-    account = graph_data.git_accounts.get(commit.author_ref.id)
-    if account is not None:
-        author_counts[account.name] += 1
+    # `commit.author(graph_data)` is the auto-generated resolver for
+    # the `author_ref` field — returns the typed GitAccount or None.
+    author = commit.author(graph_data)
+    if author is not None:
+        author_counts[author.name] += 1
 
 print("Top 10 contributors by commit count:")
 for name, count in author_counts.most_common(10):

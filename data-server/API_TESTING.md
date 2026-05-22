@@ -159,11 +159,14 @@ print(len(graph_data.commits.all()))
 for issue in graph_data.issues.all()[:5]:
     print(f"{issue.key}: {issue.summary}")
 
-# Find commits by author (reverse index)
-from src.common.kernel import EntityRef, EntityKind
-# Or scan:
-matches = [c for c in graph_data.commits.all()
-           if c.author_ref and 'john' in c.author_ref.id.lower()]
+# Find commits by author (use the generated `.author(graph)` resolver
+# to read the resolved GitAccount.name; the raw author_ref.id is the
+# composite "Name <email>" string and is less ergonomic).
+matches = []
+for c in graph_data.commits.all():
+    author = c.author(graph_data)
+    if author is not None and 'john' in author.name.lower():
+        matches.append(c)
 print(f"Matches: {len(matches)}")
 
 # Duplication summary
@@ -184,7 +187,7 @@ curl -X POST http://localhost:8001/plot \
   -H 'Authorization: Bearer YOUR_JWT_TOKEN' \
   -H 'Content-Type: application/json' \
   -d '{
-    "code": "commits = graph_data.commits.all()\nauthors = {}\nfor c in commits:\n    a = c.author_ref.id if c.author_ref else \"<unknown>\"\n    authors[a] = authors.get(a, 0) + 1\ntop = sorted(authors.items(), key=lambda x: x[1], reverse=True)[:10]\nnames, counts = zip(*top)\nplt.figure(figsize=(10, 6))\nplt.barh(names, counts)\nplt.xlabel(\"Commits\")\nplt.title(\"Top 10 Contributors\")\nplt.tight_layout()"
+    "code": "commits = graph_data.commits.all()\nauthors = {}\nfor c in commits:\n    a = c.author(graph_data)\n    name = a.name if a else \"<unknown>\"\n    authors[name] = authors.get(name, 0) + 1\ntop = sorted(authors.items(), key=lambda x: x[1], reverse=True)[:10]\nnames, counts = zip(*top)\nplt.figure(figsize=(10, 6))\nplt.barh(names, counts)\nplt.xlabel(\"Commits\")\nplt.title(\"Top 10 Contributors\")\nplt.tight_layout()"
   }' --output plot.jpg
 ```
 

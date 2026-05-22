@@ -1,0 +1,16 @@
+<div class="setup-shell">
+  <nav class="setup-tabs" aria-label="Setup steps">
+    @for (tab of tabs; track tab.id) {
+      <a
+        [routerLink]="tab.path"
+        routerLinkActive="active"
+        class="setup-tab"
+      >
+        {{ tab.label }}
+      </a>
+    }
+  </nav>
+  <div class="setup-content">
+    <router-outlet />
+  </div>
+</div>

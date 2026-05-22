@@ -151,6 +151,10 @@ class FileMetric(Entity):
     is a float; integer metrics fit safely into a float (Lizard's
     counts are well within float precision range). Single type keeps
     the registry uniform.
+
+    Resolver methods (auto-generated, see ``kernel/entity.py``):
+        ``.project(graph)`` -> ``LizardMetricsProject | None``
+        ``.file(graph)``    -> ``File | None``
     """
 
     kind: ClassVar[EntityKind] = EntityKind.FILE_METRIC

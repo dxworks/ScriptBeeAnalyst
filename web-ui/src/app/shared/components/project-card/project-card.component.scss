@@ -1,8 +1,101 @@
 .project-card {
-  transition: transform var(--transition-normal), box-shadow var(--transition-normal);
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  min-height: 240px;
+  border: 1px solid var(--color-border-light);
+  overflow: hidden;
+  transition:
+    transform 300ms cubic-bezier(0.22, 1, 0.36, 1),
+    box-shadow 300ms cubic-bezier(0.22, 1, 0.36, 1),
+    border-color var(--transition-fast);
+
+  // Subtle top accent stripe that lights up on hover
+  &::before {
+    content: "";
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    height: 3px;
+    background: linear-gradient(
+      90deg,
+      var(--color-accent) 0%,
+      var(--color-accent-light) 50%,
+      var(--color-accent) 100%
+    );
+    opacity: 0;
+    transition: opacity 300ms cubic-bezier(0.22, 1, 0.36, 1);
+  }
 
   &:hover {
-    transform: translateY(-2px);
+    transform: translateY(-4px);
+    box-shadow:
+      0 12px 24px -8px rgba(var(--color-accent-rgb), 0.18),
+      0 8px 16px -8px rgba(0, 0, 0, 0.12);
+    border-color: var(--color-border);
+
+    &::before {
+      opacity: 1;
+    }
+  }
+
+  &.loaded {
+    border-color: var(--color-success);
+    box-shadow:
+      0 0 0 1px var(--color-success),
+      0 4px 12px -4px rgba(var(--color-success-rgb), 0.25);
+
+    &::before {
+      background: linear-gradient(
+        90deg,
+        var(--color-success) 0%,
+        rgba(var(--color-success-rgb), 0.7) 50%,
+        var(--color-success) 100%
+      );
+      opacity: 1;
+    }
+  }
+
+  .card-body {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    padding: var(--spacing-xl);
+  }
+}
+
+.loaded-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 10px;
+  border-radius: 12px;
+  background-color: rgba(var(--color-success-rgb), 0.15);
+  color: var(--color-success);
+  font-size: 0.6875rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.spinner-tiny {
+  width: 14px;
+  height: 14px;
+  border: 2px solid rgba(255, 255, 255, 0.3);
+  border-top-color: white;
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+
+  &.spinner-tiny-dark {
+    border-color: rgba(var(--color-accent-rgb), 0.2);
+    border-top-color: var(--color-accent);
+  }
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
   }
 }
 
@@ -11,38 +104,48 @@
   align-items: flex-start;
   justify-content: space-between;
   gap: var(--spacing-md);
-  margin-bottom: var(--spacing-md);
+  margin-bottom: var(--spacing-lg);
 }
 
 .project-info {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--spacing-sm);
+}
+
+.project-name {
+  font-size: 1.25rem;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  line-height: 1.3;
+  margin: 0;
+  color: var(--color-text-primary);
+}
+
+.project-meta {
   display: flex;
   align-items: center;
   gap: var(--spacing-sm);
   flex-wrap: wrap;
 }
 
-.project-name {
-  font-size: 1.125rem;
-  font-weight: 600;
-  margin: 0;
-  color: var(--color-text-primary);
-}
-
 .project-actions {
   display: flex;
   gap: var(--spacing-xs);
+  flex-shrink: 0;
 }
 
 .btn-icon {
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 32px;
-  height: 32px;
+  width: 34px;
+  height: 34px;
   padding: 0;
   background: none;
   border: none;
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-md);
   color: var(--color-text-muted);
   cursor: pointer;
   transition: all var(--transition-fast);
@@ -59,30 +162,31 @@
 }
 
 .project-description {
+  flex: 1;
   color: var(--color-text-secondary);
-  font-size: 0.875rem;
-  margin: 0 0 var(--spacing-md) 0;
-  line-height: 1.5;
-}
-
-.project-tags {
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--spacing-sm);
-  margin-bottom: var(--spacing-lg);
+  font-size: 0.9375rem;
+  margin: 0 0 var(--spacing-lg) 0;
+  line-height: 1.6;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
 }
 
 .project-footer {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding-top: var(--spacing-md);
+  gap: var(--spacing-md);
+  padding-top: var(--spacing-lg);
+  margin-top: auto;
   border-top: 1px solid var(--color-border-light);
 }
 
 .project-date {
   font-size: 0.75rem;
   color: var(--color-text-muted);
+  letter-spacing: 0.01em;
 }
 
 .project-buttons {

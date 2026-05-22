@@ -68,6 +68,13 @@ def test_dump_load_roundtrip_preserves_entities(tmp_path: Path):
         assert loaded.author_ref == original.author_ref
         assert loaded.files == original.files
 
+    # Generated ref-resolver methods live on the class — they must still
+    # be callable after a pickle round-trip (class-level state survives
+    # because pickle only carries instance dicts).
+    loaded_c1 = restored.get("c1")
+    assert hasattr(type(loaded_c1), "author")
+    assert getattr(type(loaded_c1).author, "_generated_ref_resolver", False)
+
 
 def test_dump_load_rebuilds_indexes(tmp_path: Path):
     reg = _build()

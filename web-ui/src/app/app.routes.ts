@@ -35,14 +35,32 @@ export const routes: Routes = [
           import('./pages/dashboard/dashboard.component').then(m => m.DashboardComponent),
       },
       {
-        path: 'projects',
+        path: 'project',
         loadComponent: () =>
-          import('./pages/project-detail/project-detail.component').then(m => m.ProjectDetailComponent),
+          import('./pages/project/project.component').then(m => m.ProjectComponent),
       },
       {
-        path: 'projects/:id',
+        path: 'project/:id',
         loadComponent: () =>
-          import('./pages/project-detail/project-detail.component').then(m => m.ProjectDetailComponent),
+          import('./pages/project/project.component').then(m => m.ProjectComponent),
+        children: [
+          { path: '', redirectTo: 'setup', pathMatch: 'full' },
+          {
+            path: 'setup',
+            loadComponent: () =>
+              import('./pages/project/setup/setup.component').then(m => m.SetupComponent),
+            children: [
+              { path: '', redirectTo: 'author-matching', pathMatch: 'full' },
+              {
+                path: 'author-matching',
+                loadComponent: () =>
+                  import('./pages/project/setup/author-matching/author-matching.component').then(
+                    m => m.AuthorMatchingComponent,
+                  ),
+              },
+            ],
+          },
+        ],
       },
       {
         path: 'data-model',

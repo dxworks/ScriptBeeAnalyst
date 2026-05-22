@@ -10,12 +10,16 @@ import { Project } from '../../../core/models/project.model';
 })
 export class ProjectCardComponent {
   project = input.required<Project>();
+  isLoaded = input<boolean>(false);
+  opening = input<boolean>(false);
+  unloading = input<boolean>(false);
 
   edit = output<Project>();
   delete = output<Project>();
   upload = output<Project>();
-  openChat = output<Project>();
-  view = output<Project>();
+  process = output<Project>();
+  open = output<Project>();
+  unload = output<Project>();
 
   onEdit(): void {
     this.edit.emit(this.project());
@@ -29,12 +33,16 @@ export class ProjectCardComponent {
     this.upload.emit(this.project());
   }
 
-  onOpenChat(): void {
-    this.openChat.emit(this.project());
+  onProcess(): void {
+    this.process.emit(this.project());
   }
 
-  onView(): void {
-    this.view.emit(this.project());
+  onOpen(): void {
+    this.open.emit(this.project());
+  }
+
+  onUnload(): void {
+    this.unload.emit(this.project());
   }
 
   getStatusClass(): string {
@@ -78,5 +86,15 @@ export class ProjectCardComponent {
       day: 'numeric',
       year: 'numeric',
     });
+  }
+
+  canOpen(): boolean {
+    const status = this.project().status;
+    return status === 'ready' || status === 'idle';
+  }
+
+  canProcess(): boolean {
+    const status = this.project().status;
+    return status === 'draft' || status === 'error';
   }
 }

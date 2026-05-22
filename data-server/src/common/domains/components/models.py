@@ -30,6 +30,10 @@ class Component(Entity):
     See module docstring for the field mapping. Constructed by
     :class:`ComponentResolverMetric` from
     :mod:`src.enrichment.metrics.implementations.component_resolver`.
+
+    Resolver methods (auto-generated, see ``kernel/entity.py``):
+        ``.project(graph)`` -> ``Project | None``  (project_ref may be None)
+        ``.files(graph)``   -> ``list[File]``
     """
 
     kind: ClassVar[EntityKind] = EntityKind.COMPONENT

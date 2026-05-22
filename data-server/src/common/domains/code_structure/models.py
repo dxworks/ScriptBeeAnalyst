@@ -115,6 +115,13 @@ class CodeType(Entity):
                                 §4 mentions them; transformers may stay
                                 empty when the source format doesn't
                                 emit them.
+
+    Resolver methods (auto-generated, see ``kernel/entity.py``):
+        ``.project(graph)`` -> ``CodeStructureProject | None``
+        ``.file(graph)``    -> ``File | None``
+        ``.parents(graph)`` -> ``list[CodeType]``
+        ``.methods(graph)`` -> ``list[CodeMethod]``
+        ``.fields(graph)``  -> ``list[CodeField]``
     """
 
     kind: ClassVar[EntityKind] = EntityKind.CODE_TYPE
@@ -175,6 +182,12 @@ class CodeMethod(Entity):
                                      (kind/location/weight). This list is
                                      a cached fast path for "who does X
                                      call" queries.
+
+    Resolver methods (auto-generated, see ``kernel/entity.py``):
+        ``.project(graph)``        -> ``CodeStructureProject | None``
+        ``.type(graph)``           -> ``CodeType | None``
+        ``.file(graph)``           -> ``File | None``
+        ``.called_methods(graph)`` -> ``list[CodeMethod]``
     """
 
     kind: ClassVar[EntityKind] = EntityKind.CODE_METHOD
@@ -209,6 +222,11 @@ class CodeField(Entity):
     * ``declared_type``       — NEW (plan §4). ``Optional`` because the
                                 source format does not always report it.
     * ``modifiers``           — NEW (plan §4); set of modifier strings.
+
+    Resolver methods (auto-generated, see ``kernel/entity.py``):
+        ``.project(graph)`` -> ``CodeStructureProject | None``
+        ``.type(graph)``    -> ``CodeType | None``
+        ``.file(graph)``    -> ``File | None``
     """
 
     kind: ClassVar[EntityKind] = EntityKind.CODE_FIELD
@@ -264,6 +282,15 @@ class CodeReference(Entity):
                                      Optional because external / synthetic
                                      references may not carry a location.
     * ``weight``                   — preserved (count of occurrences).
+
+    Resolver methods (auto-generated, see ``kernel/entity.py``):
+        ``.project(graph)``        -> ``CodeStructureProject | None``
+        ``.source_method(graph)``  -> ``CodeMethod | None``
+        ``.source_type(graph)``    -> ``CodeType | None``
+        ``.target_method(graph)``  -> ``CodeMethod | None``
+        ``.target_type(graph)``    -> ``CodeType | None``
+        ``.target_field(graph)``   -> ``CodeField | None``
+        ``.location_file(graph)``  -> ``File | None``
     """
 
     kind: ClassVar[EntityKind] = EntityKind.CODE_REF
