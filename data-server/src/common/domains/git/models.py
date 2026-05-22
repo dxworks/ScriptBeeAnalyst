@@ -225,8 +225,8 @@ class File(Entity):
     * ``project_ref``      — was ``project: Optional[GitProject]``.
     * ``path``             — bare path, no repo prefix. Use this for
                              extension extraction, dirname comparisons,
-                             external joins (Lizard CSV / JaFax JSON /
-                             DuDe CSV all carry bare paths). The
+                             external joins (Lizard CSV / CodeFrame
+                             JSONL / DuDe CSV all carry bare paths). The
                              ``project_ref`` disambiguates which repo
                              this path belongs to.
     * ``is_binary``        — unchanged.

@@ -5,10 +5,9 @@ cross-entity reference uses :class:`EntityRef`, never a Python object
 reference — per plan §4 (and the Chunk 4/5 pattern).
 
 The plan §3 explicitly calls out :pyattr:`CodeStructureProject.kind_of_source`
-as a ``Literal["jafax", "codeframe"]`` switch (task 8 = flip from
-``"jafax"`` to ``"codeframe"`` without touching entity shapes). The entity
-classes themselves are tool-agnostic — the only difference between the two
-formats is the raw-DTO path that feeds them, which the transformer routes on.
+as a ``Literal["codeframe"]`` marker — task 8 narrowed the closed set down to
+the single supported source. The entity classes themselves are tool-agnostic;
+the only source-specific code lives in the raw-DTO path that feeds them.
 
 Entity-vs-value-object decisions (plan §1.1):
 
@@ -28,10 +27,11 @@ if TYPE_CHECKING:  # forward-only — keeps cycles broken
     from .transformer import CodeStructureTransformer  # noqa: F401
 
 
-# Closed set of source tools that can emit a `CodeStructureProject`. The
-# entity shape is identical for both; the transformer branches on this when
-# the raw-DTO path is wired (Chunk 8).
-KindOfSource = Literal["jafax", "codeframe"]
+# Closed set of source tools that can emit a `CodeStructureProject`.
+# CodeFrame is the only supported source today (task 8 narrowed this down
+# from a multi-tool set); the Literal stays for forward-compatibility with
+# future tool additions.
+KindOfSource = Literal["codeframe"]
 
 
 # ---------------------------------------------------------------------------
@@ -47,14 +47,14 @@ class CodeStructureProject(Project):
     four registries (types / methods / fields / references); that ownership
     moves to :class:`Graph` in Chunk 8.
 
-    The :pyattr:`kind_of_source` Literal lets a single project carry data
-    from either JaFax or CodeFrame; task 8 (legacy ``voyager-changes-tasks``)
-    is exactly this flip — entities unchanged.
+    The :pyattr:`kind_of_source` Literal records which tool produced the
+    raw bundle. Task 8 (legacy ``voyager-changes-tasks``) narrowed the set
+    to ``"codeframe"`` only — entities unchanged.
     """
 
     kind: ClassVar[EntityKind] = EntityKind.PROJECT
 
-    kind_of_source: KindOfSource = "jafax"
+    kind_of_source: KindOfSource = "codeframe"
 
     def transformer_class(self) -> type["CodeStructureTransformer"]:  # type: ignore[override]
         # Lazy import — same pattern as :class:`git.GitProject` /
@@ -70,8 +70,8 @@ class CodeType(Entity):
     Field mapping vs legacy ``codestructure_models.CodeType``:
 
     * ``id``                  — unchanged (globally unique synthetic id,
-                                e.g. ``"jafax:19"`` in the legacy
-                                transformer).
+                                e.g. ``"codeframe:type:..."`` from the
+                                bridge).
     * ``project_ref``         — NEW: typed ref to the owning
                                 :class:`CodeStructureProject`.
     * ``file_ref``            — was implicit through ``file_path`` (a plain
@@ -144,8 +144,9 @@ class CodeMethod(Entity):
                                      str). v2 carries a typed
                                      :class:`EntityRef` to the owning
                                      :class:`CodeType`. ``None`` is
-                                     allowed because some legacy JaFax
-                                     methods arrive with no container.
+                                     allowed because file-scope free
+                                     functions (JS/TS/Python) arrive with
+                                     no container type.
     * ``name``                     — unchanged.
     * ``signature``                — unchanged.
     * ``file_ref``                 — was ``file_path`` (a plain string);
@@ -205,8 +206,8 @@ class CodeField(Entity):
                                 :class:`CodeMethod.type_ref`.
     * ``name``                — unchanged.
     * ``file_ref``            — was ``file_path``; typed ref now.
-    * ``declared_type``       — NEW (plan §4). ``Optional`` because
-                                JaFax does not always report it.
+    * ``declared_type``       — NEW (plan §4). ``Optional`` because the
+                                source format does not always report it.
     * ``modifiers``           — NEW (plan §4); set of modifier strings.
     """
 

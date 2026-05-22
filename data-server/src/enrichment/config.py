@@ -122,7 +122,7 @@ class EnrichmentConfig:
     # heavy contribution flag (median project files churn <500 over their life).
     supernova_net_churn_min: int = 5000
 
-    # ── B2 — JaFax / CodeFrame thresholds ──────────────────────────────────
+    # ── B2 — CodeFrame thresholds ──────────────────────────────────────────
     # ZoneCrossroad: minimum commits a file must have inside one UTC offset
     # before that offset counts as "significant". dx default
     # (ZoneCrossroad.java:16) is 10.

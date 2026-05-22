@@ -472,7 +472,7 @@ class MCPSandboxView:
     # Code structure summary (Chunk 20 — was GET /enrichments/code-structure/summary)
     # ------------------------------------------------------------------
     def code_structure_summary(self) -> dict[str, object]:
-        """Per-project counts from the JaFax / Codeframe (B2) layer.
+        """Per-project counts from the CodeFrame (B2) layer.
 
         Reads :attr:`Graph.code_structure_projects` to discover whether
         any code-structure ingest happened, plus :attr:`Graph.code_types`
@@ -483,12 +483,12 @@ class MCPSandboxView:
 
             {
               "loaded": <bool>,
-              "source": "jafax" | "codeframe" | None,
+              "source": "codeframe" | None,
               "projects": [
                 {
                   "project_id":   "...",
                   "project_name": "...",
-                  "kind_of_source": "jafax" | "codeframe",
+                  "kind_of_source": "codeframe",
                   "type_count":   <int>,
                   "method_count": <int>,
                   "field_count":  <int>,

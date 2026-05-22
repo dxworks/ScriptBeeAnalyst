@@ -35,9 +35,11 @@ class CodeStructureProjectRegistry(Registry[CodeStructureProject, str]):
     Indexes:
 
     * ``by_name``           — "the code-structure project named X".
-    * ``by_kind_of_source`` — quick filter for "all JaFax projects" vs
-                              "all Codeframe projects" (task 8 needs this
-                              when the flip is rolled out).
+    * ``by_kind_of_source`` — quick filter by ``kind_of_source`` value.
+                              Today only ``"codeframe"`` is emitted, so the
+                              index is effectively single-valued; the
+                              fan-out shape stays for forward-compatibility
+                              with future source-tool additions.
     """
 
     indexes = [

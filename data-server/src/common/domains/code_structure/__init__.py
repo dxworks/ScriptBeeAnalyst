@@ -1,9 +1,9 @@
 """Code-structure-domain v2 entities, registries, and transformer.
 
-See plan §3 (``CodeStructureProject.kind_of_source: "jafax" | "codeframe"``)
-and §4 (source-domain entities). The public surface here is intentionally
-narrow: every concrete class downstream code (Chunks 7/8 + the MCP sandbox)
-needs is re-exported.
+See plan §3 (``CodeStructureProject.kind_of_source: "codeframe"``) and §4
+(source-domain entities). The public surface here is intentionally narrow:
+every concrete class downstream code (Chunks 7/8 + the MCP sandbox) needs
+is re-exported.
 """
 from __future__ import annotations
 

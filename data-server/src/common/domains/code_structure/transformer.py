@@ -9,7 +9,7 @@ Two raw input shapes are recognized by :meth:`CodeStructureTransformer.transform
 1. **Already-built entity bundle** — a ``dict`` of the form::
 
       {
-          "project":     CodeStructureProject(..., kind_of_source="jafax"),
+          "project":     CodeStructureProject(..., kind_of_source="codeframe"),
           "code_types":  Iterable[CodeType],
           "code_methods": Iterable[CodeMethod],
           "code_fields": Iterable[CodeField],
@@ -20,16 +20,14 @@ Two raw input shapes are recognized by :meth:`CodeStructureTransformer.transform
    :meth:`Transformer.collect_bundle` (Chunk 5 shared helper). This
    transformer only declares the bucket specs.
 
-2. **Raw JaFax / Codeframe DTO** — deferred to Chunk 8 with
-   ``NotImplementedError``. The plan §3 says ``kind_of_source`` lives on
-   the project, so a single transformer handles both formats; Chunk 8
-   inspects ``project.kind_of_source`` to choose which raw-DTO walker
-   (``JaFaxTransformer`` rewrite or the future ``CodeframeTransformer``)
-   builds the bundle.
+2. **Raw Codeframe DTO** — not consumed directly here. The
+   ``code_structure`` bundle is produced upstream by
+   :mod:`src.common.domains.code_structure.bridge`, which streams a
+   CodeFrame ``.jsonl`` file and returns the entity bundle the processor
+   then feeds back through path (1).
 
-Per the Chunk-6 brief, branching on ``kind_of_source`` is acceptable for
-the single-transformer design. Task 8 (the JaFax→Codeframe flip) only
-needs a new builder for the bundle, not a new transformer class.
+The transformer stays format-agnostic — the only source-specific code
+lives in the bridge.
 """
 from __future__ import annotations
 
@@ -58,9 +56,9 @@ _BUCKET_SPECS: dict[str, tuple[EntityKind, type[Entity]]] = {
 class CodeStructureTransformer(Transformer):
     """Concrete :class:`Transformer` for the ``code_structure`` source.
 
-    Branches on ``project.kind_of_source`` (JaFax vs Codeframe) only for
-    the raw-DTO path — Chunk 8 plumbs the two builders. The entity-bundle
-    path is format-agnostic.
+    Format-agnostic — the raw-DTO walking lives in
+    :mod:`src.common.domains.code_structure.bridge`; this transformer
+    only ingests the already-built entity bundle.
     """
 
     source: ClassVar[SourceKind] = SourceKind.CODE_STRUCTURE
@@ -71,10 +69,9 @@ class CodeStructureTransformer(Transformer):
             return self.collect_bundle(raw, CodeStructureProject, _BUCKET_SPECS)
         raise NotImplementedError(
             "CodeStructureTransformer.transform(raw) accepts only an "
-            "entity-bundle Mapping today (see module docstring). The "
-            "raw-DTO path (branching on project.kind_of_source for "
-            "JaFax vs Codeframe) will be wired in Chunk 8 alongside the "
-            "processor rewrite."
+            "entity-bundle Mapping (see module docstring). Raw CodeFrame "
+            "JSONL is parsed upstream by "
+            "src.common.domains.code_structure.bridge.build_code_structure_bundle."
         )
 
 

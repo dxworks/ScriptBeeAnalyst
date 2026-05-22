@@ -28,7 +28,7 @@ Bridge to legacy readers
 
 The v2 transformers (Chunks 4–6) accept ONLY pre-built entity bundles
 (Mapping form), not raw bytes / DTOs. Building entity bundles from raw
-inputs (.iglog, Jira JSON, GitHub JSON, JaFax, DuDe, Insider, Lizard
+inputs (.iglog, Jira JSON, GitHub JSON, CodeFrame, DuDe, Insider, Lizard
 CSV) requires re-porting ~1300 LOC of legacy ``*_miner/linker``
 machinery. That port is intentionally **deferred** — Chunk 8 ships:
 
@@ -106,7 +106,7 @@ class DownloadedFiles:
     jira_file: Optional[Path] = None
     github_file: Optional[Path] = None
     lizard_file: Optional[Path] = None
-    jafax_file: Optional[Path] = None
+    codeframe_file: Optional[Path] = None
     dude_external_file: Optional[Path] = None
     dude_internal_file: Optional[Path] = None
     quality_issues_file: Optional[Path] = None
@@ -293,8 +293,8 @@ def download_serialized_files_from_supabase(project_id: str) -> DownloadedFiles:
                 downloaded.github_file = temp_file_path
             elif file_type == "lizard":
                 downloaded.lizard_file = temp_file_path
-            elif file_type == "jafax":
-                downloaded.jafax_file = temp_file_path
+            elif file_type == "codeframe":
+                downloaded.codeframe_file = temp_file_path
             elif file_type == "dude_external":
                 downloaded.dude_external_file = temp_file_path
             elif file_type == "dude_internal":
@@ -437,10 +437,10 @@ def _downloaded_files_to_bundles(
         )
         bundles[SourceKind.LIZARD] = [_capture_meta("lizard", bundle)]
 
-    if downloaded.jafax_file is not None:
+    if downloaded.codeframe_file is not None:
         bundle = dict(
             build_code_structure_bundle(
-                downloaded.jafax_file, repo_name, project_name
+                downloaded.codeframe_file, repo_name, project_name
             )
         )
         bundles[SourceKind.CODE_STRUCTURE] = [_capture_meta("code_structure", bundle)]
