@@ -239,7 +239,7 @@ When you don't have access to a project due to RLS:
    - Git (.iglog file)
    - JIRA (JSON)
    - GitHub (JSON)
-   - Optional: Lizard CSV, JaFax/Codeframe JSON, DuDe JSON, Insider JSON
+   - Optional: Lizard CSV, CodeFrame JSONL, DuDe JSON, Insider JSON
 3. **Build Graph** — builds AND loads the project (becomes current):
    ```bash
    curl -X POST http://localhost:8001/projects/PROJECT_ID/build \
