@@ -311,24 +311,38 @@ class MCPSandboxView:
     ) -> list["File"]:
         """Files co-changing with ``file_id`` in the given window.
 
-        Reads :meth:`RelationRegistry.of_kind_in_window` for the
-        ``"cochange"`` relation kind, filters by
-        ``rel.source.id == file_id`` AND target kind FILE, resolves
-        each target to a concrete :class:`File`, and returns at most
-        ``limit`` results in source-iteration order (which is the
-        emission order of the cochange builder — already a
-        descending-strength heuristic for many builders, but not
-        guaranteed; callers that need strict ordering should sort by
-        ``strength`` themselves via ``view.relations.by_pair[...]``).
+        Walks :attr:`RelationRegistry.by_source` from the ``file_id``
+        :class:`EntityRef` (so the per-call scan is bounded by the
+        number of outgoing relations of that file, not the whole
+        cochange slice), filters to ``relation_kind == "cochange"`` and
+        the requested window AND target kind FILE, resolves each target
+        to a concrete :class:`File`, and returns at most ``limit``
+        results. Order is by_source iteration order; callers that need
+        strict ordering should sort by ``strength`` themselves via
+        ``view.relations.by_pair[...]``.
 
         ``window`` accepts both :class:`WindowKind` enum members and
         bare strings (``"lifetime"``, ``"recent"``).
+
+        Perf: using ``by_source`` (vs the old ``by_kind_window`` slice
+        with a Python-side ``source.id == file_id`` filter) keeps a
+        per-file agent loop O(R) total instead of O(F·R) — same trap
+        :func:`src.sandbox.helpers.commit_issues` hit with the
+        commit↔issue regex join.
         """
         out: list["File"] = []
         if limit is not None and limit <= 0:
             return out
-        for rel in self._graph.relations.of_kind_in_window("cochange", window):
-            if rel.source.id != file_id:
+        file_ref = EntityRef(kind=EntityKind.FILE, id=file_id)
+        win = (
+            WindowKind(window)
+            if isinstance(window, str) and not isinstance(window, WindowKind)
+            else window
+        )
+        for rel in self._graph.relations.by_source[file_ref]:
+            if rel.relation_kind != "cochange":
+                continue
+            if rel.window != win:
                 continue
             tgt = rel.target
             if tgt.kind is not EntityKind.FILE:
@@ -781,12 +795,19 @@ class MCPSandboxView:
         "max_ccn": 11.0, ...}``). Empty dict when the file has no
         recorded metrics. Same shape as one row of
         :meth:`list_file_metrics` but for a single file.
+
+        Perf: uses the :class:`FileMetricRegistry` ``by_file`` index
+        instead of scanning every ``(file, metric)`` row, so a per-file
+        agent loop is O(F·k) (k = metrics per file, typically ~5)
+        instead of O(F·M) — same trap
+        :func:`src.sandbox.helpers.commit_issues` hit with the
+        commit↔issue regex join.
         """
-        out: dict[str, float] = {}
-        for fm in self._graph.file_metrics:
-            if fm.file_ref.id == file_id:
-                out[fm.metric_name] = fm.value
-        return out
+        file_ref = EntityRef(kind=EntityKind.FILE, id=file_id)
+        return {
+            fm.metric_name: fm.value
+            for fm in self._graph.file_metrics.by_file[file_ref]
+        }
 
     # ------------------------------------------------------------------
     # Per-domain summary helpers (P2)
