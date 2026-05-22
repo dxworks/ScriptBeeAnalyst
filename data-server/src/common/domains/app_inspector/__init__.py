@@ -4,6 +4,7 @@ See plan §4 (source-domain entities) and Task 7 (App Inspector ingestion).
 """
 from __future__ import annotations
 
+from .bridge import build_app_inspector_bundle
 from .models import AppInspectorProject, AppTag, AppInspectorSourceTool
 from .registries import (
     AppInspectorProjectRegistry,
@@ -28,6 +29,8 @@ __all__ = [
     # registries
     "AppInspectorProjectRegistry",
     "AppTagRegistry",
+    # bridge
+    "build_app_inspector_bundle",
     # transformer
     "AppInspectorTransformer",
 ]
