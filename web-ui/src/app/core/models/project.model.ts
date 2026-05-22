@@ -26,13 +26,12 @@ export interface UpdateProjectDto {
 // match the data-server's processor.py file_type dispatch and the DB CHECK
 // constraint set by migrations 20260503000004_insider_quality_issues.sql and
 // 20260522000001_appinspector_tags.sql.
-// 'codeframe' is NOT exposed here on purpose — its parser is stub-only.
 export type FileType =
   | 'git'
   | 'github'
   | 'jira'
   | 'lizard'
-  | 'jafax'
+  | 'codeframe'
   | 'dude_external'
   | 'dude_internal'
   | 'quality_issues'
@@ -55,7 +54,7 @@ export interface SerializedFile {
 //   *.iglog                              → git              (repo = stem)
 //   github.json                          → github
 //   jira.json                            → jira
-//   *-layout.json                        → jafax            (repo = stem before "-layout")
+//   *-codeframe.jsonl                    → codeframe        (repo = stem before "-codeframe")
 //   *-code_smells.json                   → quality_issues   (repo = stem before "-code_smells")
 //   *-chronos-tags.json                  → app_inspector    (repo = stem before "-chronos-tags")
 //   *-external_duplication.csv           → dude_external    (repo = stem before "-external_duplication")
@@ -71,7 +70,7 @@ interface SuffixRule {
 }
 
 const SUFFIX_RULES: SuffixRule[] = [
-  { suffix: '-layout.json',                fileType: 'jafax',          repoFromStem: true },
+  { suffix: '-codeframe.jsonl',            fileType: 'codeframe',      repoFromStem: true },
   { suffix: '-code_smells.json',           fileType: 'quality_issues', repoFromStem: true },
   { suffix: '-chronos-tags.json',          fileType: 'app_inspector',  repoFromStem: true },
   { suffix: '-external_duplication.csv',   fileType: 'dude_external',  repoFromStem: true },
@@ -101,7 +100,7 @@ export function isValidSerializedFileName(filename: string): boolean {
 /**
  * Extracts repo name from a filename:
  *   "backend.iglog"                  → "backend"
- *   "zeppelin-layout.json"           → "zeppelin"
+ *   "zeppelin-codeframe.jsonl"       → "zeppelin"
  *   "zeppelin-code_smells.json"      → "zeppelin"
  *   "zeppelin-chronos-tags.json"     → "zeppelin"
  *   "zeppelin-external_duplication.csv" → "zeppelin"
