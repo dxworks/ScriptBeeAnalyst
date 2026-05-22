@@ -51,8 +51,8 @@ export class FileService {
         valid: false,
         error:
           `Invalid filename. Expected: *.iglog, github.json, jira.json, ` +
-          `*-layout.json, *-code_smells.json, *-external_duplication.csv, ` +
-          `*-internal_duplication.json, or *-lizard.csv`,
+          `*-layout.json, *-code_smells.json, *-chronos-tags.json, ` +
+          `*-external_duplication.csv, *-internal_duplication.json, or *-lizard.csv`,
       };
     }
 

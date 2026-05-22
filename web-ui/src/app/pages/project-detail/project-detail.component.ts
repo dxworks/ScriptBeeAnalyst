@@ -425,7 +425,8 @@ export class ProjectDetailComponent implements OnInit, OnDestroy {
       this.toastService.warning(
         `Invalid file${invalidFiles.length > 1 ? 's' : ''}: ${fileNames}. ` +
         `Expected: *.iglog, github.json, jira.json, *-lizard.csv, *-layout.json, ` +
-        `*-external_duplication.csv, *-internal_duplication.json, or *-code_smells.json`
+        `*-external_duplication.csv, *-internal_duplication.json, *-code_smells.json, ` +
+        `or *-chronos-tags.json`
       );
     }
 
@@ -732,6 +733,8 @@ export class ProjectDetailComponent implements OnInit, OnDestroy {
         return 'DuDe internal duplication';
       case 'quality_issues':
         return 'Insider code smells';
+      case 'app_inspector':
+        return 'AppInspector tags';
     }
   }
 

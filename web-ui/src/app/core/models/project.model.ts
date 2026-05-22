@@ -24,7 +24,8 @@ export interface UpdateProjectDto {
 // Serialized file types
 // 'git' / 'github' / 'jira' are the original sources. The remaining values
 // match the data-server's processor.py file_type dispatch and the DB CHECK
-// constraint set by migration 20260503000004_insider_quality_issues.sql.
+// constraint set by migrations 20260503000004_insider_quality_issues.sql and
+// 20260522000001_appinspector_tags.sql.
 // 'codeframe' is NOT exposed here on purpose — its parser is stub-only.
 export type FileType =
   | 'git'
@@ -34,7 +35,8 @@ export type FileType =
   | 'jafax'
   | 'dude_external'
   | 'dude_internal'
-  | 'quality_issues';
+  | 'quality_issues'
+  | 'app_inspector';
 
 export interface SerializedFile {
   id: string;
@@ -55,6 +57,7 @@ export interface SerializedFile {
 //   jira.json                            → jira
 //   *-layout.json                        → jafax            (repo = stem before "-layout")
 //   *-code_smells.json                   → quality_issues   (repo = stem before "-code_smells")
+//   *-chronos-tags.json                  → app_inspector    (repo = stem before "-chronos-tags")
 //   *-external_duplication.csv           → dude_external    (repo = stem before "-external_duplication")
 //   *-internal_duplication.json          → dude_internal    (repo = stem before "-internal_duplication")
 //   *-lizard.csv                         → lizard           (repo = stem before "-lizard")
@@ -70,6 +73,7 @@ interface SuffixRule {
 const SUFFIX_RULES: SuffixRule[] = [
   { suffix: '-layout.json',                fileType: 'jafax',          repoFromStem: true },
   { suffix: '-code_smells.json',           fileType: 'quality_issues', repoFromStem: true },
+  { suffix: '-chronos-tags.json',          fileType: 'app_inspector',  repoFromStem: true },
   { suffix: '-external_duplication.csv',   fileType: 'dude_external',  repoFromStem: true },
   { suffix: '-internal_duplication.json',  fileType: 'dude_internal',  repoFromStem: true },
   { suffix: '-lizard.csv',                 fileType: 'lizard',         repoFromStem: true },
@@ -99,6 +103,7 @@ export function isValidSerializedFileName(filename: string): boolean {
  *   "backend.iglog"                  → "backend"
  *   "zeppelin-layout.json"           → "zeppelin"
  *   "zeppelin-code_smells.json"      → "zeppelin"
+ *   "zeppelin-chronos-tags.json"     → "zeppelin"
  *   "zeppelin-external_duplication.csv" → "zeppelin"
  *   "zeppelin-internal_duplication.json" → "zeppelin"
  *   "zeppelin-lizard.csv"            → "zeppelin"
