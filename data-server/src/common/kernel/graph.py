@@ -99,6 +99,10 @@ from ..domains.quality.registries import (
     QualityIssueRegistry,
     QualityProjectRegistry,
 )
+from ..domains.app_inspector.registries import (
+    AppInspectorProjectRegistry,
+    AppTagRegistry,
+)
 
 # Enrichment registries
 from ...enrichment.relations.registries import RelationRegistry
@@ -149,6 +153,7 @@ _FIELD_SPECS: tuple[_FieldSpec, ...] = (
     ("duplication_projects",    DuplicationProjectRegistry,    EntityKind.PROJECT, "duplication_project"),
     ("quality_projects",        QualityProjectRegistry,        EntityKind.PROJECT, "quality_project"),
     ("lizard_projects",         LizardMetricsProjectRegistry,  EntityKind.PROJECT, "lizard_project"),
+    ("app_inspector_projects",  AppInspectorProjectRegistry,   EntityKind.PROJECT, "app_inspector_project"),
 
     # --- git --------------------------------------------------------------
     ("commits", CommitRegistry, EntityKind.COMMIT, "commit"),
@@ -177,6 +182,7 @@ _FIELD_SPECS: tuple[_FieldSpec, ...] = (
     ("duplications",   DuplicationPairRegistry, EntityKind.DUPLICATION_PAIR, "duplication_pair"),
     ("quality_issues", QualityIssueRegistry,    EntityKind.QUALITY_ISSUE,    "quality_issue"),
     ("file_metrics",   FileMetricRegistry,      EntityKind.FILE_METRIC,      "file_metric"),
+    ("app_tags",       AppTagRegistry,          EntityKind.APP_TAG,          "app_tag"),
 
     # --- components + enrichment -----------------------------------------
     ("components",  ComponentRegistry,  EntityKind.COMPONENT,  "component"),
@@ -237,6 +243,7 @@ class Graph(BaseModel):
     duplication_projects:    DuplicationProjectRegistry    = Field(default_factory=DuplicationProjectRegistry)
     quality_projects:        QualityProjectRegistry        = Field(default_factory=QualityProjectRegistry)
     lizard_projects:         LizardMetricsProjectRegistry  = Field(default_factory=LizardMetricsProjectRegistry)
+    app_inspector_projects:  AppInspectorProjectRegistry   = Field(default_factory=AppInspectorProjectRegistry)
 
     # --- git ---
     commits: CommitRegistry = Field(default_factory=CommitRegistry)
@@ -265,6 +272,7 @@ class Graph(BaseModel):
     duplications:   DuplicationPairRegistry = Field(default_factory=DuplicationPairRegistry)
     quality_issues: QualityIssueRegistry    = Field(default_factory=QualityIssueRegistry)
     file_metrics:   FileMetricRegistry      = Field(default_factory=FileMetricRegistry)
+    app_tags:       AppTagRegistry          = Field(default_factory=AppTagRegistry)
 
     # --- components + enrichment outputs ---
     components:  ComponentRegistry  = Field(default_factory=ComponentRegistry)
@@ -596,6 +604,7 @@ def _iter_project_specs() -> Iterable[tuple[str, type[Entity]]]:
     from ..domains.duplication.models import DuplicationProject
     from ..domains.quality.models import QualityProject
     from ..domains.metrics_lizard.models import LizardMetricsProject
+    from ..domains.app_inspector.models import AppInspectorProject
 
     yield "git_projects",            GitProject
     yield "jira_projects",           JiraProject
@@ -604,6 +613,7 @@ def _iter_project_specs() -> Iterable[tuple[str, type[Entity]]]:
     yield "duplication_projects",    DuplicationProject
     yield "quality_projects",        QualityProject
     yield "lizard_projects",         LizardMetricsProject
+    yield "app_inspector_projects",  AppInspectorProject
 
 
 _PROJECT_FIELD_TO_ENTITY_CLS: Dict[str, type[Entity]] = dict(_iter_project_specs())

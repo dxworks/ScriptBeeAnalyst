@@ -183,13 +183,13 @@ def test_registry_for_returns_typed_field_for_single_kind():
 
 
 def test_registry_for_returns_none_for_project_kind():
-    """``EntityKind.PROJECT`` maps to 7 typed fields; no single registry
+    """``EntityKind.PROJECT`` maps to 8 typed fields; no single registry
     is returned. Callers iterate :meth:`Graph.project_registries`
     instead.
     """
     g = Graph(project_id="p1")
     assert g.registry_for(EntityKind.PROJECT) is None
-    assert len(g.project_registries()) == 7
+    assert len(g.project_registries()) == 8
 
 
 def test_resolve_roundtrip_through_typed_field():
