@@ -332,10 +332,9 @@ def build_code_structure_bundle(
         # CodeFrame doesn't carry per-record repo info, so every row is
         # taken to belong to the caller-supplied repo anchor. The
         # processor uses this to suppress its "rows from a different
-        # repo" warning. Stay False — keep parity with the JaFax
-        # contract: True only when EVERY row carried an explicit repo
-        # tag matching the anchor (CodeFrame has no such tag, so we
-        # never set it).
+        # repo" warning. Stay False: True is reserved for the case where
+        # every row carries an explicit repo tag matching the anchor,
+        # and CodeFrame has no such tag.
         "_meta": {"all_rows_self_repo": False},
     }
 
@@ -422,7 +421,7 @@ def _file_ref_for(absolute_path: str, repo_name: str) -> Optional[EntityRef]:
 
 
 # ---------------------------------------------------------------------------
-# Normalization helpers (reused / ported from the JaFax bridge)
+# Normalization helpers
 # ---------------------------------------------------------------------------
 
 
