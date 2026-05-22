@@ -57,10 +57,10 @@ create policy "Users can delete own quality_issues"
   );
 
 -- Allow Insider quality-issues JSON to upload as a serialized file alongside
--- git/github/jira/lizard/jafax/codeframe/dude_external/dude_internal.
+-- git/github/jira/lizard/codeframe/dude_external/dude_internal.
 alter table public.serialized_files
   drop constraint if exists serialized_files_file_type_check;
 
 alter table public.serialized_files
   add constraint serialized_files_file_type_check
-  check (file_type in ('git', 'github', 'jira', 'lizard', 'jafax', 'codeframe', 'dude_external', 'dude_internal', 'quality_issues'));
+  check (file_type in ('git', 'github', 'jira', 'lizard', 'codeframe', 'dude_external', 'dude_internal', 'quality_issues'));
