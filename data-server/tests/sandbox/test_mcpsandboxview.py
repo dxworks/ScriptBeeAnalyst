@@ -590,14 +590,14 @@ def test_code_structure_summary_returns_expected_shape(small_graph: Graph):
         id="csp1",
         name="zep-cs",
         source=SourceKind.GIT,
-        kind_of_source="jafax",
+        kind_of_source="codeframe",
     )
     small_graph.add_project(cs_project)
 
     result = MCPSandboxView(small_graph).code_structure_summary()
     assert set(result.keys()) == _summary_shape_keys()
     assert result["loaded"] is True
-    assert result["source"] == "jafax"
+    assert result["source"] == "codeframe"
     assert len(result["projects"]) == 1
 
 

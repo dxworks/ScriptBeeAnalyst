@@ -2,8 +2,8 @@
 
 Parallel to ``tests/domains/jira/test_transformer.py``. The transformer
 accepts pre-built entity bundles and delegates validation to the shared
-:meth:`Transformer.collect_bundle` helper. The raw-DTO path is deferred
-to Chunk 8.
+:meth:`Transformer.collect_bundle` helper. Raw CodeFrame JSONL parsing
+lives in :mod:`src.common.domains.code_structure.bridge`.
 """
 from __future__ import annotations
 
@@ -30,12 +30,12 @@ def _build_entity_bundle() -> dict:
         id=PROJECT_ID,
         name="ZEPPELIN",
         source=SourceKind.CODE_STRUCTURE,
-        kind_of_source="jafax",
+        kind_of_source="codeframe",
     )
     project_ref = project.ref()
     file_ref = EntityRef(kind=EntityKind.FILE, id="src/Foo.java")
     t = CodeType(
-        id="jafax:19",
+        id="codeframe:19",
         project_ref=project_ref,
         file_ref=file_ref,
         fully_qualified_name="com.example.Foo",
@@ -43,19 +43,19 @@ def _build_entity_bundle() -> dict:
         type_category="class",
     )
     m = CodeMethod(
-        id="jafax:25",
+        id="codeframe:25",
         project_ref=project_ref,
         type_ref=t.ref(),
         name="run",
     )
     f = CodeField(
-        id="jafax:50",
+        id="codeframe:50",
         project_ref=project_ref,
         type_ref=t.ref(),
         name="counter",
     )
     r = CodeReference(
-        id="jafax:ref:1",
+        id="codeframe:ref:1",
         project_ref=project_ref,
         reference_kind="call",
         source_method_ref=m.ref(),
@@ -86,21 +86,7 @@ def test_code_structure_transformer_happy_path():
         EntityKind.CODE_FIELD,
         EntityKind.CODE_REF,
     }
-    assert [t.id for t in result.entities[EntityKind.CODE_TYPE]] == ["jafax:19"]
-
-
-def test_code_structure_transformer_handles_codeframe_project():
-    """``kind_of_source`` is on the project; transformer doesn't care for
-    the entity-bundle path — it just forwards everything."""
-    bundle = _build_entity_bundle()
-    bundle["project"] = CodeStructureProject(
-        id=PROJECT_ID,
-        name="z",
-        source=SourceKind.CODE_STRUCTURE,
-        kind_of_source="codeframe",
-    )
-    result = CodeStructureTransformer().transform(bundle)
-    assert result.project.kind_of_source == "codeframe"
+    assert [t.id for t in result.entities[EntityKind.CODE_TYPE]] == ["codeframe:19"]
 
 
 def test_code_structure_transformer_handles_missing_optional_buckets():
@@ -138,7 +124,7 @@ def test_code_structure_transformer_rejects_unknown_bundle_keys():
         CodeStructureTransformer().transform(bundle)
 
 
-def test_code_structure_transformer_rejects_raw_dto_for_now():
-    """Raw JaFax/Codeframe ingestion is deferred to Chunk 8."""
+def test_code_structure_transformer_rejects_raw_dto():
+    """Raw CodeFrame JSONL must go through the bridge, not the transformer."""
     with pytest.raises(NotImplementedError, match="entity-bundle"):
         CodeStructureTransformer().transform(object())

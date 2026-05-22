@@ -75,7 +75,7 @@ def test_code_structure_project_registry_indexes():
         id="p1",
         name="A",
         source=SourceKind.CODE_STRUCTURE,
-        kind_of_source="jafax",
+        kind_of_source="codeframe",
     )
     p2 = CodeStructureProject(
         id="p2",
@@ -87,14 +87,15 @@ def test_code_structure_project_registry_indexes():
         id="p3",
         name="B",
         source=SourceKind.CODE_STRUCTURE,
-        kind_of_source="jafax",
+        kind_of_source="codeframe",
     )
     reg.add(p1)
     reg.add(p2)
     reg.add(p3)
     assert {p.id for p in reg.by_name["A"]} == {"p1", "p2"}
-    assert {p.id for p in reg.by_kind_of_source["jafax"]} == {"p1", "p3"}
-    assert {p.id for p in reg.by_kind_of_source["codeframe"]} == {"p2"}
+    # ``kind_of_source`` is single-valued today (codeframe only); the
+    # by_kind_of_source index still fans out, so every project lands here.
+    assert {p.id for p in reg.by_kind_of_source["codeframe"]} == {"p1", "p2", "p3"}
 
 
 # ---------------------------------------------------------------------------

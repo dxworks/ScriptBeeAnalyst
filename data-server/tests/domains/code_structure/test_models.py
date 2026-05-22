@@ -6,8 +6,8 @@ Covers:
 * cross-entity references are :class:`EntityRef` (never Python refs),
 * ``extra="forbid"`` rejects unknown attributes (inherited from Entity),
 * class attributes propagate (``kind``),
-* :pyattr:`CodeStructureProject.kind_of_source` Literal accepts both
-  ``"jafax"`` and ``"codeframe"`` and rejects anything else.
+* :pyattr:`CodeStructureProject.kind_of_source` Literal accepts only
+  ``"codeframe"`` and rejects anything else.
 """
 from __future__ import annotations
 
@@ -42,18 +42,8 @@ def test_code_structure_project_construct_and_metadata():
     assert proj.id == PROJECT_ID
     assert proj.kind == EntityKind.PROJECT
     assert proj.source == SourceKind.CODE_STRUCTURE
-    assert proj.kind_of_source == "jafax"  # default
+    assert proj.kind_of_source == "codeframe"  # default
     assert proj.ref() == EntityRef(kind=EntityKind.PROJECT, id=PROJECT_ID)
-
-
-def test_code_structure_project_accepts_codeframe():
-    proj = CodeStructureProject(
-        id=PROJECT_ID,
-        name="z",
-        source=SourceKind.CODE_STRUCTURE,
-        kind_of_source="codeframe",
-    )
-    assert proj.kind_of_source == "codeframe"
 
 
 def test_code_structure_project_rejects_unknown_kind_of_source():
@@ -93,11 +83,11 @@ def test_code_structure_project_extra_fields_forbidden():
 
 
 def test_code_type_construct_with_refs():
-    parent = EntityRef(kind=EntityKind.CODE_TYPE, id="jafax:5")
-    method_ref = EntityRef(kind=EntityKind.CODE_METHOD, id="jafax:10")
-    field_ref = EntityRef(kind=EntityKind.CODE_FIELD, id="jafax:11")
+    parent = EntityRef(kind=EntityKind.CODE_TYPE, id="codeframe:5")
+    method_ref = EntityRef(kind=EntityKind.CODE_METHOD, id="codeframe:10")
+    field_ref = EntityRef(kind=EntityKind.CODE_FIELD, id="codeframe:11")
     t = CodeType(
-        id="jafax:19",
+        id="codeframe:19",
         project_ref=PROJECT_REF,
         file_ref=FILE_REF,
         fully_qualified_name="com.example.Foo",
@@ -109,7 +99,7 @@ def test_code_type_construct_with_refs():
         modifiers=["public"],
     )
     assert t.kind == EntityKind.CODE_TYPE
-    assert t.ref() == EntityRef(kind=EntityKind.CODE_TYPE, id="jafax:19")
+    assert t.ref() == EntityRef(kind=EntityKind.CODE_TYPE, id="codeframe:19")
     assert t.fully_qualified_name == "com.example.Foo"
     assert t.simple_name == "Foo"
     assert t.parent_refs == [parent]
@@ -120,7 +110,7 @@ def test_code_type_construct_with_refs():
 
 def test_code_type_file_ref_is_optional():
     t = CodeType(
-        id="jafax:99",
+        id="codeframe:99",
         project_ref=PROJECT_REF,
         fully_qualified_name="java.lang.String",
         simple_name="String",
@@ -163,10 +153,10 @@ def test_code_type_extra_fields_forbidden():
 
 
 def test_code_method_construct_full():
-    type_ref = EntityRef(kind=EntityKind.CODE_TYPE, id="jafax:19")
-    callee = EntityRef(kind=EntityKind.CODE_METHOD, id="jafax:30")
+    type_ref = EntityRef(kind=EntityKind.CODE_TYPE, id="codeframe:19")
+    callee = EntityRef(kind=EntityKind.CODE_METHOD, id="codeframe:30")
     m = CodeMethod(
-        id="jafax:25",
+        id="codeframe:25",
         project_ref=PROJECT_REF,
         type_ref=type_ref,
         file_ref=FILE_REF,
@@ -189,7 +179,7 @@ def test_code_method_construct_full():
 
 def test_code_method_type_ref_is_optional():
     m = CodeMethod(
-        id="jafax:25", project_ref=PROJECT_REF, name="orphan"
+        id="codeframe:25", project_ref=PROJECT_REF, name="orphan"
     )
     assert m.type_ref is None
     assert m.file_ref is None
@@ -203,7 +193,7 @@ def test_code_method_extra_fields_forbidden():
             id="m",
             project_ref=PROJECT_REF,
             name="m",
-            parent_type_id="jafax:19",  # legacy alias — renamed to type_ref
+            parent_type_id="codeframe:19",  # legacy alias — renamed to type_ref
         )
 
 
@@ -213,9 +203,9 @@ def test_code_method_extra_fields_forbidden():
 
 
 def test_code_field_construct():
-    type_ref = EntityRef(kind=EntityKind.CODE_TYPE, id="jafax:19")
+    type_ref = EntityRef(kind=EntityKind.CODE_TYPE, id="codeframe:19")
     f = CodeField(
-        id="jafax:50",
+        id="codeframe:50",
         project_ref=PROJECT_REF,
         type_ref=type_ref,
         file_ref=FILE_REF,
@@ -244,10 +234,10 @@ def test_code_field_extra_fields_forbidden():
 
 
 def test_code_reference_construct_call():
-    src = EntityRef(kind=EntityKind.CODE_METHOD, id="jafax:25")
-    tgt = EntityRef(kind=EntityKind.CODE_METHOD, id="jafax:30")
+    src = EntityRef(kind=EntityKind.CODE_METHOD, id="codeframe:25")
+    tgt = EntityRef(kind=EntityKind.CODE_METHOD, id="codeframe:30")
     r = CodeReference(
-        id="jafax:ref:1",
+        id="codeframe:ref:1",
         project_ref=PROJECT_REF,
         reference_kind="call",
         source_method_ref=src,
@@ -267,10 +257,10 @@ def test_code_reference_construct_call():
 
 def test_code_reference_construct_inheritance():
     """Inheritance/import use source_type_ref + target_type_ref."""
-    src = EntityRef(kind=EntityKind.CODE_TYPE, id="jafax:19")
-    tgt = EntityRef(kind=EntityKind.CODE_TYPE, id="jafax:5")
+    src = EntityRef(kind=EntityKind.CODE_TYPE, id="codeframe:19")
+    tgt = EntityRef(kind=EntityKind.CODE_TYPE, id="codeframe:5")
     r = CodeReference(
-        id="jafax:ref:2",
+        id="codeframe:ref:2",
         project_ref=PROJECT_REF,
         reference_kind="inheritance",
         source_type_ref=src,

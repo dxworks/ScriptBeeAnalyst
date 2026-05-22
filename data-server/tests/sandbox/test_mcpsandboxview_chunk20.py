@@ -107,19 +107,19 @@ def populated_graph() -> Graph:
         id="cs-1",
         name="zep-cs",
         source=SourceKind.CODE_STRUCTURE,
-        kind_of_source="jafax",
+        kind_of_source="codeframe",
     )
     g.code_structure_projects.add(cs_project)
     cs_ref = cs_project.ref()
     type_a = CodeType(
-        id="jafax:1",
+        id="codeframe:1",
         project_ref=cs_ref,
         fully_qualified_name="com.zep.A",
         simple_name="A",
         type_category="class",
     )
     type_b = CodeType(
-        id="jafax:2",
+        id="codeframe:2",
         project_ref=cs_ref,
         fully_qualified_name="com.zep.B",
         simple_name="B",
@@ -127,7 +127,7 @@ def populated_graph() -> Graph:
     )
     g.code_types.add(type_a)
     g.code_types.add(type_b)
-    for mid in ("jafax:m1", "jafax:m2", "jafax:m3"):
+    for mid in ("codeframe:m1", "codeframe:m2", "codeframe:m3"):
         g.code_methods.add(
             CodeMethod(
                 id=mid,
@@ -138,7 +138,7 @@ def populated_graph() -> Graph:
         )
     g.code_fields.add(
         CodeField(
-            id="jafax:f1",
+            id="codeframe:f1",
             project_ref=cs_ref,
             name="counter",
             type_ref=type_a.ref(),
@@ -146,16 +146,16 @@ def populated_graph() -> Graph:
     )
     g.code_refs.add(
         CodeReference(
-            id="jafax:r1",
+            id="codeframe:r1",
             project_ref=cs_ref,
             reference_kind="call",
-            source_method_ref=EntityRef(kind=EntityKind.CODE_METHOD, id="jafax:m1"),
-            target_method_ref=EntityRef(kind=EntityKind.CODE_METHOD, id="jafax:m2"),
+            source_method_ref=EntityRef(kind=EntityKind.CODE_METHOD, id="codeframe:m1"),
+            target_method_ref=EntityRef(kind=EntityKind.CODE_METHOD, id="codeframe:m2"),
         )
     )
     g.code_refs.add(
         CodeReference(
-            id="jafax:r2",
+            id="codeframe:r2",
             project_ref=cs_ref,
             reference_kind="inheritance",
             source_type_ref=type_b.ref(),
@@ -289,12 +289,12 @@ def test_code_structure_summary_per_project_counts(
     """One row per CodeStructureProject with the four sub-registry counts."""
     summary = populated_view.code_structure_summary()
     assert summary["loaded"] is True
-    assert summary["source"] == "jafax"
+    assert summary["source"] == "codeframe"
     assert len(summary["projects"]) == 1
     row = summary["projects"][0]
     assert row["project_id"] == "cs-1"
     assert row["project_name"] == "zep-cs"
-    assert row["kind_of_source"] == "jafax"
+    assert row["kind_of_source"] == "codeframe"
     assert row["type_count"] == 2
     assert row["method_count"] == 3
     assert row["field_count"] == 1
