@@ -224,7 +224,7 @@ for f in files[:10]:
     print(f"  {f.id}")
 ```
 
-## 9d. Files most coupled by method calls (JaFax / B2)
+## 9d. Files most coupled by method calls (CodeFrame / B2)
 
 ```python
 # Top 10 file pairs by inter-file method-call count. graph_data.relations
@@ -234,7 +234,7 @@ edges = sorted(
     key=lambda r: -r.strength,
 )
 if not edges:
-    print("No JaFax data ingested.")
+    print("No CodeFrame data ingested.")
 else:
     for r in edges[:10]:
         print(f"  {int(r.strength):>5} calls  {r.source.id} -> {r.target.id}")

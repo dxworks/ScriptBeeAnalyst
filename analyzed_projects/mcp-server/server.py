@@ -410,11 +410,11 @@ async def list_file_metrics(min_loc: float = 0.0, limit: int = 100) -> dict:
 
 @mcp.tool()
 async def get_code_structure_summary() -> dict:
-    """Counts of types/methods/fields/references from the JaFax (B2) layer.
+    """Counts of types/methods/fields/references from the CodeFrame (B2) layer.
 
     Calls `/execute` with `graph_data.code_structure_summary()` against
     `MCPSandboxView`. Returns `{"loaded": False, "source": None,
-    "projects": []}` when no JaFax/Codeframe ingest happened. Use this
+    "projects": []}` when no CodeFrame ingest happened. Use this
     to discover whether structural relations (calls.file-file,
     coupling.file-file, etc.) are available before querying them.
     """

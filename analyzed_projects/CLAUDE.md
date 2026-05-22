@@ -24,7 +24,7 @@ restored). Every tool below is live.
 | `get_overview_table` | Fetch an overview table by name as parsed CSV rows. All 11 overviews live as of Chunk 18 (see "Live overview tables" below). |
 | `get_relation_edges` | Fetch a relation file as edges, sorted by strength. |
 | `list_file_metrics` | Per-file Lizard rollup (sum_nloc, max_ccn, avg_ccn, function_count, longest_function_nloc), sorted by sum_nloc desc. Empty dict when no Lizard CSV was ingested. |
-| `get_code_structure_summary` | Per-project counts from the JaFax / Codeframe (B2) layer (types, methods, fields, refs). `loaded=False` when no code-structure project exists. |
+| `get_code_structure_summary` | Per-project counts from the CodeFrame (B2) layer (types, methods, fields, refs). `loaded=False` when no code-structure project exists. |
 | `get_duplication_summary` | Per-project bucket counts (external / sibling / internal) from the DuDe (B3) layer. `loaded=False` when no DuDe ingest happened. |
 | `get_quality_issues_summary` | Insider (B4) code-smell summary (counts, distinct rules, top rules). |
 

@@ -53,7 +53,7 @@ BUCKET = "serialized-files"
 
 # Mirror of web-ui/src/app/core/models/project.model.ts
 SUFFIX_RULES = [
-    ("-layout.json", "jafax"),
+    ("-codeframe.jsonl", "codeframe"),
     ("-code_smells.json", "quality_issues"),
     ("-external_duplication.csv", "dude_external"),
     ("-internal_duplication.json", "dude_internal"),
@@ -66,7 +66,7 @@ FIXTURE_FILES = [
     "github.json",
     "jira.json",
     "zeppelin-lizard.csv",
-    "zeppelin-layout.json",
+    "zeppelin-codeframe.jsonl",
     "zeppelin-external_duplication.csv",
     "zeppelin-internal_duplication.json",
     "zeppelin-code_smells.json",
