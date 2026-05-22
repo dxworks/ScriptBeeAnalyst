@@ -45,7 +45,9 @@ from src.common.domains.github.models import (
 from src.common.kernel import EntityKind, Graph
 from src.common.people import SourceKind
 from src.enrichment.config import DEFAULT_CONFIG
+from src.common.domains.app_inspector import AppInspectorTransformer
 from src.processor import (
+    _TRANSFORMERS,
     apply_transform_result,
     build_graph_from_bundles,
     get_transformer,
@@ -290,6 +292,13 @@ def test_build_graph_from_bundles_runs_pipeline_with_full_catalog():
     assert metrics_attempted >= 14, (
         f"Expected ≥14 metrics attempted, got {metrics_attempted}"
     )
+
+
+def test_transformers_map_includes_app_inspector():
+    """``_TRANSFORMERS`` dispatch table wires ``SourceKind.APP_INSPECTOR``
+    to :class:`AppInspectorTransformer`, mirroring the quality / lizard
+    entries (Task 7 step 5)."""
+    assert _TRANSFORMERS[SourceKind.APP_INSPECTOR] is AppInspectorTransformer
 
 
 def test_apply_transform_result_dispatches_project_via_isinstance():

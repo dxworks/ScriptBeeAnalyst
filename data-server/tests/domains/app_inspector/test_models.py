@@ -38,6 +38,15 @@ def test_app_inspector_project_rejects_unknown_source_tool():
         )
 
 
+def test_app_inspector_project_transformer_class():
+    from src.common.domains.app_inspector.transformer import AppInspectorTransformer
+
+    p = AppInspectorProject(
+        id=PROJECT_ID, name="z", source=SourceKind.APP_INSPECTOR
+    )
+    assert p.transformer_class() is AppInspectorTransformer
+
+
 def test_app_inspector_project_extra_fields_forbidden():
     with pytest.raises(ValidationError):
         AppInspectorProject(

@@ -63,6 +63,7 @@ if __name__ == "__main__" and __package__ is None:
 
 from supabase import Client, create_client
 
+from src.common.domains.app_inspector import AppInspectorTransformer, build_app_inspector_bundle
 from src.common.domains.code_structure.bridge import build_code_structure_bundle
 from src.common.domains.code_structure.transformer import CodeStructureTransformer
 from src.common.domains.duplication.bridge import build_duplication_bundle
@@ -109,6 +110,7 @@ class DownloadedFiles:
     dude_external_file: Optional[Path] = None
     dude_internal_file: Optional[Path] = None
     quality_issues_file: Optional[Path] = None
+    app_inspector_file: Optional[Path] = None
 
 
 # ---------------------------------------------------------------------------
@@ -126,6 +128,7 @@ _TRANSFORMERS: Dict[SourceKind, type[Transformer]] = {
     SourceKind.DUPLICATION: DuplicationTransformer,
     SourceKind.QUALITY: QualityTransformer,
     SourceKind.LIZARD: LizardMetricsTransformer,
+    SourceKind.APP_INSPECTOR: AppInspectorTransformer,
 }
 
 
@@ -298,6 +301,8 @@ def download_serialized_files_from_supabase(project_id: str) -> DownloadedFiles:
                 downloaded.dude_internal_file = temp_file_path
             elif file_type == "quality_issues":
                 downloaded.quality_issues_file = temp_file_path
+            elif file_type == "app_inspector":
+                downloaded.app_inspector_file = temp_file_path
             file_summaries.append(f"{file_type} ({file_name})")
 
     logger.info("Downloaded: %s", ", ".join(file_summaries))
@@ -461,6 +466,14 @@ def _downloaded_files_to_bundles(
             )
         )
         bundles[SourceKind.QUALITY] = [_capture_meta("quality", bundle)]
+
+    if downloaded.app_inspector_file is not None:
+        bundle = dict(
+            build_app_inspector_bundle(
+                downloaded.app_inspector_file, repo_name, project_name
+            )
+        )
+        bundles[SourceKind.APP_INSPECTOR] = [_capture_meta("app_inspector", bundle)]
 
     # Multi-repo warning: only fire for bundles that had at least one
     # row fall back to the function-level anchor. Bundles where every
