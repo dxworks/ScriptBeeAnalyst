@@ -339,6 +339,35 @@ for entity_id, cells in list(table["rows"].items())[:10]:
     )
 ```
 
+## 9l. Files carrying a given App Inspector concern (B5)
+
+```python
+# graph_data.app_tags is the typed AppTagRegistry. One AppTag entity per
+# (file_path, tag) pair, ingested from a `<repo>-chronos-tags.json` upload.
+# Each entry carries `project_ref`, `file_ref`, `file_path`, `tag` (full
+# dotted taxonomy starting with `appinspector.`, e.g.
+# `appinspector.OS.Network.Connection.Socket`), and `strength: int`.
+#
+# AppTagRegistry indexes (all multi=True):
+#   by_file[file_ref]       -> tags on a given file
+#   by_project[project_ref] -> all tags in a project
+#   by_tag[tag]             -> entities with exactly this tag string
+#   by_tag_root[root]       -> entities whose tag starts with
+#                              `appinspector.<root>.` (e.g. "OS",
+#                              "Cryptography")
+ats = graph_data.app_tags
+if len(ats) == 0:
+    print("No App Inspector data ingested.")
+else:
+    # All files touching the OS / network surface, ranked by strength.
+    net = sorted(
+        ats.by_tag_root["OS"],
+        key=lambda t: -t.strength,
+    )
+    for t in net[:10]:
+        print(f"  {t.strength:>3}  {t.tag:<55}  {t.file_path}")
+```
+
 ## 10. Commits per author (top 10)
 
 ```python

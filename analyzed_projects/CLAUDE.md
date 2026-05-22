@@ -93,6 +93,13 @@ quality      = graph_data.quality_summary()
 
 # `graph_data.duplication_pairs` is an alias for `graph_data.duplications`
 # (legacy compat — both return the same DuplicationPairRegistry).
+
+# `graph_data.app_tags` is the AppTagRegistry — App Inspector concerns
+# ingested from a `<repo>-chronos-tags.json` upload. One AppTag per
+# (file_path, tag) pair, with a `strength: int`. Reverse indexes:
+# `by_file`, `by_project`, `by_tag` (exact match), and `by_tag_root`
+# (first dotted segment after the `appinspector.` prefix, e.g.
+# `by_tag_root["OS"]` or `by_tag_root["Cryptography"]`).
 ```
 
 ## Detailed Documentation
