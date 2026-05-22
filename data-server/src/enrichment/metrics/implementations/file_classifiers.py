@@ -14,18 +14,27 @@ Dimensions:
 * ``"creationYear"`` — year string of the file's first change
 
 Reads from the host: ``files`` (registry), ``changes`` (via
-``by_file`` index), ``commits`` (via ``get``).
+``by_file`` index), ``commits`` (via ``get``). The recent cutoff comes
+from ``graph.recent_cutoff`` when the host carries one, else falls back
+to the latest commit date minus ``cfg.recent_window_days`` — mirrors
+``AuthorClassifierMetric`` so the ``status`` dimension is no longer
+degenerate when no explicit anchor is attached.
 """
 from __future__ import annotations
 
+from datetime import datetime, timedelta
 from typing import TYPE_CHECKING, Any, ClassVar, Iterable, Optional
 
 from src.common.kernel import EntityKind
 from src.enrichment.metrics import METRICS, Metric, MetricInputs, MetricOutputs
+from src.enrichment.recent_window import ensure_aware
 from src.enrichment.tags import Classifier
 
 if TYPE_CHECKING:
     from src.common.kernel import Graph
+
+
+_DEFAULT_RECENT_WINDOW_DAYS = 90
 
 
 @METRICS.register
@@ -50,10 +59,11 @@ class FileClassifierMetric(Metric):
         if not files:
             return
 
-        cutoff = getattr(graph, "recent_cutoff", None)
+        commits_reg = getattr(graph, "commits", None)
+        cutoff = _resolve_recent_cutoff(graph, commits_reg, config)
 
         changes_by_file = _changes_by_file_index(graph)
-        commits_get = _entity_by_id(getattr(graph, "commits", None))
+        commits_get = _entity_by_id(commits_reg)
 
         for file_ in files:
             file_ref = file_.ref()
@@ -173,6 +183,45 @@ def _config_field(config: Any, field: str, default: Any) -> Any:
     if config is None:
         return default
     return getattr(config, field, default)
+
+
+def _resolve_recent_cutoff(
+    graph: Any, commits_reg: Any, config: Any
+) -> Optional[datetime]:
+    """Reproduce the legacy ``recent_cutoff`` semantics.
+
+    Priority order (mirrors :func:`author_classifiers._resolve_recent_cutoff`):
+
+    1. An explicit ``graph.recent_cutoff`` attribute attached by the
+       caller (used by the legacy test stubs and the production
+       processor when it carries a snapshot anchor).
+    2. ``latest_commit_date(commits) - recent_window_days``.
+    3. ``None`` (no commits — caller treats files as active).
+    """
+    explicit = getattr(graph, "recent_cutoff", None)
+    if explicit is not None:
+        return ensure_aware(explicit)
+    if commits_reg is None:
+        return None
+    window_days = _config_field(
+        config, "recent_window_days", _DEFAULT_RECENT_WINDOW_DAYS
+    )
+    latest: Optional[datetime] = None
+    try:
+        for c in commits_reg:
+            d = ensure_aware(
+                getattr(c, "author_date", None)
+                or getattr(c, "committer_date", None)
+            )
+            if d is None:
+                continue
+            if latest is None or d > latest:
+                latest = d
+    except TypeError:
+        return None
+    if latest is None:
+        return None
+    return latest - timedelta(days=window_days)
 
 
 __all__ = ["FileClassifierMetric"]

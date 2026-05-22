@@ -92,3 +92,4 @@ web-ui/src/environments/environment.development.ts
 
 # Analyzed projects - track framework, ignore project data
 !analyzed_projects/CLAUDE.md
+!analyzed_projects/instructions/compass.md

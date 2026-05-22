@@ -14,7 +14,7 @@ from pydantic import BaseModel
 
 from src.common.kernel import Entity, EntityKind, EntityRef, Graph, Registry
 from src.common.kernel.entity import with_ref_resolvers
-from src.common.domains.git.models import GitAccount, GitProject
+from src.common.domains.git.models import Commit, GitAccount, GitProject
 from src.common.domains.git.registries import GitAccountRegistry
 from src.common.people import SourceKind
 
@@ -99,7 +99,6 @@ def test_list_resolver_empty_list_returns_empty():
 
 def test_plural_naming_strips_refs_and_appends_s():
     """`parent_refs` -> `parents`, not `parent` and not `parent_refss`."""
-    from src.common.domains.git.models import Commit
     assert "parents" in Commit.__dict__
     assert "parent" not in Commit.__dict__
     # marker present so collision detection can distinguish ours
@@ -107,7 +106,6 @@ def test_plural_naming_strips_refs_and_appends_s():
 
 
 def test_singular_naming_strips_ref():
-    from src.common.domains.git.models import Commit
     assert "author" in Commit.__dict__
     assert "author_ref" in Commit.model_fields
 
@@ -116,7 +114,6 @@ def test_multi_registry_kind_resolves_via_graph_resolve():
     """``project_ref`` (kind=PROJECT) has 7 candidate registries; the
     resolver must walk them via ``Graph.resolve``, not the single-
     registry shortcut ``EntityRef.resolve``."""
-    from src.common.domains.git.models import Commit
     from datetime import datetime, timezone
     graph, alice, project = _make_graph_with_alice()
     c = Commit(
@@ -152,6 +149,43 @@ def test_collision_raises_typeerror():
     msg = str(excinfo.value)
     assert "author" in msg
     assert "author_ref" in msg
+
+
+def test_property_collision_raises_typeerror():
+    """A ``@property`` named like the auto-generated resolver must also
+    collide — properties are stored in ``cls.__dict__`` just like methods
+    (``Hunk.added_lines`` is the precedent in the codebase)."""
+    with pytest.raises(TypeError) as excinfo:
+        class _Bad(Entity):
+            kind: ClassVar[EntityKind] = EntityKind.GIT_ACCOUNT
+            author_ref: EntityRef = EntityRef(
+                kind=EntityKind.GIT_ACCOUNT, id="x"
+            )
+
+            @property
+            def author(self):  # noqa: D401
+                return "conflict"
+
+    msg = str(excinfo.value)
+    assert "author" in msg
+    assert "author_ref" in msg
+
+
+# ---- pluralization rule guard rail ------------------------------------
+
+
+def test_double_pluralization_raises_typeerror():
+    """A field already ending in ``s`` (e.g. ``processes_refs``) would
+    yield ``processess`` — the generator refuses rather than silently
+    producing a misspelled method."""
+    with pytest.raises(TypeError) as excinfo:
+        class _Bad(Entity):
+            kind: ClassVar[EntityKind] = EntityKind.GIT_ACCOUNT
+            processes_refs: List[EntityRef] = []
+
+    msg = str(excinfo.value)
+    assert "processes_refs" in msg
+    assert "processess" in msg
 
 
 # ---- abstract intermediates -------------------------------------------
@@ -191,7 +225,6 @@ def test_with_ref_resolvers_decorator_on_plain_basemodel():
 
 
 def test_generated_resolver_has_docstring_and_marker():
-    from src.common.domains.git.models import Commit
     method = Commit.__dict__["author"]
     assert method.__doc__ is not None
     assert "author_ref" in method.__doc__
@@ -200,7 +233,6 @@ def test_generated_resolver_has_docstring_and_marker():
 
 def test_generated_resolver_appears_in_dir():
     """`dir()` is what IDE / `inspect` / the agent looks at."""
-    from src.common.domains.git.models import Commit
     names = dir(Commit)
     assert "author" in names
     assert "parents" in names

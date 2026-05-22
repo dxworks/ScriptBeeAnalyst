@@ -277,10 +277,19 @@ class CodeReference(Entity):
                                      didn't have a code-field Entity; v2
                                      does, so field reads/writes resolve
                                      to a typed :class:`CodeField` ref.
-    * ``location``                 — NEW (plan §4); a frozen value object
-                                     carrying ``file_ref`` + ``line``.
-                                     Optional because external / synthetic
-                                     references may not carry a location.
+    * ``location_file_ref`` /
+      ``location_line``            — NEW (plan §4); flat optional fields
+                                     carrying the file ref and the line
+                                     number. Optional because external
+                                     / synthetic references may not
+                                     carry a location. Originally
+                                     drafted as a frozen ``CodeLocation``
+                                     value object (plan §4) but
+                                     flattened to keep the auto-ref-
+                                     resolver convention uniform — the
+                                     generated ``.location_file(graph)``
+                                     covers the same hop without an
+                                     extra wrapper.
     * ``weight``                   — preserved (count of occurrences).
 
     Resolver methods (auto-generated, see ``kernel/entity.py``):
