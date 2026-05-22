@@ -41,6 +41,7 @@ AND as methods on this view, so legacy snippets that call e.g.
 """
 from __future__ import annotations
 
+import re
 from collections import Counter
 from typing import TYPE_CHECKING, Iterator, Literal, Optional
 
@@ -73,10 +74,16 @@ class MCPSandboxView:
         exec_globals = {"graph_data": view, ...}
     """
 
-    __slots__ = ("_graph",)
+    __slots__ = ("_graph", "_commit_issue_link_cache")
 
     def __init__(self, graph: "Graph") -> None:
         self._graph = graph
+        # Lazily populated by :meth:`_commit_issue_links` on first use.
+        # Stored as a single tuple so the cache is set atomically and
+        # the underscore name keeps it out of the agent-facing surface.
+        self._commit_issue_link_cache: Optional[
+            tuple[dict[str, list["Issue"]], dict[str, list["Commit"]]]
+        ] = None
 
     # ------------------------------------------------------------------
     # Direct registry hand-offs (the four "main" entity surfaces)
@@ -162,6 +169,69 @@ class MCPSandboxView:
         """Include the wrapped graph's attributes for tab-completion."""
         own = list(super().__dir__())
         return sorted(set(own) | set(dir(self._graph)))
+
+    # ------------------------------------------------------------------
+    # Internal: cached commit↔issue regex join
+    #
+    # ``commit_issues`` / ``issue_commits`` (see ``src.sandbox.helpers``)
+    # used to rebuild the full issue-key dict + alternation regex on
+    # every call. That made the natural agent pattern (call helper in a
+    # loop over commits) O(N·M) and easily blew past the 60 s MCP
+    # timeout on real-size projects (Zeppelin: 5.6 k commits × 6.3 k
+    # issues). The maps below are built in one pass on first access and
+    # reused for the lifetime of the view (which is reconstructed per
+    # ``/execute`` request — see ``src/server.py`` — so there's no
+    # cross-request staleness window).
+    # ------------------------------------------------------------------
+    def _commit_issue_links(
+        self,
+    ) -> tuple[dict[str, list["Issue"]], dict[str, list["Commit"]]]:
+        """Lazily compute ``(commit_id -> issues, issue_key_upper -> commits)``.
+
+        Mirrors the ``\\b<KEY>\\b`` case-insensitive match semantics used
+        by :class:`~src.enrichment.relations.implementations.issue_file.IssueFileBuilder`
+        and the legacy free helpers. Empty maps when no issues are
+        loaded; built entries are entity lists (not ids).
+        """
+        cached = self._commit_issue_link_cache
+        if cached is not None:
+            return cached
+
+        issue_by_key: dict[str, "Issue"] = {}
+        for issue in self._graph.issues.all():
+            key = getattr(issue, "key", None)
+            if key:
+                issue_by_key[key.upper()] = issue
+
+        commit_to_issues: dict[str, list["Issue"]] = {}
+        key_to_commits: dict[str, list["Commit"]] = {}
+
+        if issue_by_key:
+            pattern = re.compile(
+                r"\b(" + "|".join(re.escape(k) for k in issue_by_key) + r")\b",
+                re.IGNORECASE,
+            )
+            for commit in self._graph.commits.all():
+                msg = getattr(commit, "message", "") or ""
+                if not msg:
+                    continue
+                seen: set[str] = set()
+                linked: list["Issue"] = []
+                for match in pattern.findall(msg):
+                    ku = match.upper()
+                    if ku in seen:
+                        continue
+                    seen.add(ku)
+                    iss = issue_by_key.get(ku)
+                    if iss is None:
+                        continue
+                    linked.append(iss)
+                    key_to_commits.setdefault(ku, []).append(commit)
+                if linked:
+                    commit_to_issues[commit.id] = linked
+
+        self._commit_issue_link_cache = (commit_to_issues, key_to_commits)
+        return self._commit_issue_link_cache
 
     # ------------------------------------------------------------------
     # Tag / classifier accessors (mapping table rows 7, 8, 10)

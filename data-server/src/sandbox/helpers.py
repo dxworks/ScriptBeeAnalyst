@@ -77,10 +77,19 @@ def commit_issues(commit: "Commit", graph_data: GraphLike) -> list["Issue"]:
     semantics — case-insensitive ``\\b<key>\\b`` match against every
     known issue key in the loaded graph.
 
+    Fast path: when ``graph_data`` is an :class:`MCPSandboxView`, the
+    join is computed once across the whole graph and cached on the
+    view, so a per-commit loop is O(N) total instead of O(N·M). Bare
+    :class:`Graph` callers keep the unbatched fallback below.
+
     Returns an empty list when no jira side is loaded or no key
-    matches. Order is the iteration order over the issue registry
-    (insertion order); duplicates are collapsed.
+    matches. Duplicate keys in one message are collapsed.
     """
+    cached = getattr(graph_data, "_commit_issue_links", None)
+    if callable(cached):
+        commit_to_issues, _ = cached()
+        return list(commit_to_issues.get(commit.id, ()))
+
     issue_registry = getattr(graph_data, "issues", None)
     if issue_registry is None:
         return []
@@ -179,16 +188,27 @@ def issue_commits(issue: "Issue", graph_data: GraphLike) -> list["Commit"]:
     :class:`~src.enrichment.relations.implementations.issue_file.IssueFileBuilder`
     semantics.
 
+    Fast path: when ``graph_data`` is an :class:`MCPSandboxView`, the
+    inverse map is taken from the shared cache so a per-issue loop is
+    O(M) total instead of O(N·M). Bare :class:`Graph` callers keep the
+    unbatched fallback below.
+
     Returns an empty list when ``issue.key`` is missing or no commits
-    are loaded. Order is the iteration order over the commit registry.
+    are loaded.
     """
+    key = getattr(issue, "key", None)
+    if not key:
+        return []
+
+    cached = getattr(graph_data, "_commit_issue_links", None)
+    if callable(cached):
+        _, key_to_commits = cached()
+        return list(key_to_commits.get(key.upper(), ()))
+
     commits_registry = getattr(graph_data, "commits", None)
     if commits_registry is None:
         return []
 
-    key = getattr(issue, "key", None)
-    if not key:
-        return []
     escaped = re.escape(key)
     pattern = re.compile(rf"\b{escaped}\b", re.IGNORECASE)
 
