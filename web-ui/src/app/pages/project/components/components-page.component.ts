@@ -1,6 +1,7 @@
-import { Component, OnInit, computed, signal } from '@angular/core';
+import { Component, DestroyRef, OnInit, computed, inject, signal } from '@angular/core';
 import { DecimalPipe } from '@angular/common';
 import { ActivatedRoute, Router } from '@angular/router';
+import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
 import {
   ComponentFileDto,
   ComponentSummaryDto,
@@ -8,13 +9,18 @@ import {
   ProjectNotLoadedError,
 } from '../../../core/services/data-server.service';
 import { CurrentProjectService } from '../../../core/services/current-project.service';
+import {
+  ComponentsTreemapComponent,
+  TreemapContextMenuEvent,
+  TreemapFileClickEvent,
+} from './treemap/components-treemap.component';
 
 type PageStatus = 'loading' | 'ready' | 'not-loaded' | 'error';
 
 @Component({
   selector: 'app-components-page',
   standalone: true,
-  imports: [DecimalPipe],
+  imports: [DecimalPipe, ComponentsTreemapComponent],
   templateUrl: './components-page.component.html',
   styleUrl: './components-page.component.scss',
 })
@@ -41,6 +47,8 @@ export class ComponentsPageComponent implements OnInit {
     [...this.components()].sort((a, b) => b.total_loc - a.total_loc),
   );
 
+  private readonly destroyRef = inject(DestroyRef);
+
   constructor(
     private route: ActivatedRoute,
     private router: Router,
@@ -51,14 +59,23 @@ export class ComponentsPageComponent implements OnInit {
   }
 
   ngOnInit(): void {
-    const id = this.route.parent?.snapshot.paramMap.get('id') ?? null;
-    this.projectId.set(id);
-    if (id) {
-      this.loadData(id);
-    } else {
-      this.status.set('error');
-      this.errorMessage.set('No project id in the route.');
-    }
+    // F1+F2 review carry-over: subscribe to paramMap so the page reloads when
+    // the route id changes (e.g. user navigates between two projects without
+    // unmounting). Snapshot-only would miss those transitions.
+    const paramMap$ =
+      this.route.parent?.paramMap ?? this.route.paramMap;
+    paramMap$.pipe(takeUntilDestroyed(this.destroyRef)).subscribe((params) => {
+      const id = params.get('id');
+      const previous = this.projectId();
+      if (id === previous) return;
+      this.projectId.set(id);
+      if (id) {
+        this.loadData(id);
+      } else {
+        this.status.set('error');
+        this.errorMessage.set('No project id in the route.');
+      }
+    });
   }
 
   async loadData(projectId: string): Promise<void> {
@@ -87,6 +104,18 @@ export class ComponentsPageComponent implements OnInit {
     // F4: drives treemap focus + context-menu defaults. Keep stateful so the
     // treemap (F3) can read it once mounted.
     this.selectedComponentName.set(name);
+  }
+
+  // F3 → F4 hand-off: the treemap emits a click + a context-menu event with
+  // anchor info. F3 only stubs the handlers; F4 will inflate them into the
+  // inspector panel + the right-click move-to-component popover.
+  onFileClick(_event: TreemapFileClickEvent): void {
+    // Intentional stub — inspector panel arrives in a later iteration.
+  }
+
+  onContextMenu(_event: TreemapContextMenuEvent): void {
+    // Intentional stub — F4 mounts a popover at (event.x, event.y) with the
+    // "Move to component" + "Move to new component" actions.
   }
 
   // Placeholder for F4 — wired up here so the pill button has somewhere to go.

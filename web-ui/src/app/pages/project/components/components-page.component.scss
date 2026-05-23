@@ -145,12 +145,14 @@
   cursor: pointer;
   transition: background-color var(--transition-fast), border-color var(--transition-fast);
 
+  // F1+F2 review carry-over: drop raw rgba(99,102,241,…) literals in favour
+  // of the existing --color-accent-rgb token + --color-surface-hover.
   &:hover {
-    background-color: var(--color-surface-hover, rgba(99, 102, 241, 0.05));
+    background-color: var(--color-surface-hover);
   }
 
   &.selected {
-    background-color: rgba(99, 102, 241, 0.08);
+    background-color: rgba(var(--color-accent-rgb), 0.08);
     border-color: var(--color-accent);
   }
 }
@@ -181,43 +183,13 @@
   color: var(--color-text-secondary);
 }
 
-// ── Main area / treemap placeholder ───────────────────────────────────────
+// ── Main area (treemap host) ──────────────────────────────────────────────
 .components-main {
   display: flex;
   flex-direction: column;
   padding: var(--spacing-xl);
   overflow: hidden;
-}
-
-.treemap-placeholder {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  flex: 1;
-  border: 1px dashed var(--color-border);
-  border-radius: var(--radius-lg, 8px);
-  background: repeating-linear-gradient(
-    45deg,
-    transparent,
-    transparent 12px,
-    rgba(99, 102, 241, 0.04) 12px,
-    rgba(99, 102, 241, 0.04) 24px
-  );
-  text-align: center;
-  padding: var(--spacing-2xl);
-
-  h2 {
-    margin: 0 0 var(--spacing-sm);
-    font-size: 1rem;
-    color: var(--color-text-secondary);
-    font-weight: 500;
-  }
-
-  p {
-    margin: 0;
-    font-size: 0.85rem;
-  }
+  min-height: 0;
 }
 
 @media (max-width: 768px) {

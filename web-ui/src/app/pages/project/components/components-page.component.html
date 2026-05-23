@@ -103,17 +103,18 @@
           }
         </aside>
 
-        <!-- Main: treemap area. F3 will mount the real treemap component
-             here, fed by `files()` + `components()` + (later) a colour map
-             from F5. Until then we render an inert placeholder. -->
+        <!-- Main: the treemap. F5 will swap the {} colour map for a real
+             palette service; until then the treemap uses a neutral fallback
+             for each component. -->
         <section class="components-main">
-          <div class="treemap-placeholder">
-            <h2>Treemap renders here (F3)</h2>
-            <p class="text-secondary">
-              Loaded {{ files().length }} file{{ files().length === 1 ? '' : 's' }}
-              across {{ sortedComponents().length }} component{{ sortedComponents().length === 1 ? '' : 's' }}.
-            </p>
-          </div>
+          <app-components-treemap
+            [files]="files()"
+            [components]="components()"
+            [componentColors]="{}"
+            [selectedComponentName]="selectedComponentName()"
+            (fileClick)="onFileClick($event)"
+            (contextMenu)="onContextMenu($event)"
+          />
         </section>
       </div>
     }
