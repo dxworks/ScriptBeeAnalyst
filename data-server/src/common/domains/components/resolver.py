@@ -19,7 +19,7 @@ from __future__ import annotations
 
 import json
 import os
-from typing import Optional
+from typing import Any, Mapping, Optional
 
 from pydantic import BaseModel, Field
 
@@ -49,25 +49,19 @@ class ComponentMapping(BaseModel):
         return not self.components
 
 
-def load_component_mapping(path: Optional[str]) -> ComponentMapping:
-    """Read mapping file or return an empty mapping. Never raises.
+def parse_component_mapping(raw: Optional[Mapping[str, Any]]) -> ComponentMapping:
+    """Validate a pre-loaded mapping dict. Never raises.
 
-    Faithful port of the legacy ``load_component_mapping`` — silent
-    fallback on missing / malformed files keeps the metric resilient in
-    real-world deployments.
+    The lenient validation rules (drop non-dict specs, require a string
+    ``path_prefix``, coerce non-list ``extra_paths`` to empty) match the
+    legacy path-based loader so callers feeding the dict path produce
+    identical mappings to callers feeding a file path.
     """
-    if not path or not os.path.isfile(path):
-        return ComponentMapping()
-    try:
-        with open(path, "r", encoding="utf-8") as fh:
-            raw = json.load(fh)
-    except (OSError, json.JSONDecodeError):
-        return ComponentMapping()
-    if not isinstance(raw, dict):
+    if not isinstance(raw, Mapping):
         return ComponentMapping()
     parsed: dict[str, ComponentSpec] = {}
     for name, spec in raw.items():
-        if not isinstance(spec, dict):
+        if not isinstance(spec, Mapping):
             continue
         prefix = spec.get("path_prefix")
         if not isinstance(prefix, str) or not prefix:
@@ -80,6 +74,27 @@ def load_component_mapping(path: Optional[str]) -> ComponentMapping:
             extra_paths=[p for p in extra if isinstance(p, str)],
         )
     return ComponentMapping(components=parsed)
+
+
+def load_component_mapping(path: Optional[str]) -> ComponentMapping:
+    """Read mapping file or return an empty mapping. Never raises.
+
+    Faithful port of the legacy ``load_component_mapping`` — silent
+    fallback on missing / malformed files keeps the metric resilient in
+    real-world deployments. Validation is delegated to
+    :func:`parse_component_mapping` so the file path and the in-memory
+    dict (B2 per-project mapping) share one code path.
+    """
+    if not path or not os.path.isfile(path):
+        return ComponentMapping()
+    try:
+        with open(path, "r", encoding="utf-8") as fh:
+            raw = json.load(fh)
+    except (OSError, json.JSONDecodeError):
+        return ComponentMapping()
+    if not isinstance(raw, dict):
+        return ComponentMapping()
+    return parse_component_mapping(raw)
 
 
 def top_folder_of(file_id: Optional[str]) -> Optional[str]:
@@ -146,5 +161,6 @@ __all__ = [
     "ComponentSpec",
     "OTHER_COMPONENT",
     "load_component_mapping",
+    "parse_component_mapping",
     "top_folder_of",
 ]

@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
-from typing import Optional, Pattern
+from typing import Any, Optional, Pattern
 
 
 # ── Regexes (commit message classification) ─────────────────────────────────────
@@ -153,7 +153,12 @@ class EnrichmentConfig:
     test_orphan_min_commits: int = 3
 
     # Phase 3 components — optional mapping JSON path; missing file = heuristic.
+    # ``components_mapping_data`` wins over ``components_mapping_path`` at resolve
+    # time because the dict is per-project (loaded from Supabase by the
+    # processor) while the path is an operator-level fallback used in tests /
+    # single-project dev mode.
     components_mapping_path: Optional[str] = None
+    components_mapping_data: Optional[dict[str, Any]] = None
 
     # ── A2.1 file-level traits ─────────────────────────────────────────────────
     # Knowledge family

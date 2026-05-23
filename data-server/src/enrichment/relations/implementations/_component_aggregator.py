@@ -45,6 +45,7 @@ from typing import TYPE_CHECKING, Any, Iterable
 from src.common.domains.components.resolver import (
     ComponentResolver,
     load_component_mapping,
+    parse_component_mapping,
 )
 from src.common.kernel import EntityKind, EntityRef
 from src.enrichment.relations import Relation, WindowKind
@@ -55,14 +56,19 @@ if TYPE_CHECKING:
 
 def build_resolver(graph: "Graph") -> ComponentResolver:
     """Construct the :class:`ComponentResolver` the same way
-    :class:`ComponentResolverMetric` does — read the optional mapping
-    path from config and fall back to the heuristic mode silently when
-    the file is missing or malformed.
+    :class:`ComponentResolverMetric` does — prefer the per-project
+    ``components_mapping_data`` dict, fall back to
+    ``components_mapping_path`` when no per-project mapping is set, and
+    fall back to heuristic mode silently when neither resolves.
     """
     cfg = getattr(graph, "config", None)
-    path = getattr(cfg, "components_mapping_path", None) if cfg is not None else None
-    mapping = load_component_mapping(path)
-    return ComponentResolver(mapping)
+    if cfg is None:
+        return ComponentResolver(load_component_mapping(None))
+    data = getattr(cfg, "components_mapping_data", None)
+    if data:
+        return ComponentResolver(parse_component_mapping(data))
+    path = getattr(cfg, "components_mapping_path", None)
+    return ComponentResolver(load_component_mapping(path))
 
 
 def aggregate_file_relations_to_components(

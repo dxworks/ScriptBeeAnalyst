@@ -39,6 +39,7 @@ from src.common.domains.components.resolver import (
     ComponentMapping,
     ComponentResolver,
     load_component_mapping,
+    parse_component_mapping,
 )
 from src.common.kernel import EntityKind, EntityRef
 from src.enrichment.metrics import METRICS, Metric, MetricInputs, MetricOutputs
@@ -57,15 +58,17 @@ class ComponentResolverMetric(Metric):
     outputs: ClassVar[MetricOutputs] = MetricOutputs(
         emits_relations=["component_membership"]
     )
-    config_fields: ClassVar[list[str]] = ["components_mapping_path"]
+    config_fields: ClassVar[list[str]] = [
+        "components_mapping_data",
+        "components_mapping_path",
+    ]
 
     def compute(self, graph: "Graph", config: Any) -> Iterable[Relation]:
         files = _safe_iter(getattr(graph, "files", None))
         if not files:
             return
 
-        mapping_path = _config_field(config, "components_mapping_path", None)
-        mapping = load_component_mapping(mapping_path)
+        mapping = _mapping_from_config(config)
         resolver = ComponentResolver(mapping)
 
         for file_ in files:
@@ -104,6 +107,20 @@ def _config_field(config: Any, field: str, default: Any) -> Any:
     if config is None:
         return default
     return getattr(config, field, default)
+
+
+def _mapping_from_config(config: Any) -> ComponentMapping:
+    """Resolve the component mapping from a config object.
+
+    Per-project ``components_mapping_data`` wins over the operator-level
+    ``components_mapping_path`` fallback — the path stays for dev/test
+    when no Supabase mapping has been written yet.
+    """
+    data = _config_field(config, "components_mapping_data", None)
+    if data:
+        return parse_component_mapping(data)
+    path = _config_field(config, "components_mapping_path", None)
+    return load_component_mapping(path)
 
 
 # ----------------------------------------------------------------------

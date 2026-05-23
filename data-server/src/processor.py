@@ -53,7 +53,7 @@ from __future__ import annotations
 import argparse
 import sys
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Dict, List, Mapping, Optional, Tuple
 
@@ -84,6 +84,7 @@ from src.common.people import SourceKind
 from src.common.pickle_store import PickleStore
 from src.config import RECURSION_LIMIT, SUPABASE_SERVICE_KEY, SUPABASE_URL
 from src.enrichment.config import DEFAULT_CONFIG, EnrichmentConfig
+from src.supabase_client import get_service_client
 from src.enrichment.metrics.implementations.component_resolver import (
     build_components_from_relations,
 )
@@ -329,6 +330,36 @@ def update_project_status(project_id: str, status: str) -> None:
         logger.warning(f"Failed to update project status: {exc}")
 
 
+def fetch_project_component_mapping(project_id: str) -> Optional[Dict[str, Any]]:
+    """Return the per-project ``component_mapping`` JSONB blob or ``None``.
+
+    Reads ``projects.component_mapping`` (added by the B2 Supabase
+    migration). Returns ``None`` when the row is absent, the column is
+    null, or Supabase is unreachable — the caller falls back to the
+    operator-level ``components_mapping_path`` knob (dev/test fallback).
+    """
+    try:
+        client = get_service_client()
+        response = (
+            client.table("projects")
+            .select("component_mapping")
+            .eq("id", project_id)
+            .limit(1)
+            .execute()
+        )
+    except Exception as exc:  # noqa: BLE001 — best-effort, fall back on any error
+        logger.warning(
+            "Failed to fetch component_mapping for project %s: %s", project_id, exc
+        )
+        return None
+    if not response.data:
+        return None
+    mapping = response.data[0].get("component_mapping")
+    if isinstance(mapping, dict):
+        return mapping
+    return None
+
+
 def get_next_project_to_process() -> Optional[Dict]:
     """Return the oldest ``status='processing'`` project, or None."""
     supabase: Client = create_client(SUPABASE_URL, SUPABASE_SERVICE_KEY)
@@ -528,8 +559,19 @@ def build_graph(
     """
     downloaded = download_serialized_files_from_supabase(project_id)
     bundles = _downloaded_files_to_bundles(downloaded, project_name=project_name)
+    # Per-project mapping wins over EnrichmentConfig.components_mapping_path.
+    # Cloning preserves the caller's config (e.g. test fixtures); we only
+    # inject the data when Supabase has something to inject.
+    mapping_data = fetch_project_component_mapping(project_id)
+    if mapping_data is not None:
+        effective_config = replace(
+            config if config is not None else DEFAULT_CONFIG,
+            components_mapping_data=mapping_data,
+        )
+    else:
+        effective_config = config
     graph, pipeline_result = build_graph_from_bundles(
-        project_id, bundles, config=config
+        project_id, bundles, config=effective_config
     )
     save_graph_to_disk(graph)
     return graph, pipeline_result
@@ -608,6 +650,7 @@ __all__ = [
     "build_graph",
     "build_graph_from_bundles",
     "download_serialized_files_from_supabase",
+    "fetch_project_component_mapping",
     "get_transformer",
     "process_project",
     "run_loop",
