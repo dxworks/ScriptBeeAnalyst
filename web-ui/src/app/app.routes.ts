@@ -58,6 +58,13 @@ export const routes: Routes = [
                     m => m.AuthorMatchingComponent,
                   ),
               },
+              {
+                path: 'exclusion-rules',
+                loadComponent: () =>
+                  import('./pages/project/setup/exclusion-rules/exclusion-rules.component').then(
+                    m => m.ExclusionRulesComponent,
+                  ),
+              },
             ],
           },
           {

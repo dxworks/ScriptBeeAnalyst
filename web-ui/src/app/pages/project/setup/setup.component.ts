@@ -19,5 +19,6 @@ export class SetupComponent {
   // child route under `/project/:id/setup/` in app.routes.ts.
   readonly tabs: SetupTab[] = [
     { id: 'author-matching', label: 'Author Matching', path: 'author-matching' },
+    { id: 'exclusion-rules', label: 'Exclusion Rules', path: 'exclusion-rules' },
   ];
 }
