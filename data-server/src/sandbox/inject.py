@@ -273,7 +273,7 @@ class MCPSandboxView:
             return cached
 
         issue_by_key: dict[str, "Issue"] = {}
-        for issue in self._graph.issues.all():
+        for issue in self.issues.all():
             key = getattr(issue, "key", None)
             if key:
                 issue_by_key[key.upper()] = issue
@@ -286,7 +286,7 @@ class MCPSandboxView:
                 r"\b(" + "|".join(re.escape(k) for k in issue_by_key) + r")\b",
                 re.IGNORECASE,
             )
-            for commit in self._graph.commits.all():
+            for commit in self.commits.all():
                 msg = getattr(commit, "message", "") or ""
                 if not msg:
                     continue
@@ -476,6 +476,13 @@ class MCPSandboxView:
         except NotImplementedError:
             return None
 
+        # Subclasses (FilteredSandboxView) can drop rows whose entity_id
+        # is excluded. ``_keep_overview_row`` is a no-op on the base view.
+        kept_rows = [
+            row for row in table.rows
+            if self._keep_overview_row(table.entity_kind, row.entity_id)
+        ]
+
         return {
             "name": table.name,
             "columns": list(table.columns),
@@ -483,9 +490,17 @@ class MCPSandboxView:
                 row.entity_id: {
                     col: cell.model_dump() for col, cell in row.cells.items()
                 }
-                for row in table.rows
+                for row in kept_rows
             },
         }
+
+    def _keep_overview_row(self, entity_kind: str, entity_id: str) -> bool:
+        """Hook for filter-rules: return ``False`` to drop a row.
+
+        Base view keeps every row. :class:`FilteredSandboxView` overrides
+        this to honour the project's excluded-id sets.
+        """
+        return True
 
     # ------------------------------------------------------------------
     # Catalog helpers (mapping table rows 12, 13)
@@ -668,14 +683,14 @@ class MCPSandboxView:
         when exactly one is loaded; ``None`` for the multi-project
         case (caller inspects ``projects[*].kind_of_source``).
         """
-        projects = self._graph.code_structure_projects.all()
+        projects = self.code_structure_projects.all()
         if not projects:
             return {"loaded": False, "source": None, "projects": []}
 
-        types = self._graph.code_types
-        methods = self._graph.code_methods
-        fields = self._graph.code_fields
-        refs = self._graph.code_refs
+        types = self.code_types
+        methods = self.code_methods
+        fields = self.code_fields
+        refs = self.code_refs
 
         rows: list[dict[str, object]] = []
         for p in projects:
@@ -730,11 +745,11 @@ class MCPSandboxView:
         """
         from src.common.domains.duplication.models import DuplicationKind
 
-        projects = self._graph.duplication_projects.all()
+        projects = self.duplication_projects.all()
         if not projects:
             return {"loaded": False, "source": None, "projects": []}
 
-        pairs_reg = self._graph.duplications
+        pairs_reg = self.duplications
         rows: list[dict[str, object]] = []
         for p in projects:
             p_ref = p.ref()
@@ -900,11 +915,11 @@ class MCPSandboxView:
     # ------------------------------------------------------------------
     def quality_summary(self) -> dict[str, object]:
         """Per-project counts from the quality (Insider/Sonar) layer."""
-        projects = self._graph.quality_projects.all()
+        projects = self.quality_projects.all()
         if not projects:
             return {"loaded": False, "source": None, "projects": []}
 
-        issues_reg = self._graph.quality_issues
+        issues_reg = self.quality_issues
         rows: list[dict[str, object]] = []
         for p in projects:
             p_ref = p.ref()
@@ -931,15 +946,15 @@ class MCPSandboxView:
 
     def github_summary(self) -> dict[str, object]:
         """Per-project counts of GitHub PRs, reviews, comments, commits."""
-        projects = self._graph.github_projects.all()
+        projects = self.github_projects.all()
         if not projects:
             return {"loaded": False, "source": None, "projects": []}
 
-        prs_reg = self._graph.pull_requests
-        reviews_reg = self._graph.reviews
-        rcs_reg = self._graph.review_comments
-        commits_reg = self._graph.github_commits
-        users_reg = self._graph.github_users
+        prs_reg = self.pull_requests
+        reviews_reg = self.reviews
+        rcs_reg = self.review_comments
+        commits_reg = self.github_commits
+        users_reg = self.github_users
 
         rows: list[dict[str, object]] = []
         for p in projects:
@@ -979,14 +994,14 @@ class MCPSandboxView:
 
     def jira_summary(self) -> dict[str, object]:
         """Per-project counts of JIRA issues, users, statuses, types."""
-        projects = self._graph.jira_projects.all()
+        projects = self.jira_projects.all()
         if not projects:
             return {"loaded": False, "source": None, "projects": []}
 
-        issues_reg = self._graph.issues
-        users_reg = self._graph.jira_users
-        statuses_reg = self._graph.issue_statuses
-        types_reg = self._graph.issue_types
+        issues_reg = self.issues
+        users_reg = self.jira_users
+        statuses_reg = self.issue_statuses
+        types_reg = self.issue_types
 
         rows: list[dict[str, object]] = []
         for p in projects:
@@ -1019,14 +1034,14 @@ class MCPSandboxView:
 
     def git_summary(self) -> dict[str, object]:
         """Per-project counts of git commits, files, changes, accounts."""
-        projects = self._graph.git_projects.all()
+        projects = self.git_projects.all()
         if not projects:
             return {"loaded": False, "source": None, "projects": []}
 
-        commits_reg = self._graph.commits
-        files_reg = self._graph.files
-        accounts_reg = self._graph.git_accounts
-        changes_reg = self._graph.changes
+        commits_reg = self.commits
+        files_reg = self.files
+        accounts_reg = self.git_accounts
+        changes_reg = self.changes
 
         rows: list[dict[str, object]] = []
         for p in projects:

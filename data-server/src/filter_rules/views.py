@@ -522,6 +522,18 @@ class FilteredSandboxView(MCPSandboxView):
                 return FilteredRegistry(attr, excluded)
         return attr
 
+    # ------------------------------------------------------------------
+    # Overview-row filtering hook (called by MCPSandboxView.overview_as_dict).
+    # ------------------------------------------------------------------
+    def _keep_overview_row(self, entity_kind: str, entity_id: str) -> bool:
+        kind = _OVERVIEW_KIND_TO_ENTITY_KIND.get(entity_kind)
+        if kind is None:
+            return True
+        excluded = self._excluded.get(kind)
+        if not excluded:
+            return True
+        return entity_id not in excluded
+
     def __repr__(self) -> str:
         return (
             f"FilteredSandboxView(project_id={self._graph.project_id!r}, "
@@ -576,8 +588,18 @@ class _FilteredFileMetricRegistry:
     def __len__(self) -> int:
         return sum(1 for _ in self.__iter__())
 
-    def __contains__(self, id: object) -> bool:
-        fm = self._registry.get(id) if hasattr(self._registry, "get") else None
+    def __contains__(self, key: object) -> bool:
+        """Membership test by composite FileMetric id (matches ``Registry`` contract).
+
+        Returns ``False`` for ids whose file is excluded. Callers asking
+        "does the registry have a non-excluded entry for this file ref?"
+        should use ``self.by_file[ref]`` instead — passing a file ref or
+        file id here will always be ``False`` because the underlying
+        registry keys on the composite ``{file_path}#{metric_name}`` id.
+        """
+        if not isinstance(key, str):
+            return False
+        fm = self._registry.get(key)
         return fm is not None and self._keep(fm)
 
     def __getattr__(self, name: str) -> Any:
@@ -662,6 +684,19 @@ _EXTRA_REGISTRY_KINDS: Dict[str, EntityKind] = {
     "code_refs": EntityKind.CODE_REF,
     "duplications": EntityKind.DUPLICATION_PAIR,
     "quality_issues": EntityKind.QUALITY_ISSUE,
+}
+
+
+# OverviewTable.entity_kind is a legacy DX label ("file" / "component" /
+# "author" / "issue" / "pr") — not the EntityKind enum. Map the ones that
+# can carry a v1 rule. "author" is unmapped: unified-user rules aren't a
+# v1 target (see filter_files.md §weird-interactions).
+_OVERVIEW_KIND_TO_ENTITY_KIND: Dict[str, EntityKind] = {
+    "file": EntityKind.FILE,
+    "component": EntityKind.COMPONENT,
+    "issue": EntityKind.ISSUE,
+    "pr": EntityKind.PULL_REQUEST,
+    "commit": EntityKind.COMMIT,
 }
 
 
