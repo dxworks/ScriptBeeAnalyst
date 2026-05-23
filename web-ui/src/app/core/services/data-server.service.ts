@@ -70,6 +70,54 @@ interface CurrentProjectResponseRaw {
   };
 }
 
+// ── Filter rules DTOs ───────────────────────────────────────────────────────
+// Mirror the Pydantic shapes in data-server/src/filter_rules/models.py. The
+// DSL is intentionally permissive on the wire: either a leaf {field, op,
+// value} predicate or an { all_of: [...] } wrapper at depth 1.
+
+export type FilterRuleOp =
+  | 'lt'
+  | 'le'
+  | 'gt'
+  | 'ge'
+  | 'eq'
+  | 'ne'
+  | 'in'
+  | 'not_in'
+  | 'contains'
+  | 'regex';
+
+export interface FilterRulePredicate {
+  field: string;
+  op: FilterRuleOp;
+  value: string | number | boolean | (string | number | boolean)[] | null;
+}
+
+export interface FilterRuleAllOf {
+  all_of: FilterRulePredicate[];
+}
+
+export interface FilterRuleDSL {
+  entity_kind: string;
+  predicate: FilterRulePredicate | FilterRuleAllOf;
+}
+
+export interface FilterRuleDto {
+  id: string;
+  project_id: string;
+  user_id: string | null;
+  entity_kind: string;
+  name: string;
+  nl_description: string;
+  dsl: FilterRuleDSL;
+  created_at: string | null;
+}
+
+export interface FilterRulesListResponse {
+  project_id: string;
+  rules: FilterRuleDto[];
+}
+
 // ── Components page DTOs ────────────────────────────────────────────────────
 // Mirror the contract locked by data-server B3 (src/server.py around line 1216).
 // owner/status are intentionally absent — the data-server doesn't return them
@@ -595,6 +643,53 @@ export class DataServerService {
     } catch (err) {
       console.error('Failed to save graph state:', err);
       return null;
+    }
+  }
+
+  // ── Filter Rules Methods ────────────────────────────────────────────────
+
+  /**
+   * List active filter rules for a project from the data-server's in-memory
+   * cache. The data-server also persists to Supabase; the UI uses Supabase
+   * realtime for live updates and this list call only as a fallback bootstrap.
+   */
+  async listFilterRules(projectId: string): Promise<FilterRuleDto[]> {
+    try {
+      const response = await firstValueFrom(
+        this.http.get<FilterRulesListResponse>(
+          `${this.baseUrl}/projects/${projectId}/rules`
+        )
+      );
+      return response?.rules ?? [];
+    } catch (err) {
+      console.error('Failed to list filter rules:', err);
+      return [];
+    }
+  }
+
+  /**
+   * Delete a filter rule via the data-server endpoint. The endpoint cascades
+   * the delete to Supabase and evicts the in-memory cache in one shot — UI
+   * must not delete directly through Supabase (see filter_files.md Flow D).
+   */
+  async deleteFilterRule(projectId: string, ruleId: string): Promise<boolean> {
+    const session = this.authService.session();
+    const headers: Record<string, string> = {};
+    if (session?.access_token) {
+      headers['Authorization'] = `Bearer ${session.access_token}`;
+    }
+
+    try {
+      await firstValueFrom(
+        this.http.delete(
+          `${this.baseUrl}/projects/${projectId}/rules/${ruleId}`,
+          { headers: new HttpHeaders(headers) }
+        )
+      );
+      return true;
+    } catch (err) {
+      console.error('Failed to delete filter rule:', err);
+      return false;
     }
   }
 
