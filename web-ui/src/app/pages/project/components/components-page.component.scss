@@ -40,10 +40,44 @@
   gap: var(--spacing-sm);
 }
 
-.save-pill {
+.save-pill,
+.discard-pill {
   border-radius: 999px;
   padding: 0.4rem 1rem;
   font-size: 0.85rem;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.discard-pill {
+  // The discard action is destructive-ish but lightweight — render in the
+  // ghost tone so it doesn't fight the primary Save pill.
+  color: var(--color-text-secondary);
+}
+
+// Pending-changes count badge. Sits left of the action pills.
+.pending-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.2rem 0.55rem;
+  border-radius: 999px;
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  background-color: rgba(var(--color-accent-rgb), 0.12);
+  color: var(--color-accent);
+}
+
+// Spinner shown inside the Save button while a save is in flight.
+.spinner-inline {
+  display: inline-block;
+  width: 12px;
+  height: 12px;
+  border: 2px solid rgba(255, 255, 255, 0.4);
+  border-top-color: #ffffff;
+  border-radius: 50%;
+  animation: components-spin 0.7s linear infinite;
 }
 
 // ── Body states ───────────────────────────────────────────────────────────

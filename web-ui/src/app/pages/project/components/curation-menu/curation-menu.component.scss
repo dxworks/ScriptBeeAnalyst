@@ -1,0 +1,202 @@
+// Curation popover (F4). position: fixed so the page coordinates from the
+// treemap's contextmenu event land on the right cursor cell — no need to
+// account for scrolls or transforms in any ancestor.
+
+.curation-menu {
+  position: fixed;
+  z-index: 1000;
+  min-width: 220px;
+  max-width: 320px;
+  background-color: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md, 8px);
+  // Drop-shadow taken from the design system's `.modal` shadow, dialled
+  // back one notch — a menu shouldn't feel as heavy as a modal.
+  box-shadow: 0 6px 20px rgba(15, 18, 33, 0.18), 0 1px 2px rgba(15, 18, 33, 0.08);
+  padding: var(--spacing-xs);
+  font-size: 0.85rem;
+  color: var(--color-text-primary);
+
+  // Prevent text-selection while the user clicks through nested menus.
+  user-select: none;
+}
+
+.curation-menu-header {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: var(--spacing-xs) var(--spacing-sm);
+  border-bottom: 1px solid var(--color-border);
+  margin-bottom: var(--spacing-xs);
+
+  .curation-menu-kind {
+    font-size: 0.7rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--color-text-secondary);
+  }
+
+  .curation-menu-path {
+    font-size: 0.8rem;
+    font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .curation-menu-bucket {
+    font-size: 0.72rem;
+    color: var(--color-text-secondary);
+  }
+}
+
+.curation-menu-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.curation-item {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-sm);
+  width: 100%;
+  padding: 6px var(--spacing-sm);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--radius-md, 6px);
+  color: inherit;
+  text-align: left;
+  font-size: 0.85rem;
+  cursor: pointer;
+  transition: background-color var(--transition-fast);
+
+  &:hover,
+  &:focus-visible {
+    background-color: var(--color-surface-hover);
+    outline: none;
+  }
+}
+
+.curation-item-label {
+  flex: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.curation-chevron {
+  margin-left: auto;
+  font-size: 1rem;
+  color: var(--color-text-secondary);
+}
+
+.curation-swatch {
+  width: 12px;
+  height: 12px;
+  border-radius: 3px;
+  border: 1px solid rgba(0, 0, 0, 0.1);
+  flex-shrink: 0;
+}
+
+.curation-divider {
+  height: 1px;
+  margin: var(--spacing-xs) 0;
+  background-color: var(--color-border);
+  list-style: none;
+}
+
+.curation-back {
+  color: var(--color-text-secondary);
+  font-size: 0.78rem;
+}
+
+.curation-empty {
+  padding: var(--spacing-sm);
+  font-size: 0.78rem;
+  color: var(--color-text-secondary);
+  text-align: center;
+}
+
+// ── Inline form for "Move to new component…" ──────────────────────────────
+.curation-form {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-xs);
+  padding: var(--spacing-xs) var(--spacing-sm);
+}
+
+.curation-label {
+  margin: 0;
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: var(--color-text-secondary);
+}
+
+.curation-label-secondary {
+  margin-top: 4px;
+}
+
+.curation-input {
+  width: 100%;
+  padding: 6px var(--spacing-sm);
+  font-size: 0.85rem;
+  background-color: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md, 6px);
+  color: var(--color-text-primary);
+  outline: none;
+
+  &:focus {
+    border-color: var(--color-accent);
+    box-shadow: 0 0 0 2px rgba(var(--color-accent-rgb), 0.18);
+  }
+}
+
+.curation-palette {
+  display: grid;
+  grid-template-columns: repeat(10, 1fr);
+  gap: 4px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.curation-swatch-btn {
+  display: block;
+  width: 100%;
+  aspect-ratio: 1 / 1;
+  min-width: 16px;
+  min-height: 16px;
+  border: 2px solid transparent;
+  border-radius: 4px;
+  cursor: pointer;
+  padding: 0;
+
+  &:hover {
+    transform: scale(1.1);
+  }
+
+  &.selected {
+    // Use a layered ring: a near-white inner ring plus a token-coloured
+    // outer ring so the indicator stays visible against every palette hue.
+    border-color: #ffffff;
+    box-shadow: 0 0 0 2px var(--color-text-primary);
+  }
+}
+
+.curation-form-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--spacing-xs);
+  margin-top: var(--spacing-xs);
+}
+
+.curation-form-cancel,
+.curation-form-submit {
+  font-size: 0.78rem;
+  padding: 4px 12px;
+  border-radius: 999px;
+}

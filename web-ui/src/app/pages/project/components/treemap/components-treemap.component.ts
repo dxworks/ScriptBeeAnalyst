@@ -23,6 +23,14 @@ import {
   type FolderNode,
   type TreeNode,
 } from './path-compression';
+import {
+  FALLBACK_COMPONENT_COLOR,
+  FILE_FILL,
+  FILE_FILL_DIM,
+  FILE_STROKE,
+  FOLDER_DIM_GREY,
+  FOLDER_STROKE,
+} from '../component-color';
 
 /** Synthetic bucket name for files whose `component_name` is null. */
 const UNASSIGNED_BUCKET = '(unassigned)';
@@ -31,14 +39,6 @@ const UNASSIGNED_BUCKET = '(unassigned)';
  *  line 139 of the dx-platform-frontend treemap reference — tiny files would
  *  otherwise collapse to invisible slivers in the treemap. */
 const MIN_FILE_WEIGHT = 30;
-
-/** Fallback colour when `componentColors` has no entry for a bucket (F5 will
- *  provide a real palette). Matches the swatch fallback used in the page
- *  shell (`#9ca3af`-ish neutral). */
-const FALLBACK_COMPONENT_COLOR = '#94a3b8';
-
-/** Neutral fill for file rects, design-token-aligned (light surface tone). */
-const FILE_FILL = '#ffffff';
 
 /** A d3.hierarchy node carrying our TreeNode data. */
 type HierarchyDatum = TreeNode & { __value?: number };
@@ -421,7 +421,7 @@ export class ComponentsTreemapComponent {
       // File rects use a near-white neutral; the surrounding folder shading
       // gives the visual hierarchy. Dim slightly when a different component
       // is selected.
-      return dim ? '#f4f4f5' : FILE_FILL;
+      return dim ? FILE_FILL_DIM : FILE_FILL;
     }
 
     // Folder fill: depth-shaded brighter from the component's base colour.
@@ -435,7 +435,7 @@ export class ComponentsTreemapComponent {
     // get progressively brighter so labels stay legible.
     const shaded = c.brighter(Math.max(0, d.depth - 1) * depthStep).toString();
     if (dim) {
-      const grey = d3.color('#e5e7eb')?.toString() ?? '#e5e7eb';
+      const grey = d3.color(FOLDER_DIM_GREY)?.toString() ?? FOLDER_DIM_GREY;
       // Blend back toward grey for unselected components.
       return d3.interpolateRgb(shaded, grey)(0.6);
     }
@@ -453,9 +453,9 @@ export class ComponentsTreemapComponent {
       return componentColors[componentName] ?? FALLBACK_COMPONENT_COLOR;
     }
     if (d.data.kind === 'file') {
-      return '#d1d5db';
+      return FILE_STROKE;
     }
-    return 'rgba(0,0,0,0.08)';
+    return FOLDER_STROKE;
   }
 
   private truncateLabel(text: string, availableWidth: number): string {

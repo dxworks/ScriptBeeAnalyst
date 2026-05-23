@@ -73,11 +73,10 @@ export function compressSingleChildChains(node: TreeNode): TreeNode {
     current.children[0]!.kind === 'folder'
   ) {
     const onlyChild = current.children[0] as FolderNode;
-    // Rule (c): no file children directly. We already know children.length === 1
-    // and that child is a folder, so this is satisfied. Kept as an explicit
-    // check for future-proofing if the loop body changes.
-    const hasDirectFileChild = current.children.some((c) => c.kind === 'file');
-    if (hasDirectFileChild) break;
+    // Rule (c) ("no direct file children") is implied by the while-loop
+    // condition: `children.length === 1` AND `children[0].kind === 'folder'`
+    // together force the only child to be a folder, so there can't be a
+    // direct file child. No explicit guard needed.
     current = {
       kind: 'folder',
       name: `${current.name}/${onlyChild.name}`,

@@ -8,15 +8,35 @@
       }
     </div>
     <div class="components-header-actions">
-      <!-- Save pill: shows only when there are pending curation edits.
-           F4 wires `hasPendingChanges` from the right-click menu. -->
+      <!-- Save + Discard pills: visible together when the draft differs
+           from the baseline. The Save button shows a spinner + disabled
+           state during the in-flight rebuild (B3 carry-over: the rebuild
+           blocks the HTTP request server-side, so we have to give the
+           user visible progress). -->
       @if (hasPendingChanges()) {
+        <span class="pending-badge" aria-live="polite">
+          {{ pendingChangeCount() }} pending change{{ pendingChangeCount() === 1 ? '' : 's' }}
+        </span>
+        <button
+          type="button"
+          class="btn btn-ghost discard-pill"
+          [disabled]="saveInProgress()"
+          (click)="onDiscardChanges()"
+        >
+          Discard
+        </button>
         <button
           type="button"
           class="btn btn-primary save-pill"
+          [disabled]="saveInProgress()"
           (click)="onSaveChanges()"
         >
-          Save changes
+          @if (saveInProgress()) {
+            <span class="spinner-inline" aria-hidden="true"></span>
+            Saving…
+          } @else {
+            Save changes
+          }
         </button>
       }
     </div>
@@ -60,8 +80,8 @@
     }
     @case ('ready') {
       <div class="components-body">
-        <!-- Left: components list (F2 shell — selection is a no-op for now;
-             F4 will plug in right-click + drives draft state). -->
+        <!-- Left: components list. Each row's swatch reads from
+             componentColors() so the list agrees with the treemap. -->
         <aside class="components-list">
           <div class="components-list-header">
             <span class="components-list-title">
@@ -82,11 +102,9 @@
                     [class.selected]="selectedComponentName() === c.name"
                     (click)="onComponentClick(c.name)"
                   >
-                    <!-- F5 will replace this neutral swatch with a per-component
-                         palette colour. v1 leaves it grey. -->
                     <span
                       class="component-swatch"
-                      [style.background-color]="c.color ?? '#9ca3af'"
+                      [style.background-color]="componentColors()[c.name]"
                       aria-hidden="true"
                     ></span>
                     <span class="component-info">
@@ -103,14 +121,12 @@
           }
         </aside>
 
-        <!-- Main: the treemap. F5 will swap the {} colour map for a real
-             palette service; until then the treemap uses a neutral fallback
-             for each component. -->
+        <!-- Main: the treemap, fed with the displayed (post-draft) views. -->
         <section class="components-main">
           <app-components-treemap
-            [files]="files()"
-            [components]="components()"
-            [componentColors]="{}"
+            [files]="displayedFiles()"
+            [components]="displayedComponents()"
+            [componentColors]="componentColors()"
             [selectedComponentName]="selectedComponentName()"
             (fileClick)="onFileClick($event)"
             (contextMenu)="onContextMenu($event)"
@@ -118,5 +134,19 @@
         </section>
       </div>
     }
+  }
+
+  <!-- ── Curation context menu (F4) ────────────────────────────────────── -->
+  @if (openMenu(); as anchor) {
+    <app-curation-menu
+      [anchor]="anchor"
+      [components]="displayedComponents()"
+      [componentColors]="componentColors()"
+      (moveToExisting)="onMoveToExisting($event)"
+      (moveToNew)="onMoveToNew($event)"
+      (moveFolderToExisting)="onMoveFolderToExisting($event)"
+      (moveFolderToNew)="onMoveFolderToNew($event)"
+      (close)="onMenuClose()"
+    />
   }
 </div>
