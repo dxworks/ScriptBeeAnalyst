@@ -8,9 +8,10 @@
 
   @if (tooltip().visible) {
     <div
+      #tooltipEl
       class="treemap-tooltip"
-      [style.left.px]="tooltip().x + 14"
-      [style.top.px]="tooltip().y + 14"
+      [style.left.px]="tooltip().x"
+      [style.top.px]="tooltip().y"
       role="tooltip"
     >
       <div class="treemap-tooltip-path">{{ tooltip().path }}</div>

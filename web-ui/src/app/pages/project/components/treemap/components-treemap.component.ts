@@ -9,6 +9,7 @@ import {
   input,
   output,
   signal,
+  viewChild,
 } from '@angular/core';
 import * as d3 from 'd3';
 
@@ -97,6 +98,10 @@ export class ComponentsTreemapComponent {
   hostRef!: ElementRef<HTMLDivElement>;
   @ViewChild('svg', { static: true })
   svgRef!: ElementRef<SVGSVGElement>;
+  /** The tooltip DOM node; absent when `tooltip().visible` is false (`@if`).
+   *  Read inside `computeTooltipPosition` to use the actual rendered size
+   *  for viewport clamping. */
+  readonly tooltipEl = viewChild<ElementRef<HTMLDivElement>>('tooltipEl');
 
   // ── Reactive state for the lightweight HTML tooltip ───────────────────────
   readonly tooltip = signal<TooltipState>({
@@ -302,10 +307,14 @@ export class ComponentsTreemapComponent {
       .filter((d) => d.data.kind === 'file')
       .on('mousemove', (event: MouseEvent, d) => {
         const file = d.data as FileNode;
+        const { x, y } = this.computeTooltipPosition(
+          event.clientX,
+          event.clientY,
+        );
         this.tooltip.set({
           visible: true,
-          x: event.clientX,
-          y: event.clientY,
+          x,
+          y,
           path: file.path,
           loc: file.loc,
           componentName: file.componentName ?? UNASSIGNED_BUCKET,
@@ -476,6 +485,42 @@ export class ComponentsTreemapComponent {
       return FILE_STROKE;
     }
     return FOLDER_STROKE;
+  }
+
+  /**
+   * Place the tooltip near the cursor while keeping it fully on-screen.
+   * Default placement is below-right of the cursor; if it would overflow the
+   * right (or bottom) of the viewport, flip to the left (or above) the cursor.
+   * Uses the actual rendered tooltip size when available (subsequent moves
+   * after the element has mounted); falls back to conservative defaults that
+   * match the CSS `max-width` / typical 2-line height on the first frame so
+   * even the very first hover at the edge stays inside the viewport.
+   */
+  private computeTooltipPosition(
+    clientX: number,
+    clientY: number,
+  ): { x: number; y: number } {
+    const OFFSET = 14; // gap between cursor and tooltip corner
+    const MARGIN = 8; // min distance from any viewport edge
+    const el = this.tooltipEl()?.nativeElement;
+    const ttWidth = el?.offsetWidth || 360; // matches CSS max-width
+    const ttHeight = el?.offsetHeight || 80; // ~2 lines worst-case
+    const vw = window.innerWidth;
+    const vh = window.innerHeight;
+
+    let x = clientX + OFFSET;
+    let y = clientY + OFFSET;
+
+    if (x + ttWidth > vw - MARGIN) {
+      x = clientX - ttWidth - OFFSET;
+    }
+    if (y + ttHeight > vh - MARGIN) {
+      y = clientY - ttHeight - OFFSET;
+    }
+
+    x = Math.max(MARGIN, Math.min(x, vw - ttWidth - MARGIN));
+    y = Math.max(MARGIN, Math.min(y, vh - ttHeight - MARGIN));
+    return { x, y };
   }
 
   private truncateLabel(text: string, availableWidth: number): string {
