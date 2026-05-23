@@ -51,6 +51,9 @@ from src.sandbox import (
     issue_commits as _sandbox_issue_commits,
     pr_commits as _sandbox_pr_commits,
 )
+from src.filter_rules.router import filter_rules_router
+from src.filter_rules.store import filter_rule_store
+from src.filter_rules.views import FilteredSandboxView
 
 logger = get_logger("data-server")
 
@@ -189,6 +192,8 @@ app.add_middleware(
     allow_methods=["*"],  # Allow all methods (GET, POST, DELETE, etc.)
     allow_headers=["*"],  # Allow all headers
 )
+
+app.include_router(filter_rules_router)
 
 
 # =============================================================================
@@ -351,6 +356,10 @@ async def load_project(project_id: str):
 
     graph_store.set(project_id, graph)
     smart_merge_state_store.reset(project_id)
+    try:
+        filter_rule_store.refresh(project_id)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(f"filter_rule_store.refresh failed on /load: {exc}")
 
     current_project_id = project_id
     current_project_name = project_name
@@ -405,6 +414,10 @@ async def build_project(project_id: str):
     graph_store.set(project_id, graph)
     # Fresh build invalidates any cached smart-merge state for this project.
     smart_merge_state_store.reset(project_id)
+    try:
+        filter_rule_store.refresh(project_id)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(f"filter_rule_store.refresh failed on /build: {exc}")
 
     # Update the "currently loaded" pointers so /execute against this id
     # works without an explicit /load round-trip.
@@ -1449,11 +1462,19 @@ async def execute_code(request: CodeRequest):
         v2_graph: Optional[Graph] = (
             graph_store.get(current_project_id) if current_project_id else None
         )
-        sandbox_view: Optional[MCPSandboxView] = (
+        raw_view: Optional[MCPSandboxView] = (
             MCPSandboxView(v2_graph) if v2_graph is not None else None
         )
+        if raw_view is not None and current_project_id:
+            excluded = filter_rule_store.excluded_ids_for(current_project_id, v2_graph)
+            filtered_view: Any = (
+                FilteredSandboxView(raw_view, excluded) if excluded else raw_view
+            )
+        else:
+            filtered_view = raw_view
         exec_globals = {
-            "graph_data": sandbox_view,
+            "graph_data": filtered_view,
+            "graph_data_full": raw_view,
             "graph": v2_graph,  # raw Graph still exposed for power users
             # Free helpers for the three legacy entity-side navigations
             # (plan §11 rows 4–6). Same names the legacy sandbox exposed;
@@ -1465,13 +1486,13 @@ async def execute_code(request: CodeRequest):
             # too, so legacy snippets calling ``find_files_with_trait("x")``
             # without going through ``graph_data.`` still work.
             "find_files_with_trait": (
-                sandbox_view.find_files_with_trait if sandbox_view else lambda *_a, **_k: []
+                raw_view.find_files_with_trait if raw_view else lambda *_a, **_k: []
             ),
             "cochange_neighbors": (
-                sandbox_view.cochange_neighbors if sandbox_view else lambda *_a, **_k: []
+                raw_view.cochange_neighbors if raw_view else lambda *_a, **_k: []
             ),
             "overview_as_dict": (
-                sandbox_view.overview_as_dict if sandbox_view else lambda *_a, **_k: None
+                raw_view.overview_as_dict if raw_view else lambda *_a, **_k: None
             ),
         }
         exec(code, exec_globals)
@@ -1504,24 +1525,32 @@ async def generate_plot(request: CodeRequest):
         v2_graph: Optional[Graph] = (
             graph_store.get(current_project_id) if current_project_id else None
         )
-        sandbox_view: Optional[MCPSandboxView] = (
+        raw_view: Optional[MCPSandboxView] = (
             MCPSandboxView(v2_graph) if v2_graph is not None else None
         )
+        if raw_view is not None and current_project_id:
+            excluded = filter_rule_store.excluded_ids_for(current_project_id, v2_graph)
+            filtered_view: Any = (
+                FilteredSandboxView(raw_view, excluded) if excluded else raw_view
+            )
+        else:
+            filtered_view = raw_view
         exec_globals = {
-            "graph_data": sandbox_view,
+            "graph_data": filtered_view,
+            "graph_data_full": raw_view,
             "graph": v2_graph,
             "plt": plt,
             "commit_issues": _sandbox_commit_issues,
             "issue_commits": _sandbox_issue_commits,
             "pr_commits": _sandbox_pr_commits,
             "find_files_with_trait": (
-                sandbox_view.find_files_with_trait if sandbox_view else lambda *_a, **_k: []
+                raw_view.find_files_with_trait if raw_view else lambda *_a, **_k: []
             ),
             "cochange_neighbors": (
-                sandbox_view.cochange_neighbors if sandbox_view else lambda *_a, **_k: []
+                raw_view.cochange_neighbors if raw_view else lambda *_a, **_k: []
             ),
             "overview_as_dict": (
-                sandbox_view.overview_as_dict if sandbox_view else lambda *_a, **_k: None
+                raw_view.overview_as_dict if raw_view else lambda *_a, **_k: None
             ),
         }
 
