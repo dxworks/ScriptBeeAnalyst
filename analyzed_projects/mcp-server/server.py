@@ -474,6 +474,137 @@ async def get_quality_issues_summary() -> dict:
     return resp.json()
 
 
+async def _resolve_current_project_id() -> str:
+    async with httpx.AsyncClient(timeout=TIMEOUT) as client:
+        try:
+            resp = await client.get(f"{DATA_SERVER_URL}/projects/current")
+        except httpx.ConnectError:
+            return f"__ERROR__:Cannot connect to data-server at {DATA_SERVER_URL}"
+    if resp.status_code == 404:
+        return "__ERROR__:No project currently loaded. Use load_project first."
+    if resp.status_code != 200:
+        return f"__ERROR__:HTTP {resp.status_code}: {resp.text}"
+    pid = resp.json().get("project_id")
+    if not pid:
+        return "__ERROR__:Data-server returned no project_id."
+    return pid
+
+
+def _filter_rule_auth_headers() -> dict:
+    jwt = os.getenv("SCRIPTBEE_JWT") or os.getenv("DATA_SERVER_JWT")
+    if jwt:
+        return {"Authorization": f"Bearer {jwt}"}
+    return {}
+
+
+@mcp.tool()
+async def create_filter_rule(
+    name: str,
+    nl_description: str,
+    entity_kind: str,
+    predicate: dict,
+) -> str:
+    """Create a project-scoped exclusion rule on the currently loaded project.
+
+    The rule hides matched entities from every subsequent `graph_data.*`
+    query. The unfiltered `graph_data_full` is unaffected. Ask the user
+    any clarifying questions IN CHAT before calling this tool — the tool
+    itself does not ask.
+
+    Args:
+        name: Short human label (e.g. "Tiny files (<20 LOC)").
+        nl_description: The user's original phrasing, stored verbatim
+            for audit/UI display.
+        entity_kind: Lowercase EntityKind value. v1 supports:
+            "file", "commit", "issue", "pull_request".
+        predicate: A JSON dict matching the RuleDSL predicate. Either a
+            single leaf `{"field": ..., "op": ..., "value": ...}` or a
+            depth-1 conjunction `{"all_of": [<leaf>, <leaf>, ...]}`. The
+            allowed (entity_kind, field) pairs in v1 are:
+              file.loc, file.extension, file.path,
+              commit.author_email, commit.message,
+              issue.status, issue.type,
+              pull_request.state, pull_request.author.
+            Ops: lt | le | gt | ge | eq | ne | in | not_in | contains | regex.
+
+    Returns:
+        JSON string of the created rule on success, or `Error: ...` on failure.
+    """
+    pid = await _resolve_current_project_id()
+    if pid.startswith("__ERROR__:"):
+        return f"Error: {pid[len('__ERROR__:'):]}"
+
+    body = {
+        "name": name,
+        "nl_description": nl_description,
+        "dsl": {
+            "entity_kind": entity_kind,
+            "predicate": predicate,
+        },
+    }
+    async with httpx.AsyncClient(timeout=TIMEOUT) as client:
+        try:
+            resp = await client.post(
+                f"{DATA_SERVER_URL}/projects/{pid}/rules",
+                json=body,
+                headers=_filter_rule_auth_headers(),
+            )
+        except httpx.ConnectError:
+            return f"Error: Cannot connect to data-server at {DATA_SERVER_URL}. Is it running?"
+
+    if resp.status_code == 200:
+        return json.dumps(resp.json())
+    try:
+        payload = resp.json()
+    except Exception:  # noqa: BLE001
+        payload = {"error": resp.text}
+    return f"Error ({resp.status_code}): {json.dumps(payload)}"
+
+
+@mcp.tool()
+async def list_filter_rules() -> str:
+    """List active exclusion rules for the currently loaded project.
+
+    Use this to answer "what filters are active?" or before creating a
+    new rule to avoid duplicates. The unfiltered escape hatch
+    `graph_data_full` ignores everything returned here.
+
+    Returns:
+        A short human-readable summary (one line per rule) plus a JSON
+        block of the raw rules, or `Error: ...` on failure.
+    """
+    pid = await _resolve_current_project_id()
+    if pid.startswith("__ERROR__:"):
+        return f"Error: {pid[len('__ERROR__:'):]}"
+
+    async with httpx.AsyncClient(timeout=TIMEOUT) as client:
+        try:
+            resp = await client.get(
+                f"{DATA_SERVER_URL}/projects/{pid}/rules",
+                headers=_filter_rule_auth_headers(),
+            )
+        except httpx.ConnectError:
+            return f"Error: Cannot connect to data-server at {DATA_SERVER_URL}. Is it running?"
+
+    if resp.status_code != 200:
+        return f"Error ({resp.status_code}): {resp.text}"
+
+    data = resp.json()
+    rules = data.get("rules", [])
+    if not rules:
+        return f"No filter rules active for project {pid}."
+
+    lines = [f"{len(rules)} filter rule(s) active for project {pid}:"]
+    for r in rules:
+        lines.append(
+            f"  - [{r.get('entity_kind')}] {r.get('name')}: "
+            f"{r.get('nl_description')} (id={r.get('id')})"
+        )
+    lines.append("")
+    lines.append(json.dumps({"rules": rules}))
+    return "\n".join(lines)
+
+
 @mcp.tool()
 async def load_project(project_id: str) -> str:
     """Load a project into the data server's memory by its UUID.
