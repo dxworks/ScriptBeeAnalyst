@@ -4,7 +4,6 @@ export interface Project {
   description: string | null;
   created_at: string;
   updated_at: string;
-  user_id: string;
   status: ProjectStatus;
   // Files are fetched separately via SerializedFile[]
 }

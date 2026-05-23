@@ -1,6 +1,5 @@
 import { Injectable, signal } from '@angular/core';
 import { SupabaseService } from './supabase.service';
-import { AuthService } from './auth.service';
 import {
   SerializedFile,
   FileType,
@@ -36,10 +35,7 @@ export class FileService {
   readonly loading = this.loadingSignal.asReadonly();
   readonly error = this.errorSignal.asReadonly();
 
-  constructor(
-    private supabase: SupabaseService,
-    private authService: AuthService
-  ) {}
+  constructor(private supabase: SupabaseService) {}
 
   /**
    * Validate a file before upload
@@ -140,13 +136,6 @@ export class FileService {
     this.loadingSignal.set(true);
     this.errorSignal.set(null);
 
-    const user = this.authService.user();
-    if (!user) {
-      this.errorSignal.set('User not authenticated');
-      this.loadingSignal.set(false);
-      return null;
-    }
-
     const validation = this.validateFile(file);
     if (!validation.valid) {
       this.errorSignal.set(validation.error!);
@@ -158,14 +147,13 @@ export class FileService {
     const repoName = getRepoNameFromFile(file.name);
 
     try {
-      // Generate unique storage path with hash before extension
       const timestamp = Date.now();
-      const hash = this.generateHash(user.id, fileType, timestamp);
+      const hash = this.generateHash(projectId, fileType, timestamp);
       const fileName = file.name.toLowerCase();
       const lastDotIndex = fileName.lastIndexOf('.');
       const baseName = lastDotIndex > 0 ? fileName.substring(0, lastDotIndex) : fileName;
       const extension = lastDotIndex > 0 ? fileName.substring(lastDotIndex) : '';
-      const storagePath = `${user.id}/${projectId}/${baseName}_${hash}${extension}`;
+      const storagePath = `${projectId}/${baseName}_${hash}${extension}`;
 
       // Upload to storage
       const { error: uploadError } = await this.supabase.client.storage
@@ -303,8 +291,8 @@ export class FileService {
   /**
    * Generate a hash for unique storage path
    */
-  private generateHash(userId: string, fileType: string, timestamp: number): string {
-    const input = `${userId}-${fileType}-${timestamp}`;
+  private generateHash(projectId: string, fileType: string, timestamp: number): string {
+    const input = `${projectId}-${fileType}-${timestamp}`;
     // Simple hash - in production you might want a proper hash function
     let hash = 0;
     for (let i = 0; i < input.length; i++) {

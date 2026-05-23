@@ -68,7 +68,7 @@ async def download_file(client: Client, storage_path: str) -> bytes:
 
     Args:
         client: Supabase client
-        storage_path: Path in storage bucket (e.g., 'user_id/project_id/file.json')
+        storage_path: Path in storage bucket (e.g., 'project_id/file.json')
 
     Returns:
         File contents as bytes

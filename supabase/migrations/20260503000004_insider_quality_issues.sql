@@ -1,8 +1,4 @@
--- Insider quality-issues cache: one JSONB blob per project.
--- Mirrors the lizard_file_metrics / code_structure / duplication pattern: the
--- data-server (re)computes the per-file Insider code-smell payload at project
--- load and stores the full set as a single payload row keyed by project_id so
--- subsequent loads can read without re-parsing the inputs.
+-- Insider quality-issues cache: one JSONB blob per project. Single-tenant, no RLS.
 
 create table public.quality_issues (
     project_id uuid primary key references public.projects(id) on delete cascade,
@@ -13,48 +9,6 @@ create table public.quality_issues (
 );
 
 create index quality_issues_generated_at_idx on public.quality_issues (generated_at);
-
-alter table public.quality_issues enable row level security;
-
-create policy "Users can view own quality_issues"
-  on public.quality_issues for select
-  using (
-    exists (
-      select 1 from public.projects
-      where projects.id = quality_issues.project_id
-      and projects.user_id = (select auth.uid())
-    )
-  );
-
-create policy "Users can upsert own quality_issues"
-  on public.quality_issues for insert
-  with check (
-    exists (
-      select 1 from public.projects
-      where projects.id = quality_issues.project_id
-      and projects.user_id = (select auth.uid())
-    )
-  );
-
-create policy "Users can update own quality_issues"
-  on public.quality_issues for update
-  using (
-    exists (
-      select 1 from public.projects
-      where projects.id = quality_issues.project_id
-      and projects.user_id = (select auth.uid())
-    )
-  );
-
-create policy "Users can delete own quality_issues"
-  on public.quality_issues for delete
-  using (
-    exists (
-      select 1 from public.projects
-      where projects.id = quality_issues.project_id
-      and projects.user_id = (select auth.uid())
-    )
-  );
 
 -- Allow Insider quality-issues JSON to upload as a serialized file alongside
 -- git/github/jira/lizard/codeframe/dude_external/dude_internal.

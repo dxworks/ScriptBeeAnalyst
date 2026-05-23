@@ -490,13 +490,6 @@ async def _resolve_current_project_id() -> str:
     return pid
 
 
-def _filter_rule_auth_headers() -> dict:
-    jwt = os.getenv("SCRIPTBEE_JWT") or os.getenv("DATA_SERVER_JWT")
-    if jwt:
-        return {"Authorization": f"Bearer {jwt}"}
-    return {}
-
-
 @mcp.tool()
 async def create_filter_rule(
     name: str,
@@ -547,7 +540,6 @@ async def create_filter_rule(
             resp = await client.post(
                 f"{DATA_SERVER_URL}/projects/{pid}/rules",
                 json=body,
-                headers=_filter_rule_auth_headers(),
             )
         except httpx.ConnectError:
             return f"Error: Cannot connect to data-server at {DATA_SERVER_URL}. Is it running?"
@@ -581,7 +573,6 @@ async def list_filter_rules() -> str:
         try:
             resp = await client.get(
                 f"{DATA_SERVER_URL}/projects/{pid}/rules",
-                headers=_filter_rule_auth_headers(),
             )
         except httpx.ConnectError:
             return f"Error: Cannot connect to data-server at {DATA_SERVER_URL}. Is it running?"

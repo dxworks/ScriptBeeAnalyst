@@ -1,7 +1,6 @@
 import { Injectable } from '@angular/core';
-import { HttpClient, HttpHeaders, HttpErrorResponse } from '@angular/common/http';
+import { HttpClient, HttpErrorResponse } from '@angular/common/http';
 import { firstValueFrom } from 'rxjs';
-import { AuthService } from './auth.service';
 import { environment } from '../../../environments/environment';
 import {
   SuggestionsResponse,
@@ -47,7 +46,6 @@ export interface HealthResponse {
 export interface CurrentProjectResponse {
   project_id: string;
   project_name?: string;
-  user_id: string;
   stats: {
     git_commits: number;
     jira_issues: number;
@@ -62,7 +60,6 @@ interface CurrentProjectResponseRaw {
   loaded: boolean;
   project_id?: string;
   project_name?: string;
-  user_id?: string;
   stats?: {
     git_commits: number;
     jira_issues: number;
@@ -105,12 +102,17 @@ export interface FilterRuleDSL {
 export interface FilterRuleDto {
   id: string;
   project_id: string;
-  user_id: string | null;
   entity_kind: string;
   name: string;
   nl_description: string;
   dsl: FilterRuleDSL;
   created_at: string | null;
+  /**
+   * Number of entities this rule matches against the loaded graph.
+   * `null` when the data-server has no graph loaded for this project
+   * (the count cannot be computed). Populated by GET /projects/{id}/rules.
+   */
+  match_count?: number | null;
 }
 
 export interface FilterRulesListResponse {
@@ -173,36 +175,17 @@ export class ProjectNotLoadedError extends Error {
 export class DataServerService {
   private readonly baseUrl = environment.dataServerUrl;
 
-  constructor(
-    private http: HttpClient,
-    private authService: AuthService
-  ) {}
+  constructor(private http: HttpClient) {}
 
   /**
    * Build project graph on data-server
-   * @param projectId - UUID of the project
-   * @returns BuildResult with success status and message
    */
   async buildProject(projectId: string): Promise<BuildResult> {
-    const session = this.authService.session();
-    if (!session?.access_token) {
-      return {
-        success: false,
-        error: 'Not authenticated',
-      };
-    }
-
-    const headers = new HttpHeaders({
-      'Authorization': `Bearer ${session.access_token}`,
-      'Content-Type': 'application/json',
-    });
-
     try {
       const response = await firstValueFrom(
         this.http.post<{ message: string }>(
           `${this.baseUrl}/projects/${projectId}/build`,
           {},
-          { headers }
         )
       );
 
@@ -256,21 +239,9 @@ export class DataServerService {
    * @returns true if successfully unloaded
    */
   async unloadProject(projectId: string): Promise<boolean> {
-    const session = this.authService.session();
-    if (!session?.access_token) {
-      return false;
-    }
-
-    const headers = new HttpHeaders({
-      'Authorization': `Bearer ${session.access_token}`,
-    });
-
     try {
       await firstValueFrom(
-        this.http.delete(
-          `${this.baseUrl}/projects/${projectId}/unload`,
-          { headers }
-        )
+        this.http.delete(`${this.baseUrl}/projects/${projectId}/unload`)
       );
       return true;
     } catch (err) {
@@ -350,7 +321,6 @@ export class DataServerService {
       return {
         project_id: response.project_id,
         project_name: response.project_name,
-        user_id: response.user_id ?? '',
         stats: response.stats ?? { git_commits: 0, jira_issues: 0, github_prs: 0 },
       };
     } catch (err) {
@@ -673,18 +643,9 @@ export class DataServerService {
    * must not delete directly through Supabase (see filter_files.md Flow D).
    */
   async deleteFilterRule(projectId: string, ruleId: string): Promise<boolean> {
-    const session = this.authService.session();
-    const headers: Record<string, string> = {};
-    if (session?.access_token) {
-      headers['Authorization'] = `Bearer ${session.access_token}`;
-    }
-
     try {
       await firstValueFrom(
-        this.http.delete(
-          `${this.baseUrl}/projects/${projectId}/rules/${ruleId}`,
-          { headers: new HttpHeaders(headers) }
-        )
+        this.http.delete(`${this.baseUrl}/projects/${projectId}/rules/${ruleId}`)
       );
       return true;
     } catch (err) {

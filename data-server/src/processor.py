@@ -591,9 +591,7 @@ def build_graph(
 # ---------------------------------------------------------------------------
 # Background loop entry point (unchanged shape).
 # ---------------------------------------------------------------------------
-def process_project(
-    project_id: str, user_id: str, project_name: str = "Project"
-) -> bool:
+def process_project(project_id: str, project_name: str = "Project") -> bool:
     """Run the full build for one project; update DB status on the way."""
     try:
         update_project_status(project_id, "processing")
@@ -628,7 +626,7 @@ def run_loop(poll_interval: int = 60) -> int:
             project = get_next_project_to_process()
             if project:
                 logger.info(f"Processing: {project['name']} ({project['id']})")
-                process_project(project["id"], project["user_id"], project["name"])
+                process_project(project["id"], project["name"])
             else:
                 logger.info(f"No projects to process. Waiting {poll_interval}s")
             time.sleep(poll_interval)

@@ -34,7 +34,10 @@
           <div class="rule-card card">
             <div class="rule-card-header">
               <h3 class="rule-name">{{ rule.name }}</h3>
-              <span class="badge badge-primary">{{ entityKindLabel(rule.entity_kind) }}</span>
+              <div class="rule-card-meta">
+                <span class="badge badge-primary">{{ entityKindLabel(rule.entity_kind) }}</span>
+                <span class="rule-match-count">{{ matchCountLabel(rule) }}</span>
+              </div>
             </div>
             <p class="rule-description">{{ rule.nl_description }}</p>
             <code class="rule-dsl">{{ dslSummary(rule) }}</code>

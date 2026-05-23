@@ -40,7 +40,7 @@ from src.smart_merge.types import (
 # with the rest of the pre-refactor enrichment layer.
 from src.enrichment.pipeline import PipelineResult, run_pipeline
 from src.graph_store import graph_store
-from src.common.kernel import Graph
+from src.common.kernel import EntityKind, Graph
 from src.common.pickle_store import PickleStore
 from src.common.domains.components.resolver import parse_component_mapping
 from src.supabase_client import get_service_client
@@ -122,7 +122,7 @@ async def lifespan(app: FastAPI):
     typed :class:`Graph` lives in ``graph_store``; smart-merge state
     lives in ``smart_merge_state_store``. Both are wiped on shutdown.
     """
-    global current_project_id, current_user_id
+    global current_project_id
     logger.info("Data server started on port 8001")
 
     try:
@@ -131,7 +131,6 @@ async def lifespan(app: FastAPI):
         graph_store.clear()
         smart_merge_state_store.clear()
         current_project_id = None
-        current_user_id = None
         logger.info("Shutdown complete - graph cleared from memory")
 
 
@@ -206,7 +205,6 @@ app.include_router(filter_rules_router)
 # shutdown.
 current_project_id = None
 current_project_name = None
-current_user_id = None
 
 
 def _stats_for(graph: Optional[Graph], state) -> dict:
@@ -277,7 +275,6 @@ async def get_current_project():
         "loaded": True,
         "project_id": current_project_id,
         "project_name": current_project_name,
-        "user_id": current_user_id,
         "stats": _stats_for(graph, state),
     }
 
@@ -292,19 +289,17 @@ async def load_project(project_id: str):
     typed graph.
 
     Reads:
-    * Project metadata (name, status, user_id) from the ``projects``
-      table.
+    * Project metadata (name, status) from the ``projects`` table.
     * The typed Graph via :func:`load_graph_v2_from_disk` (or returns
       404 if no on-disk pickle exists).
 
     Side effects:
     * Sets ``graph_store[project_id]``.
-    * Updates ``current_project_id`` / ``current_project_name`` /
-      ``current_user_id``.
+    * Updates ``current_project_id`` / ``current_project_name``.
     * Replays persisted user mappings into
       ``smart_merge_state_store[project_id]``.
     """
-    global current_project_id, current_project_name, current_user_id
+    global current_project_id, current_project_name
 
     logger.info(f"Loading project: {project_id}")
 
@@ -320,7 +315,6 @@ async def load_project(project_id: str):
                 {"error": f"Project {project_id} not found"}, status_code=404
             )
 
-        user_id = project["user_id"]
         project_name = project["name"]
         project_status = project["status"]
 
@@ -363,7 +357,6 @@ async def load_project(project_id: str):
 
     current_project_id = project_id
     current_project_name = project_name
-    current_user_id = user_id
 
     # Auto-replay persisted user mappings onto the loaded graph.
     replay_result = {"users_replayed": 0, "identities_matched": 0, "identities_missing": 0}
@@ -379,7 +372,6 @@ async def load_project(project_id: str):
         "message": "Project loaded successfully",
         "project_id": project_id,
         "project_name": project_name,
-        "user_id": user_id,
         "stats": _stats_for(graph, state),
         "replay": replay_result,
     }
@@ -445,7 +437,7 @@ async def unload_project(project_id: str):
     Chunk 19: drops both ``graph_store[project_id]`` AND
     ``smart_merge_state_store[project_id]``.
     """
-    global current_project_id, current_project_name, current_user_id
+    global current_project_id, current_project_name
 
     removed_graph = graph_store.delete(project_id)
     smart_merge_state_store.delete(project_id)
@@ -453,7 +445,6 @@ async def unload_project(project_id: str):
     if current_project_id == project_id:
         current_project_id = None
         current_project_name = None
-        current_user_id = None
 
     if not removed_graph:
         return JSONResponse(
@@ -1252,14 +1243,23 @@ async def get_project_components(project_id: str):
     if isinstance(graph, JSONResponse):
         return graph
 
+    excluded_files = filter_rule_store.excluded_ids_for(project_id).get(
+        EntityKind.FILE, set()
+    )
     sum_nloc_by_file = _sum_nloc_index(graph)
     rows = []
     for component in graph.components.all():
+        kept_refs = [
+            r for r in component.file_refs
+            if not (r.kind is EntityKind.FILE and r.id in excluded_files)
+        ]
+        if not kept_refs:
+            continue
         rows.append({
             "name": component.name,
             "path_prefix": component.path_prefix,
-            "file_count": len(component.file_refs),
-            "total_loc": _component_total_loc(component.file_refs, sum_nloc_by_file),
+            "file_count": len(kept_refs),
+            "total_loc": _component_total_loc(kept_refs, sum_nloc_by_file),
             "color": None,
         })
     return rows
@@ -1288,16 +1288,20 @@ async def get_project_component_files(project_id: str):
     if isinstance(graph, JSONResponse):
         return graph
 
+    excluded_files = filter_rule_store.excluded_ids_for(project_id).get(
+        EntityKind.FILE, set()
+    )
     sum_nloc_by_file = _sum_nloc_index(graph)
     component_by_file = _file_component_name_index(graph)
 
     rows = []
     for file_ in graph.files.all():
+        if file_.id in excluded_files:
+            continue
         ref = file_.ref()
-        loc = sum_nloc_by_file.get(ref)
         rows.append({
             "path": file_.path,
-            "loc": loc,
+            "loc": sum_nloc_by_file.get(ref),
             "component_name": component_by_file.get(ref),
         })
     return rows

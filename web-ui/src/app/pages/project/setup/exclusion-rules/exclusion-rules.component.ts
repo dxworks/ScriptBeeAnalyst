@@ -11,7 +11,6 @@ const TABLE = 'project_filter_rules';
 interface FilterRuleRow {
   id: string;
   project_id: string;
-  user_id: string | null;
   entity_kind: string;
   name: string;
   nl_description: string;
@@ -56,9 +55,10 @@ export class ExclusionRulesComponent implements OnInit, OnDestroy {
 
   private async loadRules(projectId: string): Promise<void> {
     this.loading.set(true);
-    // Read directly from Supabase: RLS scopes rows to the current user, and
-    // realtime hooks into the same source of truth — keeps cache-coherency
-    // with the agent's writes without an extra round-trip through data-server.
+    // Read rule rows from Supabase (so realtime updates flow through the
+    // same source of truth), then enrich with per-rule match counts from
+    // the data-server — counts are derived state that only lives in the
+    // data-server's in-memory cache.
     const { data, error } = await this.supabase.client
       .from(TABLE)
       .select('*')
@@ -71,8 +71,31 @@ export class ExclusionRulesComponent implements OnInit, OnDestroy {
       return;
     }
 
-    this.rules.set((data ?? []).map(toDto));
+    const rows = (data ?? []).map(toDto);
+    const enriched = await this.mergeMatchCounts(projectId, rows);
+    this.rules.set(enriched);
     this.loading.set(false);
+  }
+
+  private async mergeMatchCounts(
+    projectId: string,
+    rules: FilterRuleDto[],
+  ): Promise<FilterRuleDto[]> {
+    if (rules.length === 0) return rules;
+    try {
+      const enriched = await this.dataServer.listFilterRules(projectId);
+      const counts = new Map(enriched.map(r => [r.id, r.match_count ?? null]));
+      return rules.map(r => ({ ...r, match_count: counts.get(r.id) ?? null }));
+    } catch {
+      return rules.map(r => ({ ...r, match_count: null }));
+    }
+  }
+
+  private async refreshMatchCounts(): Promise<void> {
+    const projectId = this.currentProject.loadedProjectId();
+    if (!projectId) return;
+    const enriched = await this.mergeMatchCounts(projectId, this.rules());
+    this.rules.set(enriched);
   }
 
   private subscribeRealtime(projectId: string): void {
@@ -91,6 +114,9 @@ export class ExclusionRulesComponent implements OnInit, OnDestroy {
         payload => {
           const row = toDto(payload.new as FilterRuleRow);
           this.rules.update(rs => (rs.some(r => r.id === row.id) ? rs : [row, ...rs]));
+          // New rule -> ask the data-server for its match count (and refresh
+          // any neighbouring counts in case they're stale).
+          void this.refreshMatchCounts();
         },
       )
       .on(
@@ -168,13 +194,31 @@ export class ExclusionRulesComponent implements OnInit, OnDestroy {
   entityKindLabel(kind: string): string {
     return kind.toLowerCase().split('_').map(capitalize).join(' ');
   }
+
+  matchCountLabel(rule: FilterRuleDto): string {
+    const n = rule.match_count;
+    if (n === null || n === undefined) return 'matches: —';
+    const noun = this.entityNoun(rule.entity_kind, n);
+    return `excludes ${n.toLocaleString()} ${noun}`;
+  }
+
+  private entityNoun(kind: string, count: number): string {
+    const lower = kind.toLowerCase();
+    const singular: Record<string, string> = {
+      file: 'file',
+      commit: 'commit',
+      issue: 'issue',
+      pull_request: 'pull request',
+    };
+    const base = singular[lower] ?? lower.replace(/_/g, ' ');
+    return count === 1 ? base : `${base}s`;
+  }
 }
 
 function toDto(row: FilterRuleRow): FilterRuleDto {
   return {
     id: row.id,
     project_id: row.project_id,
-    user_id: row.user_id,
     entity_kind: row.entity_kind,
     name: row.name,
     nl_description: row.nl_description,

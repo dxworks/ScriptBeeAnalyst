@@ -69,17 +69,12 @@ class RuleDSL(BaseModel):
 
 
 class FilterRule(BaseModel):
-    """In-memory mirror of one ``project_filter_rules`` row.
-
-    ``user_id`` is ``None`` for dev-mode rows persisted without a JWT
-    (see :mod:`src.filter_rules.repository`).
-    """
+    """In-memory mirror of one ``project_filter_rules`` row."""
 
     model_config = ConfigDict(extra="forbid")
 
     id: str
     project_id: str
-    user_id: Optional[str] = None
     entity_kind: EntityKind
     name: str
     nl_description: str

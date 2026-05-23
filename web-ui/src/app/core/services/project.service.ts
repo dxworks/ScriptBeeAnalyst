@@ -1,8 +1,7 @@
 import { Injectable, signal, computed } from '@angular/core';
 import { RealtimeChannel } from '@supabase/supabase-js';
 import { SupabaseService } from './supabase.service';
-import { AuthService } from './auth.service';
-import { Project, ProjectStatus, CreateProjectDto, UpdateProjectDto, SerializedFile } from '../models/project.model';
+import { Project, ProjectStatus, CreateProjectDto, UpdateProjectDto } from '../models/project.model';
 
 const BUCKET_NAME = 'serialized-files';
 
@@ -20,10 +19,7 @@ export class ProjectService {
   readonly error = this.errorSignal.asReadonly();
   readonly projectCount = computed(() => this.projectsSignal().length);
 
-  constructor(
-    private supabase: SupabaseService,
-    private authService: AuthService
-  ) {}
+  constructor(private supabase: SupabaseService) {}
 
   async loadProjects(): Promise<void> {
     this.loadingSignal.set(true);
@@ -51,19 +47,12 @@ export class ProjectService {
   async createProject(dto: CreateProjectDto): Promise<Project | null> {
     this.errorSignal.set(null);
 
-    const user = this.authService.user();
-    if (!user) {
-      this.errorSignal.set('User not authenticated');
-      return null;
-    }
-
     try {
       const { data, error } = await this.supabase.client
         .from('projects')
         .insert({
           name: dto.name,
           description: dto.description ?? null,
-          user_id: user.id,
           status: 'draft',
         })
         .select()
@@ -74,7 +63,6 @@ export class ProjectService {
         return null;
       }
 
-      // Add to local state
       this.projectsSignal.update(projects => [data, ...projects]);
       return data;
     } catch (err) {
@@ -102,7 +90,6 @@ export class ProjectService {
         return null;
       }
 
-      // Update local state
       this.projectsSignal.update(projects =>
         projects.map(p => (p.id === id ? data : p))
       );
@@ -117,7 +104,6 @@ export class ProjectService {
     this.errorSignal.set(null);
 
     try {
-      // First, get all files associated with this project to delete from storage
       const { data: files, error: filesError } = await this.supabase.client
         .from('serialized_files')
         .select('storage_path')
@@ -128,7 +114,6 @@ export class ProjectService {
         return false;
       }
 
-      // Delete files from storage if any exist
       if (files && files.length > 0) {
         const storagePaths = files.map((f: { storage_path: string }) => f.storage_path);
         const { error: storageError } = await this.supabase.client.storage
@@ -141,7 +126,6 @@ export class ProjectService {
         }
       }
 
-      // Now delete the project (serialized_files entries cascade automatically)
       const { error } = await this.supabase.client
         .from('projects')
         .delete()
@@ -152,7 +136,6 @@ export class ProjectService {
         return false;
       }
 
-      // Remove from local state
       this.projectsSignal.update(projects =>
         projects.filter(p => p.id !== id)
       );
@@ -186,7 +169,6 @@ export class ProjectService {
         return null;
       }
 
-      // Update local state
       this.projectsSignal.update(projects =>
         projects.map(p => (p.id === id ? data : p))
       );
@@ -198,38 +180,21 @@ export class ProjectService {
   }
 
   /**
-   * Subscribe to realtime project changes for the current user
-   * Updates local state when projects are updated externally (e.g., status changes)
+   * Subscribe to realtime project changes (all rows — single-tenant app).
    */
   subscribeToProjectChanges(): void {
-    const user = this.authService.user();
-    if (!user) {
-      console.warn('Cannot subscribe to project changes: user not authenticated');
-      return;
-    }
-
-    // Don't create duplicate subscriptions
     if (this.realtimeChannel) {
       console.warn('Realtime subscription already active');
       return;
     }
 
-    // Create a channel for projects table
     this.realtimeChannel = this.supabase.client
       .channel('projects-changes')
       .on(
         'postgres_changes',
-        {
-          event: 'UPDATE',
-          schema: 'public',
-          table: 'projects',
-          filter: `user_id=eq.${user.id}`,
-        },
+        { event: 'UPDATE', schema: 'public', table: 'projects' },
         (payload) => {
-          console.log('Project updated:', payload.new);
           const updatedProject = payload.new as Project;
-
-          // Update local state with the new data
           this.projectsSignal.update(projects =>
             projects.map(p => (p.id === updatedProject.id ? updatedProject : p))
           );
@@ -237,17 +202,9 @@ export class ProjectService {
       )
       .on(
         'postgres_changes',
-        {
-          event: 'INSERT',
-          schema: 'public',
-          table: 'projects',
-          filter: `user_id=eq.${user.id}`,
-        },
+        { event: 'INSERT', schema: 'public', table: 'projects' },
         (payload) => {
-          console.log('Project inserted:', payload.new);
           const newProject = payload.new as Project;
-
-          // Add to local state if not already present
           this.projectsSignal.update(projects => {
             if (projects.some(p => p.id === newProject.id)) {
               return projects;
@@ -258,36 +215,21 @@ export class ProjectService {
       )
       .on(
         'postgres_changes',
-        {
-          event: 'DELETE',
-          schema: 'public',
-          table: 'projects',
-          filter: `user_id=eq.${user.id}`,
-        },
+        { event: 'DELETE', schema: 'public', table: 'projects' },
         (payload) => {
-          console.log('Project deleted:', payload.old);
           const deletedProject = payload.old as Project;
-
-          // Remove from local state
           this.projectsSignal.update(projects =>
             projects.filter(p => p.id !== deletedProject.id)
           );
         }
       )
-      .subscribe((status) => {
-        console.log('Realtime subscription status:', status);
-      });
+      .subscribe();
   }
 
-  /**
-   * Unsubscribe from realtime project changes
-   * Clean up when component is destroyed or user logs out
-   */
   unsubscribeFromProjectChanges(): void {
     if (this.realtimeChannel) {
       this.supabase.client.removeChannel(this.realtimeChannel);
       this.realtimeChannel = null;
-      console.log('Realtime subscription removed');
     }
   }
 }

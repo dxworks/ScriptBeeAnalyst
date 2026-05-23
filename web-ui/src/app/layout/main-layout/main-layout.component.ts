@@ -1,6 +1,5 @@
 import { Component, OnDestroy, OnInit, computed } from '@angular/core';
 import { RouterOutlet, RouterLink, RouterLinkActive } from '@angular/router';
-import { AuthService } from '../../core/services/auth.service';
 import { CurrentProjectService } from '../../core/services/current-project.service';
 import { ThemeToggleComponent } from '../../shared/components/theme-toggle/theme-toggle.component';
 
@@ -16,10 +15,7 @@ export class MainLayoutComponent implements OnInit, OnDestroy {
   readonly loadedProjectName;
   readonly indicatorLabel;
 
-  constructor(
-    private authService: AuthService,
-    public currentProject: CurrentProjectService,
-  ) {
+  constructor(public currentProject: CurrentProjectService) {
     this.loadedProjectId = this.currentProject.loadedProjectId;
     this.loadedProjectName = this.currentProject.loadedProjectName;
     this.indicatorLabel = computed(() => this.loadedProjectName() ?? 'Project');
@@ -31,9 +27,5 @@ export class MainLayoutComponent implements OnInit, OnDestroy {
 
   ngOnDestroy(): void {
     this.currentProject.stopPolling();
-  }
-
-  onLogout(): void {
-    this.authService.signOut();
   }
 }

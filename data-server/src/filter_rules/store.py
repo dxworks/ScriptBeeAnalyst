@@ -19,7 +19,7 @@ from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Set
 
 from src.common.kernel import EntityKind
-from src.filter_rules.engine import compute_excluded_ids
+from src.filter_rules.engine import compute_excluded_ids, compute_rule_match_counts
 from src.filter_rules.models import FilterRule
 from src.filter_rules.repository import FilterRuleRepository
 from src.graph_store import graph_store
@@ -30,10 +30,12 @@ LOG = get_logger(__name__)
 
 @dataclass
 class ProjectFilterState:
-    """Cached rules + per-kind excluded ids for one project."""
+    """Cached rules + per-kind excluded ids + per-rule match counts for one project."""
 
     rules: List[FilterRule] = field(default_factory=list)
     excluded_ids: Dict[EntityKind, Set[str]] = field(default_factory=dict)
+    # rule.id -> match count. Empty when no graph is loaded for the project.
+    match_counts: Dict[str, int] = field(default_factory=dict)
 
 
 class FilterRuleStore:
@@ -50,10 +52,15 @@ class FilterRuleStore:
         """Reload from Supabase and recompute excluded ids against the loaded graph."""
         rules = self._repository.list_for_project(project_id)
         graph = graph_store.get(project_id)
-        excluded: Dict[EntityKind, Set[str]] = (
-            compute_excluded_ids(graph, rules) if graph is not None else {}
+        if graph is not None:
+            excluded = compute_excluded_ids(graph, rules)
+            match_counts = compute_rule_match_counts(graph, rules)
+        else:
+            excluded = {}
+            match_counts = {}
+        state = ProjectFilterState(
+            rules=rules, excluded_ids=excluded, match_counts=match_counts
         )
-        state = ProjectFilterState(rules=rules, excluded_ids=excluded)
         with self._lock:
             self._store[project_id] = state
         LOG.info(
@@ -64,11 +71,15 @@ class FilterRuleStore:
         return state
 
     def list(self, project_id: str) -> List[FilterRule]:
+        return list(self.state(project_id).rules)
+
+    def state(self, project_id: str) -> ProjectFilterState:
+        """Return the cached state, refreshing if cold."""
         with self._lock:
-            state = self._store.get(project_id)
-        if state is None:
-            state = self.refresh(project_id)
-        return list(state.rules)
+            cached = self._store.get(project_id)
+        if cached is not None:
+            return cached
+        return self.refresh(project_id)
 
     def excluded_ids_for(
         self, project_id: str

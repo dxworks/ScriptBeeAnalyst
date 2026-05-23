@@ -32,18 +32,24 @@ ResolverFn = Callable[[Graph], Iterable[Tuple[str, object]]]
 
 
 def _file_loc_resolver(graph: Graph) -> Iterable[Tuple[str, object]]:
-    """Yield ``(file_id, sum_nloc)`` per FileMetric where ``metric_name == "sum_nloc"``.
+    """Yield ``(file_id, sum_nloc)`` for every file in the project.
 
     ``File.loc`` is not a direct attribute on :class:`File`; it lives in
     :class:`FileMetric` and we filter by ``metric_name="sum_nloc"`` per
-    :class:`MCPSandboxView.list_file_metrics`. The yielded id is the
-    file's registry id so the caller can union directly into the FILE
-    excluded set.
+    :class:`MCPSandboxView.list_file_metrics`. Files without a Lizard
+    row (binaries, generated files, anything Lizard skipped) default to
+    ``0`` — this matches the convention used by the components endpoint
+    (server.py ``get_project_component_files``) and the treemap UI,
+    which both render "no Lizard data" identically to "0 LOC". Without
+    this fallback, a rule like ``file.loc eq 0`` would miss the
+    thousands of zero-rendered files the user sees in the UI.
     """
+    sum_nloc_by_file: dict[str, object] = {}
     for fm in graph.file_metrics:
-        if fm.metric_name != "sum_nloc":
-            continue
-        yield fm.file_ref.id, fm.value
+        if fm.metric_name == "sum_nloc":
+            sum_nloc_by_file[fm.file_ref.id] = fm.value
+    for f in graph.files:
+        yield f.id, sum_nloc_by_file.get(f.id, 0)
 
 
 def _file_extension_resolver(graph: Graph) -> Iterable[Tuple[str, object]]:
@@ -235,6 +241,26 @@ def compute_excluded_ids(
     return excluded
 
 
+def compute_rule_match_counts(
+    graph: Graph, rules: Iterable[FilterRule]
+) -> Dict[str, int]:
+    """Per-rule entity match count keyed by ``rule.id``.
+
+    Independent of the union computed by :func:`compute_excluded_ids` —
+    when two rules on the same entity kind overlap, each rule's count
+    here reflects its own matches, not its incremental contribution.
+    """
+    counts: Dict[str, int] = {}
+    for rule in rules:
+        try:
+            validate_dsl(rule.dsl)
+        except FilterRuleValidationError:
+            counts[rule.id] = 0
+            continue
+        counts[rule.id] = len(_ids_matching_dsl(graph, rule.dsl))
+    return counts
+
+
 def supported_fields() -> Dict[str, List[str]]:
     """``{entity_kind_value: [field, …]}`` for diagnostics."""
     out: Dict[str, List[str]] = {}
@@ -246,6 +272,7 @@ def supported_fields() -> Dict[str, List[str]]:
 __all__ = [
     "FilterRuleValidationError",
     "compute_excluded_ids",
+    "compute_rule_match_counts",
     "supported_fields",
     "validate_dsl",
 ]

@@ -1,8 +1,4 @@
--- AppInspector tags cache: one JSONB blob per project.
--- Mirrors the lizard_file_metrics / code_structure / duplication pattern: the
--- data-server (re)computes the per-file AppInspector tag payload at project
--- load and stores the full set as a single payload row keyed by project_id so
--- subsequent loads can read without re-parsing the inputs.
+-- AppInspector tags cache: one JSONB blob per project. Single-tenant, no RLS.
 
 create table public.app_inspector_tags (
     project_id uuid primary key references public.projects(id) on delete cascade,
@@ -13,48 +9,6 @@ create table public.app_inspector_tags (
 );
 
 create index app_inspector_tags_generated_at_idx on public.app_inspector_tags (generated_at);
-
-alter table public.app_inspector_tags enable row level security;
-
-create policy "Users can view own app_inspector_tags"
-  on public.app_inspector_tags for select
-  using (
-    exists (
-      select 1 from public.projects
-      where projects.id = app_inspector_tags.project_id
-      and projects.user_id = (select auth.uid())
-    )
-  );
-
-create policy "Users can upsert own app_inspector_tags"
-  on public.app_inspector_tags for insert
-  with check (
-    exists (
-      select 1 from public.projects
-      where projects.id = app_inspector_tags.project_id
-      and projects.user_id = (select auth.uid())
-    )
-  );
-
-create policy "Users can update own app_inspector_tags"
-  on public.app_inspector_tags for update
-  using (
-    exists (
-      select 1 from public.projects
-      where projects.id = app_inspector_tags.project_id
-      and projects.user_id = (select auth.uid())
-    )
-  );
-
-create policy "Users can delete own app_inspector_tags"
-  on public.app_inspector_tags for delete
-  using (
-    exists (
-      select 1 from public.projects
-      where projects.id = app_inspector_tags.project_id
-      and projects.user_id = (select auth.uid())
-    )
-  );
 
 -- Allow AppInspector tags JSON to upload as a serialized file alongside
 -- git/github/jira/lizard/codeframe/dude_external/dude_internal/quality_issues.

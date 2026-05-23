@@ -6,16 +6,11 @@ Three endpoints under ``/projects/{project_id}/rules``:
 * ``GET``  — list active rules for a project.
 * ``DELETE /{rule_id}`` — drop a rule (the web-ui's Exclusion Rules tab).
 
-Auth is best-effort per ``extension_1.md``: when an ``Authorization:
-Bearer`` header is present we forward the JWT to a user-scoped Supabase
-client (so RLS catches dev/test mistakes); otherwise we fall through to
-the service-role client (single-tenant dev mode).
+Single-tenant local mode: no JWT, no Authorization header.
 """
 from __future__ import annotations
 
-from typing import Optional
-
-from fastapi import APIRouter, Header, HTTPException
+from fastapi import APIRouter, HTTPException
 from fastapi.responses import JSONResponse
 
 from src.filter_rules.engine import (
@@ -35,22 +30,8 @@ router = APIRouter(tags=["filter-rules"])
 _repository = FilterRuleRepository()
 
 
-def _extract_jwt(authorization: Optional[str]) -> Optional[str]:
-    if not authorization:
-        return None
-    parts = authorization.split(" ", 1)
-    if len(parts) == 2 and parts[0].lower() == "bearer":
-        return parts[1].strip() or None
-    # Bare-token form (dev clients sometimes send it without the prefix).
-    return authorization.strip() or None
-
-
 @router.post("/projects/{project_id}/rules")
-async def create_filter_rule(
-    project_id: str,
-    body: CreateFilterRuleRequest,
-    authorization: Optional[str] = Header(default=None),
-):
+async def create_filter_rule(project_id: str, body: CreateFilterRuleRequest):
     """Persist a new rule and refresh the in-memory cache."""
     try:
         validate_dsl(body.dsl)
@@ -63,11 +44,9 @@ async def create_filter_rule(
             status_code=400,
         )
 
-    jwt = _extract_jwt(authorization)
     try:
         rule: FilterRule = _repository.create(
             project_id=project_id,
-            jwt=jwt,
             dsl=body.dsl,
             name=body.name,
             nl_description=body.nl_description,
@@ -86,22 +65,21 @@ async def create_filter_rule(
 
 @router.get("/projects/{project_id}/rules")
 async def list_filter_rules(project_id: str):
-    rules = filter_rule_store.list(project_id)
-    return {
-        "project_id": project_id,
-        "rules": [r.model_dump(mode="json") for r in rules],
-    }
+    state = filter_rule_store.state(project_id)
+    rules = []
+    for r in state.rules:
+        row = r.model_dump(mode="json")
+        # match_count is None when no graph is loaded for the project —
+        # the UI renders an em-dash in that case rather than a misleading 0.
+        row["match_count"] = state.match_counts.get(r.id)
+        rules.append(row)
+    return {"project_id": project_id, "rules": rules}
 
 
 @router.delete("/projects/{project_id}/rules/{rule_id}")
-async def delete_filter_rule(
-    project_id: str,
-    rule_id: str,
-    authorization: Optional[str] = Header(default=None),
-):
-    jwt = _extract_jwt(authorization)
+async def delete_filter_rule(project_id: str, rule_id: str):
     try:
-        deleted = _repository.delete(project_id=project_id, jwt=jwt, rule_id=rule_id)
+        deleted = _repository.delete(project_id=project_id, rule_id=rule_id)
     except Exception as exc:  # noqa: BLE001
         LOG.exception("delete_filter_rule failed")
         raise HTTPException(status_code=500, detail=f"failed to delete rule: {exc}")
