@@ -50,6 +50,22 @@
   gap: 0.4rem;
 }
 
+// Wrap around the Save button so the "this can take a while" hint can sit
+// directly under it without disturbing the surrounding flex row. The wrap
+// stacks vertically; the button stays the same size.
+.save-pill-wrap {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 0.25rem;
+}
+
+.save-pill-hint {
+  font-size: 0.7rem;
+  color: var(--color-text-secondary);
+  white-space: nowrap;
+}
+
 .discard-pill {
   // The discard action is destructive-ish but lightweight — render in the
   // ghost tone so it doesn't fight the primary Save pill.

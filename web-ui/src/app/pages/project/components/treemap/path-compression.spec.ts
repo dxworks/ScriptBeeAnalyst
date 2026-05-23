@@ -148,6 +148,30 @@ describe('compressSingleChildChains', () => {
     assert.deepEqual(twice, once);
   });
 
+  it('allows snapshotting a bucketName on the compressed root that survives compression', () => {
+    // Regression for the F3 colormap bug: a depth-1 bucket whose top folder
+    // shares the component name (e.g. component `zeppelin-display` with all
+    // files under `zeppelin-display/...`) compresses to
+    // `zeppelin-display/zeppelin-display`. The treemap snapshots the
+    // canonical name into `bucketName` AFTER compression so colormap
+    // lookups, the `data-component-name` DOM attribute, and the
+    // contextMenu emit all see the original name.
+    const tree = folder('zeppelin-display', [
+      folder('zeppelin-display', [
+        file('foo.ts', 'zeppelin-display/zeppelin-display/foo.ts'),
+        file('bar.ts', 'zeppelin-display/zeppelin-display/bar.ts'),
+      ]),
+    ]);
+    const compressed = compressSingleChildChains(tree) as FolderNode;
+    // Compression folds the two single-child folders into one composite.
+    assert.equal(compressed.name, 'zeppelin-display/zeppelin-display');
+    // bucketName isn't set by the helper itself — the treemap sets it on
+    // the depth-1 root post-compression. Once set, it's a normal property.
+    compressed.bucketName = 'zeppelin-display';
+    assert.equal(compressed.bucketName, 'zeppelin-display');
+    assert.equal(compressed.name, 'zeppelin-display/zeppelin-display');
+  });
+
   it('does not mutate the input tree', () => {
     const inner = folder('inner', [file('deep.ts', 'src/inner/deep.ts')]);
     const tree = folder('src', [inner]);

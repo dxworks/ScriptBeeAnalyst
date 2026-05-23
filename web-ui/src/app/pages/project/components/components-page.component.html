@@ -25,19 +25,32 @@
         >
           Discard
         </button>
-        <button
-          type="button"
-          class="btn btn-primary save-pill"
-          [disabled]="saveInProgress()"
-          (click)="onSaveChanges()"
-        >
+        <!-- The rebuild runs server-side on the request thread, so wait times
+             scale with project size (~17 min on Zeppelin). The label widens
+             during the in-flight state and a small subtext sits below to set
+             the right expectation — without it the user reads "Saving…" as
+             a few seconds and thinks the page has hung. -->
+        <div class="save-pill-wrap">
+          <button
+            type="button"
+            class="btn btn-primary save-pill"
+            [class.in-progress]="saveInProgress()"
+            [disabled]="saveInProgress()"
+            (click)="onSaveChanges()"
+          >
+            @if (saveInProgress()) {
+              <span class="spinner-inline" aria-hidden="true"></span>
+              Rebuilding graph…
+            } @else {
+              Save changes
+            }
+          </button>
           @if (saveInProgress()) {
-            <span class="spinner-inline" aria-hidden="true"></span>
-            Saving…
-          } @else {
-            Save changes
+            <span class="save-pill-hint" aria-live="polite">
+              This can take several minutes for large projects.
+            </span>
           }
-        </button>
+        </div>
       }
     </div>
   </header>

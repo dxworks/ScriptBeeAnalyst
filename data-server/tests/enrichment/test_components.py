@@ -92,6 +92,32 @@ def test_other_component_for_orphan_files_with_explicit_mapping():
     assert resolver.resolve("README") == OTHER_COMPONENT
 
 
+def test_resolve_strips_project_qualifier_from_file_id():
+    """File IDs in the typed Graph come as ``<project>::<path>``; curated
+    mappings carry bare paths. ``resolve`` must agree on either input.
+    """
+    mapping = ComponentMapping(components={
+        "livy": ComponentSpec(path_prefix="livy/src/main/"),
+    })
+    resolver = ComponentResolver(mapping)
+
+    qualified = "zeppelin::livy/src/main/java/Foo.java"
+    bare = "livy/src/main/java/Foo.java"
+    assert resolver.resolve(qualified) == resolver.resolve(bare) == "livy"
+
+    # Heuristic top-folder fallback must also strip the qualifier — otherwise
+    # the fallback name would include ``zeppelin::``.
+    heuristic = ComponentResolver(ComponentMapping())
+    assert heuristic.resolve("zeppelin::livy/foo.py") == "livy"
+
+    # A path with a literal ``::`` deeper in still works (only the first
+    # qualifier is stripped).
+    weird = ComponentResolver(ComponentMapping(components={
+        "ns": ComponentSpec(path_prefix="ns::inner/"),
+    }))
+    assert weird.resolve("proj::ns::inner/x.py") == "ns"
+
+
 def test_load_component_mapping_missing_returns_empty(tmp_path):
     m = load_component_mapping(str(tmp_path / "does-not-exist.json"))
     assert m.is_empty()

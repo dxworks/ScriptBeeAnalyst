@@ -130,13 +130,20 @@ class ComponentResolver:
     def resolve(self, file_id: Optional[str]) -> Optional[str]:
         if not file_id:
             return None
+        # Bare-path normalization: file IDs in the typed Graph carry a
+        # ``<project>::<path>`` qualifier, while curated mappings persisted via
+        # ``PUT /projects/{id}/component-mapping`` carry bare paths. Strip the
+        # first ``::`` segment so prefix matches (and the heuristic top-folder
+        # fallback below) work for either input shape. ``split("::", 1)``
+        # leaves any literal ``::`` further into the path untouched.
+        normalized = file_id.split("::", 1)[1] if "::" in file_id else file_id
         for prefix, name in self._prefixes:
-            if file_id.startswith(prefix):
+            if normalized.startswith(prefix):
                 return name
-        top = top_folder_of(file_id)
+        top = top_folder_of(normalized)
         if top is None:
             return None
-        if "/" not in file_id and not self._mapping.is_empty():
+        if "/" not in normalized and not self._mapping.is_empty():
             return OTHER_COMPONENT
         return top
 

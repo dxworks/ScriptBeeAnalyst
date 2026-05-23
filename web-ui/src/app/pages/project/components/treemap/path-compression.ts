@@ -28,6 +28,12 @@ export type FolderNode = {
    *  a composite label like `users/retrievers/dto`. */
   name: string;
   children: TreeNode[];
+  /** Canonical component name — set only on bucket-root nodes (depth-1 in
+   *  the treemap). Survives path-compression so the colormap lookup / DOM
+   *  data attribute / context-menu emit can read the bucket identity even
+   *  when `name` has been folded into a composite label like
+   *  `zeppelin-display/zeppelin-display`. */
+  bucketName?: string;
 };
 
 export type TreeNode = FileNode | FolderNode;

@@ -196,6 +196,14 @@ export class ComponentsTreemapComponent {
       // approach but materialise nodes via a recursive walk so that
       // compressSingleChildChains can run on a clean tree.
       const compressed = compressSingleChildChains(tree) as FolderNode;
+      // Snapshot the canonical bucket identity on the depth-1 root AFTER
+      // compression. Compression can fold the bucket folder with its only
+      // child (e.g. component `zeppelin-display` whose files all live under
+      // `zeppelin-display/...` becomes `zeppelin-display/zeppelin-display`),
+      // which would otherwise corrupt the name used for colormap lookups
+      // and the context-menu emit. `bucketName` holds the original name and
+      // is never rewritten.
+      compressed.bucketName = name;
       rootChildren.push(compressed);
     }
     // Any extra buckets that aren't in `components` (defensive — should be
@@ -203,7 +211,9 @@ export class ComponentsTreemapComponent {
     for (const [name, bucket] of buckets) {
       if (seen.has(name)) continue;
       const tree = this.buildFolderTree(name, bucket);
-      rootChildren.push(compressSingleChildChains(tree));
+      const compressed = compressSingleChildChains(tree) as FolderNode;
+      compressed.bucketName = name;
+      rootChildren.push(compressed);
     }
 
     const root: FolderNode = {
@@ -248,10 +258,14 @@ export class ComponentsTreemapComponent {
       .attr('transform', (d) => `translate(${d.x0},${d.y0})`);
 
     // Component-level groups (depth 1) carry the canonical component name on
-    // a dataset attribute so F4 can find them in the DOM if needed.
+    // a dataset attribute so F4 can find them in the DOM if needed. Read
+    // from `bucketName` (set in the construction loop above) so the value
+    // survives path-compression of single-child chains at the bucket root.
     cell
       .filter((d) => d.depth === 1)
-      .attr('data-component-name', (d) => d.data.name);
+      .attr('data-component-name', (d) =>
+        d.data.kind === 'folder' ? d.data.bucketName ?? d.data.name : d.data.name,
+      );
 
     cell
       .append('rect')
@@ -395,8 +409,11 @@ export class ComponentsTreemapComponent {
 
   /**
    * Walk up from the descendant to depth-1 (the component bucket) to find
-   * which component this rect belongs to. The component name lives on the
-   * top-level folder node's `name`.
+   * which component this rect belongs to. The canonical name lives on the
+   * top-level folder node's `bucketName` (snapshot at construction time so
+   * it survives path-compression of single-child chains at the bucket root).
+   * Falls back to `name` for safety; the construction loop always sets
+   * `bucketName` for depth-1 folders.
    */
   private componentForDescendant(
     d: d3.HierarchyRectangularNode<HierarchyDatum>,
@@ -405,7 +422,10 @@ export class ComponentsTreemapComponent {
     while (cur && cur.depth > 1) {
       cur = cur.parent;
     }
-    return cur?.data?.name ?? '';
+    const data = cur?.data;
+    if (!data) return '';
+    if (data.kind === 'folder' && data.bucketName) return data.bucketName;
+    return data.name ?? '';
   }
 
   private fillForNode(
