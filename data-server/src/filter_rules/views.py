@@ -1,39 +1,36 @@
-"""Wrap :class:`MCPSandboxView` so reads skip excluded entities.
+"""Filter-rules layer: a subclass of :class:`MCPSandboxView` whose
+registry properties hide excluded entities.
 
-Three wrapper classes carry the work:
+Two layers:
 
 * :class:`FilteredRegistry`         — typed entity registries (commits, files, …).
 * :class:`FilteredTagRegistry`      — :class:`TraitRegistry`, :class:`ClassifierRegistry`.
 * :class:`FilteredRelationRegistry` — :class:`RelationRegistry` (dual source/target check).
 
-The view also intercepts ``graph.components`` to strip excluded FILE
-refs from each component's :attr:`Component.file_refs`, dropping the
-component entirely when it goes empty.
+:class:`FilteredSandboxView` inherits from :class:`MCPSandboxView` and
+overrides only the registry properties (``commits`` / ``files`` /
+``issues`` / ``pull_requests`` / ``traits`` / ``classifiers`` /
+``relations`` / ``components`` / ``file_metrics``). Helpers on the base
+view (``tags_for``, ``find_files_with_trait``, ``cochange_neighbors``,
+``list_file_metrics``, summary helpers, …) route through ``self.<name>``
+and inherit filtering automatically.
 
-Construction is per-request — keep it cheap. The wrappers hold references
-to the underlying registry and to the excluded-ids map; iteration filters
-on the fly with O(N) scans (N = entity count of that registry).
+Components are special-cased: each :class:`Component` is returned as a
+copy with :attr:`Component.file_refs` stripped of excluded FILE ids;
+components that lose every member are dropped from the view.
 """
 from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any, Dict, Iterator, List, Optional, Set
 
 from src.common.kernel import EntityKind, EntityRef
+from src.sandbox.inject import MCPSandboxView
 
 if TYPE_CHECKING:
-    from src.common.domains.components.models import Component
     from src.common.kernel.graph import Graph
     from src.common.kernel.registry import Registry
-    from src.enrichment.relations.registries import RelationRegistry
-    from src.enrichment.tags.registries import (
-        ClassifierRegistry,
-        TraitRegistry,
-    )
-    from src.sandbox import MCPSandboxView
 
 
-# Stand-in tuple for "missing key" returns from multi-key indexes — same
-# empty-tuple sentinel the kernel :class:`Index` uses.
 _EMPTY: tuple = tuple()
 
 
@@ -49,13 +46,19 @@ def _ref_is_excluded(
     return ref.id in bucket
 
 
-class _FilteredIndex:
-    """Wrap a kernel :class:`Index` so bucket reads drop excluded entities.
+def _declared_index_names(registry: Any) -> Set[str]:
+    """Index names declared on the registry class via ``IndexSpec``.
 
-    Only the read surface used by ``MCPSandboxView`` (``__getitem__``,
-    ``get``, ``keys``, ``__contains__``, iteration) is implemented; the
-    private ``_add`` / ``_remove`` mutators stay on the wrapped index.
+    Uses the public ``Registry.indexes`` ClassVar (see
+    ``data-server/src/common/kernel/registry.py``) so we don't depend on
+    the index instance's private ``_add`` symbol.
     """
+    specs = getattr(type(registry), "indexes", None) or []
+    return {spec.name for spec in specs}
+
+
+class _FilteredIndex:
+    """Wrap a kernel :class:`Index` so bucket reads drop excluded entities."""
 
     __slots__ = ("_index", "_excluded_ids")
 
@@ -66,7 +69,6 @@ class _FilteredIndex:
     def _filter_entities(self, value: Any) -> Any:
         if value is None:
             return None
-        # multi-key buckets are tuples; multi=False returns a single entity
         if isinstance(value, tuple):
             return tuple(
                 e for e in value if getattr(e, "id", None) not in self._excluded_ids
@@ -95,11 +97,12 @@ class _FilteredIndex:
 class FilteredRegistry:
     """Read-only view of a typed :class:`Registry` skipping excluded ids."""
 
-    __slots__ = ("_registry", "_excluded_ids")
+    __slots__ = ("_registry", "_excluded_ids", "_index_names")
 
     def __init__(self, registry: "Registry", excluded_ids: Set[str]) -> None:
         self._registry = registry
         self._excluded_ids = excluded_ids
+        self._index_names = _declared_index_names(registry)
 
     def get(self, id: str):
         if id in self._excluded_ids:
@@ -131,18 +134,14 @@ class FilteredRegistry:
         return id in self._registry
 
     def __getattr__(self, name: str) -> Any:
-        # Wrap declared indexes; otherwise read-through. Index access is the
-        # interesting hot path — ``commits.by_author[ref]`` must skip
-        # excluded commits without the caller noticing.
-        attr = getattr(self._registry, name)
-        # Heuristic: registry indexes have ``_add`` / ``_remove`` and a ``name`` attribute.
-        if (
-            hasattr(attr, "__getitem__")
-            and hasattr(attr, "keys")
-            and hasattr(attr, "_add")
-        ):
-            return _FilteredIndex(attr, self._excluded_ids)
-        return attr
+        # Don't recurse on slot attribute access during __init__.
+        if name in ("_registry", "_excluded_ids", "_index_names"):
+            raise AttributeError(name)
+        if name in self._index_names:
+            return _FilteredIndex(
+                getattr(self._registry, name), self._excluded_ids
+            )
+        return getattr(self._registry, name)
 
 
 class FilteredTagRegistry:
@@ -152,13 +151,14 @@ class FilteredTagRegistry:
     (per the v1 strict rule — no cascade beyond direct target).
     """
 
-    __slots__ = ("_registry", "_excluded")
+    __slots__ = ("_registry", "_excluded", "_index_names")
 
     def __init__(
         self, registry: Any, excluded: Dict[EntityKind, Set[str]]
     ) -> None:
         self._registry = registry
         self._excluded = excluded
+        self._index_names = _declared_index_names(registry)
 
     def _keep(self, tag: Any) -> bool:
         target = getattr(tag, "target", None)
@@ -203,16 +203,13 @@ class FilteredTagRegistry:
         )
 
     def __getattr__(self, name: str) -> Any:
-        attr = getattr(self._registry, name)
-        if (
-            hasattr(attr, "__getitem__")
-            and hasattr(attr, "keys")
-            and hasattr(attr, "_add")
-        ):
-            # An index keyed by EntityRef (by_target) needs filtering by
-            # both bucket-key (the target ref) and by tag identity.
-            return _FilteredTagIndex(attr, self._excluded)
-        return attr
+        if name in ("_registry", "_excluded", "_index_names"):
+            raise AttributeError(name)
+        if name in self._index_names:
+            return _FilteredTagIndex(
+                getattr(self._registry, name), self._excluded
+            )
+        return getattr(self._registry, name)
 
 
 class _FilteredTagIndex:
@@ -233,7 +230,6 @@ class _FilteredTagIndex:
         return not _ref_is_excluded(target, self._excluded)
 
     def __getitem__(self, key: Any) -> Any:
-        # Fast path: the by_target index uses an EntityRef key.
         if isinstance(key, EntityRef) and _ref_is_excluded(key, self._excluded):
             return _EMPTY
         value = self._index[key]
@@ -270,13 +266,14 @@ class FilteredRelationRegistry:
     an excluded entity (strict — no cascade beyond the relation itself).
     """
 
-    __slots__ = ("_registry", "_excluded")
+    __slots__ = ("_registry", "_excluded", "_index_names")
 
     def __init__(
-        self, registry: "RelationRegistry", excluded: Dict[EntityKind, Set[str]]
+        self, registry: Any, excluded: Dict[EntityKind, Set[str]]
     ) -> None:
         self._registry = registry
         self._excluded = excluded
+        self._index_names = _declared_index_names(registry)
 
     def _keep(self, rel: Any) -> bool:
         return not (
@@ -316,14 +313,13 @@ class FilteredRelationRegistry:
         return tuple(r for r in self._registry.for_target(ref) if self._keep(r))
 
     def __getattr__(self, name: str) -> Any:
-        attr = getattr(self._registry, name)
-        if (
-            hasattr(attr, "__getitem__")
-            and hasattr(attr, "keys")
-            and hasattr(attr, "_add")
-        ):
-            return _FilteredRelationIndex(attr, self._excluded)
-        return attr
+        if name in ("_registry", "_excluded", "_index_names"):
+            raise AttributeError(name)
+        if name in self._index_names:
+            return _FilteredRelationIndex(
+                getattr(self._registry, name), self._excluded
+            )
+        return getattr(self._registry, name)
 
 
 class _FilteredRelationIndex:
@@ -349,11 +345,8 @@ class _FilteredRelationIndex:
         return value if self._keep(value) else None
 
     def __getitem__(self, key: Any) -> Any:
-        # Short-circuit by_source/by_target buckets whose key is an
-        # excluded EntityRef — no need to walk the bucket.
         if isinstance(key, EntityRef) and _ref_is_excluded(key, self._excluded):
             return _EMPTY
-        # by_pair keys are (source, target) tuples of EntityRef.
         if (
             isinstance(key, tuple)
             and len(key) == 2
@@ -404,7 +397,6 @@ class _FilteredComponents:
         ]
         if not kept_refs:
             return None
-        # Copy so we don't mutate the underlying entity.
         return component.model_copy(update={"file_refs": kept_refs})
 
     def get(self, id: str):
@@ -435,92 +427,95 @@ class _FilteredComponents:
         return getattr(self._registry, name)
 
 
-class FilteredSandboxView:
-    """Wrap :class:`MCPSandboxView` so every read drops excluded entities.
+# Map view-property name -> the EntityKind whose excluded-id set we apply.
+# Only entries whose kind is a v1 target (FILE/COMMIT/ISSUE/PULL_REQUEST)
+# can ever be active; the wider list is here so adding a new rule-supported
+# kind later only takes an engine entry, not a view edit.
+_FILTERED_PROPERTIES: Dict[str, EntityKind] = {
+    "commits": EntityKind.COMMIT,
+    "files": EntityKind.FILE,
+    "issues": EntityKind.ISSUE,
+    "pull_requests": EntityKind.PULL_REQUEST,
+}
 
-    The wrapper holds references to the underlying view + the excluded-ids
-    map; it overrides the four explicit registry properties
-    (``commits`` / ``files`` / ``issues`` / ``pull_requests``) and
-    intercepts ``__getattr__`` to wrap any other registry (or the
-    components surface) the agent reaches for.
+
+class FilteredSandboxView(MCPSandboxView):
+    """A :class:`MCPSandboxView` whose registry properties hide excluded entities.
+
+    Subclassing buys us automatic helper filtering: every helper on
+    :class:`MCPSandboxView` reads through ``self.<registry>``, so an
+    override of ``self.commits`` etc. transparently filters the helper's
+    output.
     """
 
-    _ENTITY_KIND_BY_REGISTRY = {
-        "commits": EntityKind.COMMIT,
-        "files": EntityKind.FILE,
-        "issues": EntityKind.ISSUE,
-        "pull_requests": EntityKind.PULL_REQUEST,
-        "changes": EntityKind.CHANGE,
-        "hunks": EntityKind.HUNK,
-        "git_accounts": EntityKind.GIT_ACCOUNT,
-        "jira_users": EntityKind.JIRA_USER,
-        "github_users": EntityKind.GITHUB_USER,
-        "issue_statuses": EntityKind.ISSUE_STATUS,
-        "issue_types": EntityKind.ISSUE_TYPE,
-        "reviews": EntityKind.REVIEW,
-        "review_comments": EntityKind.REVIEW_COMMENT,
-        "github_commits": EntityKind.GITHUB_COMMIT,
-        "code_types": EntityKind.CODE_TYPE,
-        "code_methods": EntityKind.CODE_METHOD,
-        "code_fields": EntityKind.CODE_FIELD,
-        "code_refs": EntityKind.CODE_REF,
-        "file_metrics": EntityKind.FILE_METRIC,
-        "duplications": EntityKind.DUPLICATION_PAIR,
-        "quality_issues": EntityKind.QUALITY_ISSUE,
-    }
+    # MCPSandboxView declares __slots__; we add our own.
+    __slots__ = ("_excluded",)
 
     def __init__(
         self,
-        inner: "MCPSandboxView",
+        graph: "Graph",
         excluded_ids: Dict[EntityKind, Set[str]],
     ) -> None:
-        self._inner = inner
+        super().__init__(graph)
         self._excluded = {k: set(v) for k, v in excluded_ids.items()}
 
     # ------------------------------------------------------------------
-    # Explicit registry properties — direct overrides of the four
-    # ``MCPSandboxView`` properties documented in §11 of the plan.
+    # Filter-aware registry overrides.
     # ------------------------------------------------------------------
     @property
     def commits(self):
-        return self._wrap_registry("commits", self._inner.commits)
+        return self._wrap_entity_registry(EntityKind.COMMIT, self._graph.commits)
 
     @property
     def files(self):
-        return self._wrap_registry("files", self._inner.files)
+        return self._wrap_entity_registry(EntityKind.FILE, self._graph.files)
 
     @property
     def issues(self):
-        return self._wrap_registry("issues", self._inner.issues)
+        return self._wrap_entity_registry(EntityKind.ISSUE, self._graph.issues)
 
     @property
     def pull_requests(self):
-        return self._wrap_registry("pull_requests", self._inner.pull_requests)
+        return self._wrap_entity_registry(
+            EntityKind.PULL_REQUEST, self._graph.pull_requests
+        )
 
-    # ------------------------------------------------------------------
-    # Components — special-case: filter file_refs inside each component.
-    # ------------------------------------------------------------------
+    @property
+    def traits(self):
+        return FilteredTagRegistry(self._graph.traits, self._excluded)
+
+    @property
+    def classifiers(self):
+        return FilteredTagRegistry(self._graph.classifiers, self._excluded)
+
+    @property
+    def relations(self):
+        return FilteredRelationRegistry(self._graph.relations, self._excluded)
+
     @property
     def components(self):
         return _FilteredComponents(
-            self._inner._graph.components,
+            self._graph.components,
             self._excluded.get(EntityKind.FILE, set()),
         )
 
+    @property
+    def file_metrics(self):
+        # FileMetric rows aren't a rule target in v1, but a metric whose
+        # file_ref points at an excluded file should not surface. We use a
+        # post-hoc filter on iteration / lookup.
+        excluded_files = self._excluded.get(EntityKind.FILE)
+        if not excluded_files:
+            return self._graph.file_metrics
+        return _FilteredFileMetricRegistry(self._graph.file_metrics, excluded_files)
+
     # ------------------------------------------------------------------
-    # Generic fallthrough.
+    # __getattr__ — wrap any other registry whose kind has an excluded set.
     # ------------------------------------------------------------------
     def __getattr__(self, name: str) -> Any:
-        inner = object.__getattribute__(self, "_inner")
-        attr = getattr(inner, name)
-        if name == "traits":
-            return FilteredTagRegistry(attr, self._excluded)
-        if name == "classifiers":
-            return FilteredTagRegistry(attr, self._excluded)
-        if name == "relations":
-            return FilteredRelationRegistry(attr, self._excluded)
-        # Wrap any other typed Registry by inferring its EntityKind.
-        kind = self._ENTITY_KIND_BY_REGISTRY.get(name)
+        graph = object.__getattribute__(self, "_graph")
+        attr = getattr(graph, name)
+        kind = _EXTRA_REGISTRY_KINDS.get(name)
         if kind is not None and _looks_like_registry(attr):
             excluded = self._excluded.get(kind)
             if excluded:
@@ -529,21 +524,145 @@ class FilteredSandboxView:
 
     def __repr__(self) -> str:
         return (
-            f"FilteredSandboxView(inner={self._inner!r}, "
+            f"FilteredSandboxView(project_id={self._graph.project_id!r}, "
             f"excluded_kinds={sorted(k.value for k in self._excluded)})"
         )
 
     # ------------------------------------------------------------------
     # Helpers
     # ------------------------------------------------------------------
-    def _wrap_registry(self, name: str, registry: Any) -> Any:
-        kind = self._ENTITY_KIND_BY_REGISTRY.get(name)
-        if kind is None:
-            return registry
+    def _wrap_entity_registry(self, kind: EntityKind, registry: Any) -> Any:
         excluded = self._excluded.get(kind)
         if not excluded:
             return registry
         return FilteredRegistry(registry, excluded)
+
+
+class _FilteredFileMetricRegistry:
+    """Hide :class:`FileMetric` rows whose ``file_ref`` is excluded.
+
+    FileMetric isn't a rule target itself, but its parent file may be —
+    when a FILE rule excludes a file, every metric for that file must
+    also disappear from view-time iteration.
+    """
+
+    __slots__ = ("_registry", "_excluded_files", "_index_names")
+
+    def __init__(self, registry: Any, excluded_files: Set[str]) -> None:
+        self._registry = registry
+        self._excluded_files = excluded_files
+        self._index_names = _declared_index_names(registry)
+
+    def _keep(self, fm: Any) -> bool:
+        ref = getattr(fm, "file_ref", None)
+        if ref is None:
+            return True
+        return ref.id not in self._excluded_files
+
+    def get(self, id: str):
+        fm = self._registry.get(id)
+        if fm is None:
+            return None
+        return fm if self._keep(fm) else None
+
+    def all(self):
+        return tuple(fm for fm in self._registry.all() if self._keep(fm))
+
+    def __iter__(self) -> Iterator:
+        for fm in self._registry:
+            if self._keep(fm):
+                yield fm
+
+    def __len__(self) -> int:
+        return sum(1 for _ in self.__iter__())
+
+    def __contains__(self, id: object) -> bool:
+        fm = self._registry.get(id) if hasattr(self._registry, "get") else None
+        return fm is not None and self._keep(fm)
+
+    def __getattr__(self, name: str) -> Any:
+        if name in ("_registry", "_excluded_files", "_index_names"):
+            raise AttributeError(name)
+        if name in self._index_names:
+            # by_file index keyed by EntityRef → short-circuit excluded refs.
+            return _FilteredFileMetricIndex(
+                getattr(self._registry, name), self._excluded_files
+            )
+        return getattr(self._registry, name)
+
+
+class _FilteredFileMetricIndex:
+    """Index wrapper for :class:`FileMetricRegistry` — short-circuits excluded file refs."""
+
+    __slots__ = ("_index", "_excluded_files")
+
+    def __init__(self, index: Any, excluded_files: Set[str]) -> None:
+        self._index = index
+        self._excluded_files = excluded_files
+
+    def _filter(self, value: Any) -> Any:
+        if value is None:
+            return None
+        if isinstance(value, tuple):
+            return tuple(
+                fm for fm in value
+                if getattr(fm, "file_ref", None) is None
+                or fm.file_ref.id not in self._excluded_files
+            )
+        ref = getattr(value, "file_ref", None)
+        if ref is not None and ref.id in self._excluded_files:
+            return None
+        return value
+
+    def __getitem__(self, key: Any) -> Any:
+        if (
+            isinstance(key, EntityRef)
+            and key.kind is EntityKind.FILE
+            and key.id in self._excluded_files
+        ):
+            return _EMPTY
+        return self._filter(self._index[key])
+
+    def get(self, key: Any, default: Any = None):
+        if (
+            isinstance(key, EntityRef)
+            and key.kind is EntityKind.FILE
+            and key.id in self._excluded_files
+        ):
+            return _EMPTY if default is None else default
+        value = self._index.get(key, default)
+        return self._filter(value) if value is not default else default
+
+    def keys(self):
+        return self._index.keys()
+
+    def __contains__(self, key: object) -> bool:
+        return key in self._index
+
+    def __iter__(self):
+        return iter(self._index)
+
+
+# Registries beyond the four primary entity surfaces where a v1+future
+# rule might land. Wrapped only when an excluded set exists for the kind.
+_EXTRA_REGISTRY_KINDS: Dict[str, EntityKind] = {
+    "changes": EntityKind.CHANGE,
+    "hunks": EntityKind.HUNK,
+    "git_accounts": EntityKind.GIT_ACCOUNT,
+    "jira_users": EntityKind.JIRA_USER,
+    "github_users": EntityKind.GITHUB_USER,
+    "issue_statuses": EntityKind.ISSUE_STATUS,
+    "issue_types": EntityKind.ISSUE_TYPE,
+    "reviews": EntityKind.REVIEW,
+    "review_comments": EntityKind.REVIEW_COMMENT,
+    "github_commits": EntityKind.GITHUB_COMMIT,
+    "code_types": EntityKind.CODE_TYPE,
+    "code_methods": EntityKind.CODE_METHOD,
+    "code_fields": EntityKind.CODE_FIELD,
+    "code_refs": EntityKind.CODE_REF,
+    "duplications": EntityKind.DUPLICATION_PAIR,
+    "quality_issues": EntityKind.QUALITY_ISSUE,
+}
 
 
 def _looks_like_registry(obj: Any) -> bool:

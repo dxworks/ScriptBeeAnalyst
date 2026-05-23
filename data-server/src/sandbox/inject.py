@@ -65,7 +65,23 @@ if TYPE_CHECKING:
     from src.common.domains.github.registries import PullRequestRegistry
     from src.common.domains.jira.models import Issue
     from src.common.domains.jira.registries import IssueRegistry
-    from src.common.kernel import Graph
+    from src.common.kernel import Entity, Graph
+
+
+# Map EntityKind -> the MCPSandboxView property that owns the registry.
+# Used by ``_resolve`` so the view-level override (filter-rules layer)
+# takes precedence over a direct ``graph.resolve(ref)`` call.
+_KIND_TO_VIEW_PROPERTY: dict[EntityKind, str] = {
+    EntityKind.COMMIT: "commits",
+    EntityKind.FILE: "files",
+    EntityKind.ISSUE: "issues",
+    EntityKind.PULL_REQUEST: "pull_requests",
+    EntityKind.TRAIT: "traits",
+    EntityKind.CLASSIFIER: "classifiers",
+    EntityKind.RELATION: "relations",
+    EntityKind.COMPONENT: "components",
+    EntityKind.FILE_METRIC: "file_metrics",
+}
 
 
 class MCPSandboxView:
@@ -144,6 +160,56 @@ class MCPSandboxView:
     def duplication_pairs(self):
         """Alias for duplications (legacy compat)."""
         return self._graph.duplications
+
+    # ------------------------------------------------------------------
+    # Filter-aware registry accessors.
+    #
+    # The filter-rules layer (``src.filter_rules.views.FilteredSandboxView``)
+    # subclasses this view and overrides these properties to return wrapped
+    # registries that skip excluded entities. Every helper below that reads
+    # traits / classifiers / relations / components / file_metrics goes
+    # through ``self.<name>`` (not ``self._graph.<name>``) so the override
+    # transparently filters every helper.
+    # ------------------------------------------------------------------
+    @property
+    def traits(self):
+        return self._graph.traits
+
+    @property
+    def classifiers(self):
+        return self._graph.classifiers
+
+    @property
+    def relations(self):
+        return self._graph.relations
+
+    @property
+    def components(self):
+        return self._graph.components
+
+    @property
+    def file_metrics(self):
+        return self._graph.file_metrics
+
+    def _resolve(self, ref: EntityRef) -> Optional["Entity"]:
+        """Resolve a ref through this view's registry properties.
+
+        When a subclass overrides a registry property to filter excluded
+        entities, this method honours that override — a ref pointing at
+        an excluded entity returns ``None`` even though the underlying
+        graph still holds the row.
+        """
+        registry = self._registry_for_kind(ref.kind)
+        if registry is None:
+            return self._graph.resolve(ref)
+        return registry.get(ref.id)
+
+    def _registry_for_kind(self, kind: EntityKind):
+        """Pick the view-level property that owns ``kind`` (or ``None``)."""
+        name = _KIND_TO_VIEW_PROPERTY.get(kind)
+        if name is None:
+            return None
+        return getattr(self, name, None)
 
     # ------------------------------------------------------------------
     # Read-through to the underlying graph
@@ -255,11 +321,13 @@ class MCPSandboxView:
         ``Tags.classifiers``) so snippets that iterate the result and
         early-out on traits get the same items first.
         """
-        traits: tuple[Trait, ...] = self._graph.traits.for_target(ref)
-        classifiers_by_dim: dict[str, Classifier] = (
-            self._graph.classifiers.for_target(ref)
-        )
-        classifiers: list[Classifier] = list(classifiers_by_dim.values())
+        traits_result = self.traits.for_target(ref)
+        traits: tuple[Trait, ...] = tuple(traits_result)
+        classifiers_result = self.classifiers.for_target(ref)
+        if isinstance(classifiers_result, dict):
+            classifiers: list[Classifier] = list(classifiers_result.values())
+        else:
+            classifiers = list(classifiers_result)
         return [*traits, *classifiers]
 
     def find_files_with_trait(self, name: str) -> list["File"]:
@@ -278,11 +346,11 @@ class MCPSandboxView:
         accordingly.
         """
         out: list["File"] = []
-        for trait in self._graph.traits.of_name(name):
+        for trait in self.traits.of_name(name):
             tgt = trait.target
             if tgt.kind is not EntityKind.FILE:
                 continue
-            resolved = self._graph.resolve(tgt)
+            resolved = self._resolve(tgt)
             if resolved is None:
                 continue
             out.append(resolved)  # type: ignore[arg-type]
@@ -299,11 +367,11 @@ class MCPSandboxView:
         row 10.
         """
         out: list["File"] = []
-        for classifier in self._graph.classifiers.with_value(dim, value):
+        for classifier in self.classifiers.with_value(dim, value):
             tgt = classifier.target
             if tgt.kind is not EntityKind.FILE:
                 continue
-            resolved = self._graph.resolve(tgt)
+            resolved = self._resolve(tgt)
             if resolved is None:
                 continue
             out.append(resolved)  # type: ignore[arg-type]
@@ -348,7 +416,7 @@ class MCPSandboxView:
             if isinstance(window, str) and not isinstance(window, WindowKind)
             else window
         )
-        for rel in self._graph.relations.by_source[file_ref]:
+        for rel in self.relations.by_source[file_ref]:
             if rel.relation_kind != "cochange":
                 continue
             if rel.window != win:
@@ -356,7 +424,7 @@ class MCPSandboxView:
             tgt = rel.target
             if tgt.kind is not EntityKind.FILE:
                 continue
-            resolved = self._graph.resolve(tgt)
+            resolved = self._resolve(tgt)
             if resolved is None:
                 continue
             out.append(resolved)  # type: ignore[arg-type]
@@ -528,8 +596,11 @@ class MCPSandboxView:
         # source today; the loop tolerates future tools.).
         per_file: dict[str, dict[str, float]] = {}
         sources: dict[str, str] = {}
-        for fm in self._graph.file_metrics:
+        for fm in self.file_metrics:
             file_path = fm.file_ref.id
+            # Skip metrics whose file is filtered out at the view level.
+            if self.files.get(file_path) is None:
+                continue
             bucket = per_file.setdefault(file_path, {})
             bucket[fm.metric_name] = fm.value
             sources.setdefault(file_path, fm.source)
@@ -749,7 +820,7 @@ class MCPSandboxView:
         Wraps :meth:`TraitRegistry.for_target` so callers don't have to
         reach through ``graph_data.traits.for_target(ref)``.
         """
-        traits = self._graph.traits.for_target(ref)
+        traits = self.traits.for_target(ref)
         if name is None:
             return list(traits)
         return [t for t in traits if getattr(t, "name", None) == name]
@@ -772,9 +843,9 @@ class MCPSandboxView:
         """
         rels: list[Relation] = []
         if direction in ("out", "both"):
-            rels.extend(self._graph.relations.for_source(ref))
+            rels.extend(self.relations.for_source(ref))
         if direction in ("in", "both"):
-            rels.extend(self._graph.relations.for_target(ref))
+            rels.extend(self.relations.for_target(ref))
         if direction == "both" and rels:
             # Dedup by id when a relation is both source-side and
             # target-side (self-relations, mostly).
@@ -813,9 +884,11 @@ class MCPSandboxView:
         commit↔issue regex join.
         """
         file_ref = EntityRef(kind=EntityKind.FILE, id=file_id)
+        if self.files.get(file_id) is None:
+            return {}
         return {
             fm.metric_name: fm.value
-            for fm in self._graph.file_metrics.by_file[file_ref]
+            for fm in self.file_metrics.by_file[file_ref]
         }
 
     # ------------------------------------------------------------------

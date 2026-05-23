@@ -1465,34 +1465,35 @@ async def execute_code(request: CodeRequest):
         raw_view: Optional[MCPSandboxView] = (
             MCPSandboxView(v2_graph) if v2_graph is not None else None
         )
-        if raw_view is not None and current_project_id:
-            excluded = filter_rule_store.excluded_ids_for(current_project_id, v2_graph)
+        if v2_graph is not None and current_project_id:
+            excluded = filter_rule_store.excluded_ids_for(current_project_id)
             filtered_view: Any = (
-                FilteredSandboxView(raw_view, excluded) if excluded else raw_view
+                FilteredSandboxView(v2_graph, excluded) if excluded else raw_view
             )
         else:
             filtered_view = raw_view
+        # ``graph_data_full`` is the documented unfiltered escape hatch for
+        # "across the entire history" prompts. The bare ``graph`` global is
+        # the lower-level raw Graph — a deliberate third hatch for power
+        # users who want to bypass the MCPSandboxView surface entirely.
         exec_globals = {
             "graph_data": filtered_view,
             "graph_data_full": raw_view,
-            "graph": v2_graph,  # raw Graph still exposed for power users
-            # Free helpers for the three legacy entity-side navigations
-            # (plan §11 rows 4–6). Same names the legacy sandbox exposed;
-            # the implementations now read off the typed Graph.
+            "graph": v2_graph,
             "commit_issues": _sandbox_commit_issues,
             "issue_commits": _sandbox_issue_commits,
             "pr_commits": _sandbox_pr_commits,
-            # Bind the view's per-method helpers as top-level callables
-            # too, so legacy snippets calling ``find_files_with_trait("x")``
-            # without going through ``graph_data.`` still work.
+            # Bind the filtered view's per-method helpers as top-level
+            # callables so legacy snippets calling ``find_files_with_trait("x")``
+            # without going through ``graph_data.`` still inherit filtering.
             "find_files_with_trait": (
-                raw_view.find_files_with_trait if raw_view else lambda *_a, **_k: []
+                filtered_view.find_files_with_trait if filtered_view else lambda *_a, **_k: []
             ),
             "cochange_neighbors": (
-                raw_view.cochange_neighbors if raw_view else lambda *_a, **_k: []
+                filtered_view.cochange_neighbors if filtered_view else lambda *_a, **_k: []
             ),
             "overview_as_dict": (
-                raw_view.overview_as_dict if raw_view else lambda *_a, **_k: None
+                filtered_view.overview_as_dict if filtered_view else lambda *_a, **_k: None
             ),
         }
         exec(code, exec_globals)
@@ -1528,13 +1529,14 @@ async def generate_plot(request: CodeRequest):
         raw_view: Optional[MCPSandboxView] = (
             MCPSandboxView(v2_graph) if v2_graph is not None else None
         )
-        if raw_view is not None and current_project_id:
-            excluded = filter_rule_store.excluded_ids_for(current_project_id, v2_graph)
+        if v2_graph is not None and current_project_id:
+            excluded = filter_rule_store.excluded_ids_for(current_project_id)
             filtered_view: Any = (
-                FilteredSandboxView(raw_view, excluded) if excluded else raw_view
+                FilteredSandboxView(v2_graph, excluded) if excluded else raw_view
             )
         else:
             filtered_view = raw_view
+        # See /execute for the three-hatch rationale (graph_data / graph_data_full / graph).
         exec_globals = {
             "graph_data": filtered_view,
             "graph_data_full": raw_view,
@@ -1544,13 +1546,13 @@ async def generate_plot(request: CodeRequest):
             "issue_commits": _sandbox_issue_commits,
             "pr_commits": _sandbox_pr_commits,
             "find_files_with_trait": (
-                raw_view.find_files_with_trait if raw_view else lambda *_a, **_k: []
+                filtered_view.find_files_with_trait if filtered_view else lambda *_a, **_k: []
             ),
             "cochange_neighbors": (
-                raw_view.cochange_neighbors if raw_view else lambda *_a, **_k: []
+                filtered_view.cochange_neighbors if filtered_view else lambda *_a, **_k: []
             ),
             "overview_as_dict": (
-                raw_view.overview_as_dict if raw_view else lambda *_a, **_k: None
+                filtered_view.overview_as_dict if filtered_view else lambda *_a, **_k: None
             ),
         }
 
