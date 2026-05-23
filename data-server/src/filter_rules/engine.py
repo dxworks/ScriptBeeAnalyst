@@ -22,6 +22,9 @@ from typing import Callable, Dict, Iterable, List, Set, Tuple
 from src.common.kernel import EntityKind, EntityRef
 from src.common.kernel.graph import Graph
 from src.filter_rules.models import AllOf, FilterRule, Predicate, RuleDSL
+from src.logger import get_logger
+
+LOG = get_logger(__name__)
 
 
 # (entity_kind, field) -> function(graph) -> iterable[(entity_id, comparable_value)]
@@ -217,10 +220,13 @@ def compute_excluded_ids(
     for rule in rules:
         try:
             validate_dsl(rule.dsl)
-        except FilterRuleValidationError:
-            # Skip rules whose DSL is no longer satisfiable (e.g. after a
-            # schema change); the POST path already rejects on validation,
-            # so this is a defensive guard for legacy rows.
+        except FilterRuleValidationError as exc:
+            # POST path already rejects invalid DSLs; this guards legacy
+            # rows that became unsupportable after a schema change.
+            LOG.warning(
+                f"skipping filter rule {rule.id} ({rule.name!r}) "
+                f"on project {rule.project_id}: {exc}"
+            )
             continue
         matched = _ids_matching_dsl(graph, rule.dsl)
         if not matched:
