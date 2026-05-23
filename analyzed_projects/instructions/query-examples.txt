@@ -419,6 +419,66 @@ for name, count in author_counts.most_common(10):
     print(f"  {name}: {count} commits")
 ```
 
+## 11. Filtered count (default — use `graph_data`)
+
+```python
+# `graph_data` honors every active filter rule on the project.
+# Almost every question should use this view, including simple counts.
+file_count = len(graph_data.files.all())
+print(f"{file_count} files visible after filters")
+```
+
+## 12. Unfiltered escape hatch (`graph_data_full`)
+
+```python
+# Trigger phrase: "across the entire history, including stuff we filtered
+# out, how many files have we ever had?"
+#
+# Only use graph_data_full when the user explicitly invokes the whole
+# dataset ("across the entire history", "complete dataset", "ever
+# existed", "ignore the filters"). Narrate the switch to the user.
+file_count_unfiltered = len(graph_data_full.files.all())
+file_count_filtered = len(graph_data.files.all())
+hidden = file_count_unfiltered - file_count_filtered
+print(f"{file_count_unfiltered} files ever existed; {hidden} currently hidden by filters")
+```
+
+## 13. Creating a filter rule and confirming the effect
+
+```text
+User: "Exclude all files with less than 20 lines of code."
+
+Agent reasoning:
+  entity_kind     = "file"            # lowercase EntityKind value
+  predicate.field = "loc"             # File.loc resolves via FileMetric sum_nloc
+  predicate.op    = "lt"
+  predicate.value = 20
+  name            = "Tiny files (<20 LOC)"
+  nl_description  = "Exclude all files with less than 20 lines of code."
+
+MCP call:
+  create_filter_rule(
+      name="Tiny files (<20 LOC)",
+      nl_description="Exclude all files with less than 20 lines of code.",
+      entity_kind="file",
+      predicate={"field": "loc", "op": "lt", "value": 20},
+  )
+
+# Composite form (depth-1 all_of) — same shape but predicate becomes:
+#   {"all_of": [
+#       {"field": "loc", "op": "lt", "value": 20},
+#       {"field": "extension", "op": "eq", "value": ".min.js"},
+#   ]}
+```
+
+Confirm the rule is live via `execute_code`:
+
+```python
+filtered = len(graph_data.files.all())
+total = len(graph_data_full.files.all())
+print(f"{total - filtered} files now hidden by filters ({filtered} of {total} remain)")
+```
+
 ---
 
 ## Usage Notes

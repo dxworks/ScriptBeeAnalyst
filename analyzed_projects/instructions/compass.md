@@ -33,6 +33,7 @@ beyond what `list_metrics` returns, `Read` the file. Keys you'll need often:
 | Pipeline driver (what runs and in what order) | `data-server/src/enrichment/v2_pipeline.py` |
 | Threshold values | `data-server/src/enrichment/config.py` (`EnrichmentConfig`) |
 | MCP sandbox façade | `data-server/src/sandbox/{inject,helpers}.py` |
+| Filter rules (DSL, resolvers, FilteredSandboxView) | `data-server/src/filter_rules/{models,engine,store,views}.py` |
 
 ## Answering a metric question
 
@@ -85,6 +86,53 @@ Rules:
 - Do NOT mutate `graph_data` or any of its registries — shared in-memory
   state.
 - Keep output concise: summarize, aggregate, limit to top-N.
+
+## Filter rules — filtered `graph_data` vs unfiltered `graph_data_full`
+
+The sandbox exposes two views over the same Graph:
+
+- `graph_data` — the **filtered** view. Honors every active project filter
+  rule. **This is the default.** Use it for almost every question.
+- `graph_data_full` — the **unfiltered** escape hatch. Identical to
+  `graph_data` when no rules exist; otherwise it shows the raw Graph
+  without any rule applied.
+
+Use `graph_data_full` ONLY when the user explicitly invokes the entire
+dataset — phrases like "across the entire history", "in the complete
+dataset", "ever existed", "all files ever touched", "ignore the filters".
+For anything else, default to `graph_data`. When you do switch to
+`graph_data_full`, narrate it: "I'll look in the unfiltered graph for
+this one because you asked about the complete history."
+
+### Creating a rule (`create_filter_rule`)
+
+The agent is the only writer. Deletes happen in the web UI.
+
+Workflow:
+
+1. Parse the user's request. Pick exactly **one** entity_kind (lowercase
+   `EntityKind` value): `file`, `commit`, `issue`, `pull_request`.
+2. Pick exactly **one** field from the v1-supported list (paired with the
+   entity_kind):
+   - `file.loc`, `file.extension`, `file.path`
+   - `commit.author_email`, `commit.message`
+   - `issue.status`, `issue.type`
+   - `pull_request.state`, `pull_request.author`
+3. Pick an op: `lt | le | gt | ge | eq | ne | in | not_in | contains | regex`.
+4. Generate a short human `name` (e.g. "Tiny files (<20 LOC)") and store
+   the user's exact phrasing as `nl_description`.
+5. If anything is ambiguous (which field? which threshold? which kind?),
+   **ask the user in chat first**. The MCP tool does not ask.
+6. Call `create_filter_rule(name, nl_description, entity_kind, predicate)`.
+   The `predicate` is either a single leaf `{"field", "op", "value"}` or a
+   depth-1 `{"all_of": [<leaf>, <leaf>, ...]}` wrapper. No deeper nesting.
+
+After the call, run a quick `execute_code` query over `graph_data` to
+confirm the rule is live (e.g. compare `len(graph_data.files.all())` vs
+`len(graph_data_full.files.all())`) and report the impact to the user.
+
+`list_filter_rules()` returns the active rules — call it when the user
+asks "what's filtered?" or before adding a near-duplicate rule.
 
 ## Cross-entity navigation in v2
 
