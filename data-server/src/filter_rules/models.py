@@ -17,21 +17,23 @@ same strings on the wire.
 from __future__ import annotations
 
 from datetime import datetime
-from typing import List, Optional, Union
+from typing import List, Literal, Optional, Union
 
 from pydantic import BaseModel, ConfigDict, Field
 
 from src.common.kernel import EntityKind
 
 
-SupportedOp = str  # validated by engine.validate_dsl
+SupportedOp = Literal[
+    "lt", "le", "gt", "ge", "eq", "ne", "in", "not_in", "contains", "regex"
+]
 
 
 class Predicate(BaseModel):
     """A leaf comparison: ``<field> <op> <value>``.
 
     ``field`` is an entity-attribute name registered in
-    :func:`src.filter_rules.engine._resolver_for`. ``op`` is one of
+    :data:`src.filter_rules.engine._RESOLVERS`. ``op`` is one of
     ``lt`` / ``le`` / ``gt`` / ``ge`` / ``eq`` / ``ne`` / ``in`` / ``not_in``
     / ``contains`` / ``regex``. ``value`` shape depends on the op (scalar
     for the comparisons, list for ``in``/``not_in``, string for
@@ -67,13 +69,17 @@ class RuleDSL(BaseModel):
 
 
 class FilterRule(BaseModel):
-    """In-memory mirror of one ``project_filter_rules`` row."""
+    """In-memory mirror of one ``project_filter_rules`` row.
+
+    ``user_id`` is ``None`` for dev-mode rows persisted without a JWT
+    (see :mod:`src.filter_rules.repository`).
+    """
 
     model_config = ConfigDict(extra="forbid")
 
     id: str
     project_id: str
-    user_id: str
+    user_id: Optional[str] = None
     entity_kind: EntityKind
     name: str
     nl_description: str

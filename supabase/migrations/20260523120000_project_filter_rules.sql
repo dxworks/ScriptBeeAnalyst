@@ -8,11 +8,16 @@
 -- data-server uses get_user_client(jwt) on POST/DELETE so a row's user_id
 -- is auth.uid() at insert time. Realtime is enabled so the web-ui's
 -- "Exclusion Rules" tab refreshes without polling.
+--
+-- user_id is nullable: dev/standalone mode has no JWT to attribute the
+-- row to, so the data-server inserts NULL rather than impersonate the
+-- project owner. RLS policies treat NULL as "not anyone's row" — only
+-- the service-role client (used by the in-memory cache) can read them.
 
 create table public.project_filter_rules (
   id uuid primary key default uuid_generate_v4(),
   project_id uuid not null references public.projects(id) on delete cascade,
-  user_id uuid not null references auth.users(id) on delete cascade,
+  user_id uuid references auth.users(id) on delete cascade,
   entity_kind text not null,
   name text not null,
   nl_description text not null,

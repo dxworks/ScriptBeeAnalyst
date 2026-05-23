@@ -19,7 +19,6 @@ from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Set
 
 from src.common.kernel import EntityKind
-from src.common.kernel.graph import Graph
 from src.filter_rules.engine import compute_excluded_ids
 from src.filter_rules.models import FilterRule
 from src.filter_rules.repository import FilterRuleRepository
@@ -72,23 +71,19 @@ class FilterRuleStore:
         return list(state.rules)
 
     def excluded_ids_for(
-        self, project_id: str, graph: Optional[Graph] = None
+        self, project_id: str
     ) -> Dict[EntityKind, Set[str]]:
-        """Excluded ids for ``project_id`` against ``graph`` (or the loaded graph).
+        """Excluded ids for ``project_id`` from the cached refresh result.
 
-        When ``graph`` is provided AND differs from the graph the cache was
-        computed against, we recompute on the fly — the cache is still
-        keyed by ``project_id`` so the next /load triggers a refresh()
-        and resets it.
+        Computed once per :meth:`refresh` (called by ``/load``, ``/build``,
+        and every mutating router endpoint), so this read is O(rules) —
+        no registry walk on the ``/execute`` hot path.
         """
         with self._lock:
             state = self._store.get(project_id)
         if state is None:
             state = self.refresh(project_id)
-        if graph is None:
-            return {k: set(v) for k, v in state.excluded_ids.items()}
-        recomputed = compute_excluded_ids(graph, state.rules)
-        return recomputed
+        return {k: set(v) for k, v in state.excluded_ids.items()}
 
     def delete(self, project_id: str) -> None:
         with self._lock:

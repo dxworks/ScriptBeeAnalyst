@@ -1,12 +1,12 @@
 """Supabase-backed CRUD for the ``project_filter_rules`` table.
 
 Reads use the service-role client (the in-memory cache loads all rules for
-a project as one shot). Writes use a user-scoped client when the caller
-forwarded an ``Authorization: Bearer`` JWT so RLS picks up ``auth.uid()``
-for the ``user_id`` column; if no JWT was forwarded (dev/standalone mode
-— see ``extension_1.md`` §"single-tenant dev mode"), the loader falls
-through to the service-role client and reads ``user_id`` off the
-referenced project row.
+a project in one shot). Writes use a user-scoped client when an
+``Authorization: Bearer`` JWT was forwarded so RLS picks up ``auth.uid()``
+for the ``user_id`` column; without a JWT we fall through to the
+service-role client and persist ``user_id = NULL`` (dev/standalone mode
+— see ``extension_1.md`` §"single-tenant dev mode"). The migration's
+``user_id`` column is nullable so a dev-mode insert succeeds.
 """
 from __future__ import annotations
 
@@ -25,7 +25,7 @@ def _row_to_rule(row: dict) -> FilterRule:
     return FilterRule(
         id=row["id"],
         project_id=row["project_id"],
-        user_id=row["user_id"],
+        user_id=row.get("user_id"),
         entity_kind=row["entity_kind"],
         name=row["name"],
         nl_description=row["nl_description"],
@@ -56,7 +56,7 @@ class FilterRuleRepository:
         name: str,
         nl_description: str,
     ) -> FilterRule:
-        payload = {
+        payload: dict = {
             "project_id": project_id,
             "entity_kind": dsl.entity_kind.value,
             "name": name,
@@ -72,14 +72,10 @@ class FilterRuleRepository:
             if user_id is not None:
                 payload["user_id"] = user_id
         else:
+            # Dev-mode: no JWT, so we cannot attribute the row to a real
+            # user. Write user_id = NULL rather than impersonating the
+            # project owner — mis-attribution silently breaks RLS in prod.
             client = get_service_client()
-            user_id = _resolve_user_id_from_project(project_id)
-            if user_id is None:
-                raise ValueError(
-                    f"cannot resolve user_id for project {project_id}: "
-                    "no JWT forwarded and project row missing"
-                )
-            payload["user_id"] = user_id
 
         response = client.table(_TABLE).insert(payload).execute()
         rows = response.data or []
@@ -112,25 +108,6 @@ def _resolve_user_id_from_jwt(jwt: str) -> Optional[str]:
         return sub if isinstance(sub, str) else None
     except Exception as exc:  # noqa: BLE001
         LOG.warning(f"could not decode JWT sub claim: {exc}")
-        return None
-
-
-def _resolve_user_id_from_project(project_id: str) -> Optional[str]:
-    """Read ``projects.user_id`` for a project via the service client."""
-    client = get_service_client()
-    try:
-        response = (
-            client.table("projects")
-            .select("user_id")
-            .eq("id", project_id)
-            .single()
-            .execute()
-        )
-        data = response.data or {}
-        user_id = data.get("user_id")
-        return user_id if isinstance(user_id, str) else None
-    except Exception as exc:  # noqa: BLE001
-        LOG.warning(f"could not read user_id from project {project_id}: {exc}")
         return None
 
 
