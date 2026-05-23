@@ -1,0 +1,136 @@
+.exclusion-rules {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-lg);
+}
+
+.tab-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--spacing-md);
+  flex-wrap: wrap;
+
+  h2 {
+    margin: 0;
+    font-size: 1.25rem;
+  }
+}
+
+.tab-header-meta-count {
+  font-size: 0.813rem;
+  color: var(--color-text-secondary);
+  font-weight: 500;
+}
+
+.tab-body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-lg);
+}
+
+.empty-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: var(--spacing-2xl);
+  background-color: var(--color-surface-card);
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--color-border);
+  text-align: center;
+  min-height: 280px;
+  gap: var(--spacing-sm);
+
+  svg {
+    color: var(--color-text-muted);
+    opacity: 0.5;
+    margin-bottom: var(--spacing-md);
+  }
+
+  h3 {
+    margin: 0;
+    color: var(--color-text-primary);
+  }
+
+  p {
+    margin: 0;
+    max-width: 480px;
+  }
+
+  em {
+    color: var(--color-text-primary);
+    font-style: italic;
+  }
+}
+
+.rule-cards {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-md);
+}
+
+.rule-card {
+  padding: var(--spacing-lg);
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-sm);
+}
+
+.rule-card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--spacing-md);
+  flex-wrap: wrap;
+
+  .rule-name {
+    margin: 0;
+    font-size: 1rem;
+    color: var(--color-text-primary);
+  }
+}
+
+.rule-description {
+  margin: 0;
+  color: var(--color-text-secondary);
+  font-size: 0.875rem;
+  line-height: 1.45;
+}
+
+.rule-dsl {
+  display: inline-block;
+  align-self: flex-start;
+  padding: 4px 8px;
+  background-color: var(--color-navy-900);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.75rem;
+  color: var(--color-text-secondary);
+  white-space: pre-wrap;
+}
+
+.rule-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--spacing-sm);
+}
+
+.spinner-large {
+  width: 48px;
+  height: 48px;
+  border: 3px solid var(--color-border);
+  border-top-color: var(--color-accent);
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+  margin-bottom: var(--spacing-md);
+}
+
+.text-muted {
+  color: var(--color-text-muted);
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}

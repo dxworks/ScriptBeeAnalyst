@@ -1,0 +1,71 @@
+<div class="exclusion-rules">
+  <div class="tab-header">
+    <h2>Exclusion Rules</h2>
+    <span class="tab-header-meta-count">
+      @if (rules().length > 0) {
+        {{ rules().length }} active rule{{ rules().length === 1 ? '' : 's' }}
+      }
+    </span>
+  </div>
+
+  <div class="tab-body">
+    @if (loading()) {
+      <div class="empty-state">
+        <div class="spinner-large"></div>
+        <p class="text-secondary">Loading exclusion rules…</p>
+      </div>
+    } @else if (rules().length === 0) {
+      <div class="empty-state">
+        <svg width="56" height="56" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+          <circle cx="12" cy="12" r="10"/>
+          <line x1="4.93" y1="4.93" x2="19.07" y2="19.07"/>
+        </svg>
+        <h3>No exclusion rules yet</h3>
+        <p class="text-secondary">
+          Rules are created through the OpenCode chat assistant.
+        </p>
+        <p class="text-muted">
+          Try asking: <em>"Exclude all files with less than 20 lines of code."</em>
+        </p>
+      </div>
+    } @else {
+      <div class="rule-cards">
+        @for (rule of rules(); track rule.id) {
+          <div class="rule-card card">
+            <div class="rule-card-header">
+              <h3 class="rule-name">{{ rule.name }}</h3>
+              <span class="badge badge-primary">{{ entityKindLabel(rule.entity_kind) }}</span>
+            </div>
+            <p class="rule-description">{{ rule.nl_description }}</p>
+            <code class="rule-dsl">{{ dslSummary(rule) }}</code>
+            <div class="rule-actions">
+              <button class="btn btn-ghost btn-sm" (click)="requestDelete(rule)">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <polyline points="3 6 5 6 21 6"/>
+                  <path d="M19 6l-2 14a2 2 0 0 1-2 2H9a2 2 0 0 1-2-2L5 6"/>
+                  <path d="M10 11v6"/>
+                  <path d="M14 11v6"/>
+                  <path d="M9 6V4a2 2 0 0 1 2-2h2a2 2 0 0 1 2 2v2"/>
+                </svg>
+                Delete
+              </button>
+            </div>
+          </div>
+        }
+      </div>
+    }
+  </div>
+</div>
+
+@if (showDeleteModal()) {
+  <app-confirmation-modal
+    title="Delete exclusion rule"
+    [message]="'Remove the rule \'' + (ruleToDelete()?.name ?? '') + '\'? Hidden entities will reappear in subsequent queries.'"
+    confirmText="Delete"
+    cancelText="Cancel"
+    type="danger"
+    [loading]="deleting()"
+    (confirmed)="confirmDelete()"
+    (cancelled)="cancelDelete()"
+  />
+}
