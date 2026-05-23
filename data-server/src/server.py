@@ -4,8 +4,8 @@ import sys
 import traceback
 import logging
 from pathlib import Path
-from typing import List, Optional
-from fastapi import FastAPI
+from typing import Any, Dict, List, Optional
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from fastapi.responses import JSONResponse, Response
@@ -42,6 +42,8 @@ from src.enrichment.pipeline import PipelineResult, run_pipeline
 from src.graph_store import graph_store
 from src.common.kernel import Graph
 from src.common.pickle_store import PickleStore
+from src.common.domains.components.resolver import parse_component_mapping
+from src.supabase_client import get_service_client
 from src import processor as v2_processor
 from src.sandbox import (
     MCPSandboxView,
@@ -1120,6 +1122,293 @@ async def replay_unified_users(project_id: str):
             {"error": f"Failed to replay user mappings: {str(e)}"},
             status_code=500,
         )
+
+
+# =============================================================================
+# Components endpoints (B3 — REST surface for the components page)
+# =============================================================================
+#
+# Three endpoints power the post-setup Components page:
+#
+# * ``GET  /projects/{id}/components``         — one row per component with
+#                                                aggregate file_count + total_loc
+#                                                (Lizard sum_nloc summed across
+#                                                the component's files).
+# * ``GET  /projects/{id}/components/files``   — flat list of every file in the
+#                                                project with its component name
+#                                                and LOC, sized for a single
+#                                                LOC-proportional treemap.
+# * ``PUT  /projects/{id}/component-mapping``  — persist a curated mapping JSON
+#                                                to ``projects.component_mapping``
+#                                                and trigger a full build so
+#                                                ``graph.components`` reflects
+#                                                the new shape.
+#
+# The two GETs gate on "is a typed Graph loaded for this project" via
+# :func:`_require_loaded_graph` (same 400 contract as the smart-merge endpoints).
+# The PUT validates the payload through :func:`parse_component_mapping` BEFORE
+# touching Supabase so a malformed body never persists.
+#
+# Ownership: no existing endpoint in this server enforces project ownership
+# today (single-tenant dev mode; ``get_service_client`` bypasses RLS for every
+# Supabase touchpoint). These endpoints stay consistent with that contract; if
+# the codebase later adds an auth gate the same dependency should be applied
+# here.
+
+
+def _component_total_loc(
+    file_refs: List[Any], sum_nloc_by_file: Dict[Any, float]
+) -> float:
+    """Sum the ``sum_nloc`` Lizard metric across a component's file refs.
+
+    Missing entries (files without a Lizard row) contribute 0. Matches the
+    convention used by :func:`anomaly_complexity._sum_nloc_index`.
+    """
+    total = 0.0
+    for ref in file_refs:
+        v = sum_nloc_by_file.get(ref)
+        if v is not None:
+            total += v
+    return total
+
+
+def _sum_nloc_index(graph: Graph) -> Dict[Any, float]:
+    """Single-pass ``{file_ref: sum_nloc}`` map. Mirrors the helper at
+    :func:`src.enrichment.metrics.implementations.anomaly_complexity._file_metric_index`
+    but inlined here so the server doesn't reach into a metric implementation.
+    """
+    file_metrics = getattr(graph, "file_metrics", None)
+    if file_metrics is None:
+        return {}
+    by_name = getattr(file_metrics, "by_name", None)
+    if by_name is not None:
+        rows = by_name["sum_nloc"]
+    else:
+        try:
+            rows = [m for m in file_metrics if getattr(m, "metric_name", None) == "sum_nloc"]
+        except TypeError:
+            return {}
+    out: Dict[Any, float] = {}
+    for row in rows:
+        fref = getattr(row, "file_ref", None)
+        val = getattr(row, "value", None)
+        if fref is None or val is None:
+            continue
+        out[fref] = float(val)
+    return out
+
+
+def _file_component_name_index(graph: Graph) -> Dict[Any, str]:
+    """Return ``{file_ref: component_name}`` for every component in the graph.
+
+    Walks ``graph.components.all()`` once and fans each ``file_refs`` entry
+    into the output map. When a file resolves to multiple components (rare;
+    the resolver is single-assignment by design) the last component wins —
+    consistent with :class:`ComponentRegistry`'s ``by_file`` multi-index.
+    """
+    out: Dict[Any, str] = {}
+    for component in graph.components.all():
+        for ref in component.file_refs:
+            out[ref] = component.name
+    return out
+
+
+@app.get("/projects/{project_id}/components")
+async def get_project_components(project_id: str):
+    """Return one row per :class:`Component` in the loaded graph.
+
+    Response shape::
+
+        [
+          {
+            "name": "<component_name>",
+            "path_prefix": "<resolver prefix>",
+            "file_count": <int>,
+            "total_loc": <float>,
+            "color": null,
+          },
+          ...
+        ]
+
+    ``total_loc`` is the sum of Lizard ``sum_nloc`` across the component's
+    files; files without a Lizard row contribute 0. ``color`` is reserved for
+    a future server-side palette; v1 leaves it null and the web-UI computes
+    a stable palette client-side from the component name.
+    """
+    graph = _require_loaded_graph(project_id)
+    if isinstance(graph, JSONResponse):
+        return graph
+
+    sum_nloc_by_file = _sum_nloc_index(graph)
+    rows = []
+    for component in graph.components.all():
+        rows.append({
+            "name": component.name,
+            "path_prefix": component.path_prefix,
+            "file_count": len(component.file_refs),
+            "total_loc": _component_total_loc(component.file_refs, sum_nloc_by_file),
+            "color": None,
+        })
+    return rows
+
+
+@app.get("/projects/{project_id}/components/files")
+async def get_project_component_files(project_id: str):
+    """Return a flat ``{path, loc, component_name, owner?, status?}`` per file.
+
+    The web-UI renders a single LOC-proportional treemap over every file in
+    the project at once, so we walk ``graph.files`` (not just the files
+    referenced by a component) and tag each entry with its resolved component
+    name when one exists.
+
+    ``loc`` reads ``graph.file_metrics`` where ``metric_name == "sum_nloc"``
+    (declared at ``src/common/domains/metrics_lizard/models.py:164``). Files
+    without a Lizard row report ``loc=null`` — the treemap layer treats
+    ``null`` and ``0`` identically (drops them below the min-size threshold).
+
+    ``owner`` and ``status`` are v1-optional and currently omitted; the
+    underlying ownership / file-status data isn't trivially derivable in a
+    single pass and the web-UI tolerates absent fields. They'll be wired in
+    a follow-up once an authoritative source is picked.
+    """
+    graph = _require_loaded_graph(project_id)
+    if isinstance(graph, JSONResponse):
+        return graph
+
+    sum_nloc_by_file = _sum_nloc_index(graph)
+    component_by_file = _file_component_name_index(graph)
+
+    rows = []
+    for file_ in graph.files.all():
+        ref = file_.ref()
+        loc = sum_nloc_by_file.get(ref)
+        rows.append({
+            "path": file_.path,
+            "loc": loc,
+            "component_name": component_by_file.get(ref),
+        })
+    return rows
+
+
+@app.put("/projects/{project_id}/component-mapping")
+async def update_component_mapping(project_id: str, request: Request):
+    """Persist a curated component mapping JSON, then trigger a rebuild.
+
+    Body shape mirrors the resolver's :class:`ComponentMapping`::
+
+        {
+          "<component_name>": {
+            "path_prefix": "src/foo/",
+            "extra_paths": ["lib/foo-helpers/"]
+          },
+          ...
+        }
+
+    A ``null`` body (or an empty object ``{}``) clears the curated mapping:
+    we write SQL ``NULL`` to ``projects.component_mapping`` so the resolver
+    falls back to the top-folder heuristic on the next build. This matches the
+    "empty = no curated mapping" comment on
+    :attr:`EnrichmentConfig.components_mapping_data`.
+
+    Validation runs through :func:`parse_component_mapping` BEFORE the write.
+    A 400 is returned when the payload is structurally malformed
+    (non-object root, no valid component entries from a non-empty input).
+    The parser is intentionally lenient about per-entry shape mismatches
+    (drops bad entries) but a payload that boils down to zero valid entries
+    after parsing is rejected so the operator notices.
+
+    Flow:
+
+    1. Parse the body → reject 400 on bad shape.
+    2. Write to Supabase. On failure, return 500 with no rebuild attempt
+       (the column stays at whatever it was — the user can retry).
+    3. Trigger a rebuild via :func:`v2_processor.build_graph`. The B2 fetch
+       picks the new mapping up automatically (Supabase is the source of
+       truth). Rebuild failure returns 500 but the mapping is already
+       persisted — the user can retry the build manually.
+    """
+    # ----- 1. parse + validate the body -----
+    try:
+        raw_body = await request.body()
+        payload = await request.json() if raw_body else None
+    except Exception as exc:  # noqa: BLE001 — bad JSON → 400, not 500
+        return JSONResponse(
+            {"error": f"Invalid JSON body: {exc}"},
+            status_code=400,
+        )
+
+    # null / {} both mean "clear the mapping": persist SQL NULL so the
+    # resolver re-engages the heuristic on next build.
+    clearing = payload is None or (isinstance(payload, dict) and not payload)
+    if not clearing:
+        if not isinstance(payload, dict):
+            return JSONResponse(
+                {"error": (
+                    "component-mapping body must be a JSON object or null; "
+                    f"got {type(payload).__name__}"
+                )},
+                status_code=400,
+            )
+        parsed = parse_component_mapping(payload)
+        if parsed.is_empty():
+            # A non-empty input that produces zero valid components means every
+            # entry was malformed (missing path_prefix, wrong types, etc).
+            # The lenient parser drops them silently; we surface the error here.
+            return JSONResponse(
+                {"error": (
+                    "component-mapping body contained no valid component entries. "
+                    "Each entry must be an object with a string 'path_prefix'."
+                )},
+                status_code=400,
+            )
+        mapping_to_persist: Optional[Dict[str, Any]] = payload
+    else:
+        mapping_to_persist = None  # SQL NULL
+
+    # ----- 2. persist to Supabase -----
+    try:
+        client = get_service_client()
+        await asyncio.to_thread(
+            lambda: client.table("projects")
+            .update({"component_mapping": mapping_to_persist})
+            .eq("id", project_id)
+            .execute()
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.error(f"Failed to persist component_mapping: {exc}", exc_info=True)
+        return JSONResponse(
+            {"error": f"Failed to persist component mapping: {exc}"},
+            status_code=500,
+        )
+
+    # ----- 3. trigger rebuild -----
+    # Match /build's choice: synchronous, off the request thread via
+    # asyncio.to_thread (the build path is CPU-bound and reads disk).
+    try:
+        graph, _pipeline_result = await asyncio.to_thread(
+            v2_processor.build_graph, project_id
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("build_graph failed after component_mapping update")
+        return JSONResponse(
+            {
+                "error": (
+                    f"Component mapping was saved but rebuild failed: {exc}. "
+                    "Re-trigger Build Graph from the UI to apply the new mapping."
+                ),
+                "mapping_persisted": True,
+            },
+            status_code=500,
+        )
+
+    graph_store.set(project_id, graph)
+    smart_merge_state_store.reset(project_id)
+
+    return {
+        "ok": True,
+        "cleared": clearing,
+        "component_count": len(graph.components),
+    }
 
 
 # =============================================================================

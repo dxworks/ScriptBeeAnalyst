@@ -357,6 +357,17 @@ def fetch_project_component_mapping(project_id: str) -> Optional[Dict[str, Any]]
     mapping = response.data[0].get("component_mapping")
     if isinstance(mapping, dict):
         return mapping
+    if mapping is not None:
+        # Defensive: the column is JSONB so the driver normally returns
+        # dict / None / list. A non-dict, non-null value here means
+        # something wrote a malformed payload (e.g. a top-level list or
+        # a string). Silently returning None hides the bug from anyone
+        # debugging "why did my mapping not stick?".
+        logger.warning(
+            "component_mapping for project %s is non-null but not a dict "
+            "(type=%s) — falling back to heuristic",
+            project_id, type(mapping).__name__,
+        )
     return None
 
 

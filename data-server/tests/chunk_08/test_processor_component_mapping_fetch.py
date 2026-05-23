@@ -101,6 +101,21 @@ def test_fetch_returns_none_when_supabase_raises():
     assert out is None
 
 
+def test_fetch_logs_warning_when_column_value_not_a_dict(caplog):
+    """B2 carry-over: a non-null, non-dict value (a string, a list, etc.)
+    is a data corruption signal — log it instead of silently swallowing.
+    """
+    import logging
+    with _patched_service_client([{"component_mapping": ["not", "a", "dict"]}]):
+        with caplog.at_level(logging.WARNING, logger="processor"):
+            out = processor.fetch_project_component_mapping("corrupt-id")
+    assert out is None
+    assert any(
+        "component_mapping" in r.message and "corrupt-id" in r.message
+        for r in caplog.records
+    )
+
+
 # ---------------------------------------------------------------------------
 # build_graph wiring — fetched mapping ends up on EnrichmentConfig.
 # ---------------------------------------------------------------------------

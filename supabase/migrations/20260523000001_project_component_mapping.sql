@@ -14,9 +14,12 @@
 --   }
 -- Null means "no curated mapping yet" — the resolver falls back to the
 -- top-folder heuristic (and to components_mapping_path when set).
+-- An empty object ``{}`` is treated identically to null: both mean
+-- "no curated mapping". The PUT endpoint normalises empty payloads
+-- to SQL NULL so the heuristic fallback re-engages cleanly.
 --
 -- A column on projects (not a side table) is enough for v1: no history,
 -- one mapping per project, atomic with the rest of the project row.
 
 alter table public.projects
-  add column component_mapping jsonb;
+  add column if not exists component_mapping jsonb;

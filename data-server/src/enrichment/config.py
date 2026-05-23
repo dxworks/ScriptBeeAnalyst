@@ -157,6 +157,13 @@ class EnrichmentConfig:
     # time because the dict is per-project (loaded from Supabase by the
     # processor) while the path is an operator-level fallback used in tests /
     # single-project dev mode.
+    #
+    # ``components_mapping_data`` semantics: ``{}`` and ``None`` are treated
+    # identically — both mean "no curated mapping, fall back to path /
+    # top-folder heuristic". Do NOT flip the resolver's ``if data:`` check to
+    # ``if data is not None:``; an empty dict carries the same intent as null
+    # and the PUT endpoint normalises empty payloads to SQL NULL when persisting
+    # to projects.component_mapping.
     components_mapping_path: Optional[str] = None
     components_mapping_data: Optional[dict[str, Any]] = None
 
