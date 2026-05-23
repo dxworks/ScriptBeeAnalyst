@@ -1,0 +1,121 @@
+<div class="components-page">
+  <!-- ── Header ─────────────────────────────────────────────────────────── -->
+  <header class="components-header">
+    <div class="components-header-titles">
+      <h1>Components</h1>
+      @if (loadedProjectName(); as name) {
+        <span class="project-name">{{ name }}</span>
+      }
+    </div>
+    <div class="components-header-actions">
+      <!-- Save pill: shows only when there are pending curation edits.
+           F4 wires `hasPendingChanges` from the right-click menu. -->
+      @if (hasPendingChanges()) {
+        <button
+          type="button"
+          class="btn btn-primary save-pill"
+          (click)="onSaveChanges()"
+        >
+          Save changes
+        </button>
+      }
+    </div>
+  </header>
+
+  <!-- ── Body ───────────────────────────────────────────────────────────── -->
+  @switch (status()) {
+    @case ('loading') {
+      <div class="components-state">
+        <div class="spinner-large"></div>
+        <p class="text-secondary">Loading components…</p>
+      </div>
+    }
+    @case ('not-loaded') {
+      <div class="components-state">
+        <svg width="56" height="56" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4">
+          <rect x="3" y="3" width="7" height="7"/>
+          <rect x="14" y="3" width="7" height="7"/>
+          <rect x="3" y="14" width="7" height="7"/>
+          <rect x="14" y="14" width="7" height="7"/>
+        </svg>
+        <h2>Project not loaded</h2>
+        <p class="text-secondary">
+          Load this project into the data server to view its components.
+        </p>
+        <button type="button" class="btn btn-primary" (click)="goToProject()">
+          Load the project first
+        </button>
+      </div>
+    }
+    @case ('error') {
+      <div class="components-state">
+        <h2>Couldn’t load components</h2>
+        <p class="text-secondary">{{ errorMessage() ?? 'Unknown error.' }}</p>
+        @if (projectId(); as id) {
+          <button type="button" class="btn btn-secondary" (click)="loadData(id)">
+            Retry
+          </button>
+        }
+      </div>
+    }
+    @case ('ready') {
+      <div class="components-body">
+        <!-- Left: components list (F2 shell — selection is a no-op for now;
+             F4 will plug in right-click + drives draft state). -->
+        <aside class="components-list">
+          <div class="components-list-header">
+            <span class="components-list-title">
+              {{ sortedComponents().length }} component{{ sortedComponents().length === 1 ? '' : 's' }}
+            </span>
+          </div>
+          @if (sortedComponents().length === 0) {
+            <div class="components-list-empty text-secondary">
+              No components resolved for this project yet.
+            </div>
+          } @else {
+            <ul class="components-list-items" role="list">
+              @for (c of sortedComponents(); track c.name) {
+                <li>
+                  <button
+                    type="button"
+                    class="component-row"
+                    [class.selected]="selectedComponentName() === c.name"
+                    (click)="onComponentClick(c.name)"
+                  >
+                    <!-- F5 will replace this neutral swatch with a per-component
+                         palette colour. v1 leaves it grey. -->
+                    <span
+                      class="component-swatch"
+                      [style.background-color]="c.color ?? '#9ca3af'"
+                      aria-hidden="true"
+                    ></span>
+                    <span class="component-info">
+                      <span class="component-name">{{ c.name }}</span>
+                      <span class="component-meta">
+                        {{ c.file_count }} file{{ c.file_count === 1 ? '' : 's' }}
+                        · {{ c.total_loc | number:'1.0-0' }} LOC
+                      </span>
+                    </span>
+                  </button>
+                </li>
+              }
+            </ul>
+          }
+        </aside>
+
+        <!-- Main: treemap area. F3 will mount the real treemap component
+             here, fed by `files()` + `components()` + (later) a colour map
+             from F5. Until then we render an inert placeholder. -->
+        <section class="components-main">
+          <div class="treemap-placeholder">
+            <h2>Treemap renders here (F3)</h2>
+            <p class="text-secondary">
+              Loaded {{ files().length }} file{{ files().length === 1 ? '' : 's' }}
+              across {{ sortedComponents().length }} component{{ sortedComponents().length === 1 ? '' : 's' }}.
+            </p>
+          </div>
+        </section>
+      </div>
+    }
+  }
+</div>

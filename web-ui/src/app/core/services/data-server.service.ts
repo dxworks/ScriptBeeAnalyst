@@ -70,6 +70,55 @@ interface CurrentProjectResponseRaw {
   };
 }
 
+// ── Components page DTOs ────────────────────────────────────────────────────
+// Mirror the contract locked by data-server B3 (src/server.py around line 1216).
+// owner/status are intentionally absent — the data-server doesn't return them
+// in v1 and the page tolerates their absence.
+
+export interface ComponentSummaryDto {
+  name: string;
+  path_prefix: string;
+  file_count: number;
+  total_loc: number;
+  color: string | null;
+}
+
+export interface ComponentFileDto {
+  path: string;
+  loc: number | null;
+  component_name: string | null;
+}
+
+export interface ComponentMappingUpdateResult {
+  /** True when the call succeeded end-to-end (persist + rebuild). */
+  success: boolean;
+  /** Error message when success is false. */
+  error?: string;
+  /**
+   * True when the mapping WAS written to Supabase but the rebuild failed.
+   * Reported by the server as 500 + `mapping_persisted: true`. The caller
+   * should surface a different message in that case ("saved but rebuild
+   * failed; retry the build").
+   */
+  mappingPersisted?: boolean;
+  /** True when the mapping was cleared (null/empty body). */
+  cleared?: boolean;
+  /** Number of components after rebuild. */
+  componentCount?: number;
+}
+
+/**
+ * Tagged error a caller can `instanceof`-check after a components GET to
+ * distinguish "graph not loaded for this project" (a state the page should
+ * recover from with a Load button) from a generic transport failure.
+ */
+export class ProjectNotLoadedError extends Error {
+  constructor(message = 'Project is not loaded. Load the project first.') {
+    super(message);
+    this.name = 'ProjectNotLoadedError';
+  }
+}
+
 @Injectable({
   providedIn: 'root',
 })
@@ -435,6 +484,102 @@ export class DataServerService {
       console.error('Failed to apply all suggestions:', err);
       return null;
     }
+  }
+
+  // ── Components page methods ─────────────────────────────────────────────
+
+  /**
+   * Fetch one row per Component in the loaded graph.
+   * Throws `ProjectNotLoadedError` on the data-server's 400 "Project is not
+   * loaded" response so the page can render a Load-prompt empty state.
+   */
+  async getComponents(projectId: string): Promise<ComponentSummaryDto[]> {
+    try {
+      const rows = await firstValueFrom(
+        this.http.get<ComponentSummaryDto[]>(
+          `${this.baseUrl}/projects/${projectId}/components`
+        )
+      );
+      return rows ?? [];
+    } catch (err) {
+      throw this.toComponentsError(err);
+    }
+  }
+
+  /**
+   * Fetch a flat {path, loc, component_name} row per file in the project.
+   * Throws `ProjectNotLoadedError` on the 400 "Project is not loaded" path.
+   */
+  async getComponentFiles(projectId: string): Promise<ComponentFileDto[]> {
+    try {
+      const rows = await firstValueFrom(
+        this.http.get<ComponentFileDto[]>(
+          `${this.baseUrl}/projects/${projectId}/components/files`
+        )
+      );
+      return rows ?? [];
+    } catch (err) {
+      throw this.toComponentsError(err);
+    }
+  }
+
+  /**
+   * Persist a curated component mapping JSON, then trigger a rebuild.
+   * Pass `null` (or `{}`) to clear the mapping.
+   *
+   * Distinguishes the two 500 paths via the server's `mapping_persisted` flag:
+   *  - persist failed → `mappingPersisted: false`
+   *  - rebuild failed after persist → `mappingPersisted: true`
+   */
+  async updateComponentMapping(
+    projectId: string,
+    mapping: Record<string, unknown> | null
+  ): Promise<ComponentMappingUpdateResult> {
+    try {
+      const response = await firstValueFrom(
+        this.http.put<{ ok: true; cleared: boolean; component_count: number }>(
+          `${this.baseUrl}/projects/${projectId}/component-mapping`,
+          mapping
+        )
+      );
+      return {
+        success: true,
+        cleared: response.cleared,
+        componentCount: response.component_count,
+      };
+    } catch (err) {
+      if (err instanceof HttpErrorResponse) {
+        const message = err.error?.error || err.error?.message || err.message;
+        return {
+          success: false,
+          error: message || 'Failed to update component mapping',
+          mappingPersisted: err.error?.mapping_persisted === true,
+        };
+      }
+      return {
+        success: false,
+        error: `Unexpected error: ${err instanceof Error ? err.message : 'Unknown error'}`,
+      };
+    }
+  }
+
+  /**
+   * Translate a GET-side HTTP error into either a `ProjectNotLoadedError` or
+   * a generic `Error`. Centralised here so both components GETs behave the
+   * same way and the page only has to `instanceof`-check once.
+   */
+  private toComponentsError(err: unknown): Error {
+    if (err instanceof HttpErrorResponse) {
+      if (err.status === 0) {
+        return new Error(`Unable to connect to data server at ${this.baseUrl}`);
+      }
+      const message = err.error?.error || err.error?.message || err.message;
+      if (err.status === 400 && typeof message === 'string' && message.includes('not loaded')) {
+        return new ProjectNotLoadedError(message);
+      }
+      return new Error(message || `Components request failed (${err.status})`);
+    }
+    return err instanceof Error ? err : new Error('Unexpected error');
   }
 
   async saveGraphState(
