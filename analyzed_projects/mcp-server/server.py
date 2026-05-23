@@ -480,13 +480,13 @@ async def _resolve_current_project_id() -> str:
             resp = await client.get(f"{DATA_SERVER_URL}/projects/current")
         except httpx.ConnectError:
             return f"__ERROR__:Cannot connect to data-server at {DATA_SERVER_URL}"
-    if resp.status_code == 404:
-        return "__ERROR__:No project currently loaded. Use load_project first."
     if resp.status_code != 200:
         return f"__ERROR__:HTTP {resp.status_code}: {resp.text}"
+    # /projects/current always returns 200; the "not loaded" case is
+    # carried by an empty project_id in the body.
     pid = resp.json().get("project_id")
     if not pid:
-        return "__ERROR__:Data-server returned no project_id."
+        return "__ERROR__:No project currently loaded. Use load_project first."
     return pid
 
 

@@ -107,7 +107,9 @@ def _resolve_user_id_from_jwt(jwt: str) -> Optional[str]:
         sub = claims.get("sub")
         return sub if isinstance(sub, str) else None
     except Exception as exc:  # noqa: BLE001
-        LOG.warning(f"could not decode JWT sub claim: {exc}")
+        # ``jose`` exceptions sometimes embed the raw token in the message;
+        # log only the exception type to avoid leaking credentials.
+        LOG.warning(f"could not decode JWT sub claim ({type(exc).__name__})")
         return None
 
 
