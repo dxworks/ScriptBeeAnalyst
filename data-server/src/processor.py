@@ -84,6 +84,9 @@ from src.common.people import SourceKind
 from src.common.pickle_store import PickleStore
 from src.config import RECURSION_LIMIT, SUPABASE_SERVICE_KEY, SUPABASE_URL
 from src.enrichment.config import DEFAULT_CONFIG, EnrichmentConfig
+from src.enrichment.metrics.implementations.component_resolver import (
+    build_components_from_relations,
+)
 from src.enrichment.pipeline import PipelineResult, run_pipeline
 from src.logger import get_logger
 
@@ -232,6 +235,12 @@ def build_graph_from_bundles(
             apply_transform_result(graph, result)
 
     pipeline_result = run_pipeline(graph, config)
+    # Populate graph.components from the component_membership relations
+    # emitted by ComponentResolverMetric. Must run AFTER run_pipeline:
+    # the Metric ABC's purity contract forbids registry mutations from
+    # inside compute(), so the post-pipeline helper owns the write into
+    # graph.components.
+    build_components_from_relations(graph)
     return graph, pipeline_result
 
 
