@@ -238,6 +238,15 @@
                       <!-- ── string list ─────────────────────────────── -->
                       @if (inputKind(field) === 'string-list') {
                         <div class="knob-composite">
+                          <!-- Polite live region announcing duplicate-add
+                               rejections. The chip pulse + input clear are
+                               invisible to screen readers without this. The
+                               text is cleared on the same setTimeout cycle
+                               that clears the pulse, so the announcement
+                               doesn't linger past its visual counterpart. -->
+                          <span class="sr-only" aria-live="polite">
+                            {{ lastRejectedMessage() }}
+                          </span>
                           <ul class="knob-chip-list">
                             @for (item of asStringList(field); track $index) {
                               <li
@@ -326,6 +335,8 @@
                                 [class.error]="needsLabel(field, $index, row.label) || isDuplicateLabel(field, row.label)"
                                 [value]="row.label"
                                 [attr.aria-label]="'Label for row ' + ($index + 1)"
+                                [attr.aria-invalid]="needsLabel(field, $index, row.label) || isDuplicateLabel(field, row.label) || null"
+                                [attr.aria-describedby]="(needsLabel(field, $index, row.label) || isDuplicateLabel(field, row.label)) ? rowHintId(field, $index) : null"
                                 (input)="onLabelRangePairLabel(field, $index, $any($event.target).value)"
                               />
                               <input
@@ -351,9 +362,10 @@
                                 (click)="onLabelRangePairRemove(field, $index)"
                               >×</button>
                               @if (needsLabel(field, $index, row.label)) {
-                                <span class="knob-row-hint knob-row-hint-span">(label required)</span>
+                                <span class="knob-row-hint knob-row-hint-span" [id]="rowHintId(field, $index)">(label required)</span>
                               } @else if (isDuplicateLabel(field, row.label)) {
-                                <span class="knob-row-hint knob-row-hint-span">(duplicate label)</span>
+                                <!-- See ``duplicateLabels`` TODO(commit 11) — this branch is dormant today. -->
+                                <span class="knob-row-hint knob-row-hint-span" [id]="rowHintId(field, $index)">(duplicate label)</span>
                               }
                             }
                           </div>
@@ -398,6 +410,8 @@
                                 [class.error]="needsLabel(field, $index, row.label)"
                                 [value]="row.label"
                                 [attr.aria-label]="'Label for row ' + ($index + 1)"
+                                [attr.aria-invalid]="needsLabel(field, $index, row.label) || null"
+                                [attr.aria-describedby]="needsLabel(field, $index, row.label) ? rowHintId(field, $index) : null"
                                 (input)="onLabelRegexPairLabel(field, $index, $any($event.target).value)"
                               />
                               <textarea
@@ -415,7 +429,7 @@
                                 (click)="onLabelRegexPairRemove(field, $index)"
                               >×</button>
                               @if (needsLabel(field, $index, row.label)) {
-                                <span class="knob-row-hint knob-row-hint-flex">(label required)</span>
+                                <span class="knob-row-hint knob-row-hint-flex" [id]="rowHintId(field, $index)">(label required)</span>
                               }
                             </div>
                           }

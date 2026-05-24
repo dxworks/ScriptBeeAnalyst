@@ -614,9 +614,14 @@
 
 // One-shot pulse on the existing chip when a duplicate "Add" is rejected —
 // the TS in ``flashRejectedChip`` toggles this class for ~1s then clears.
-// Uses warning tones so it reads as feedback, not an error.
+// Uses warning tones so it reads as feedback, not an error. The animation
+// is gated behind ``prefers-reduced-motion: no-preference`` — users with
+// reduced motion get only the aria-live announcement (the visual pulse is
+// dropped).
 .knob-chip-just-rejected {
-  animation: knob-chip-reject-pulse 1s ease-out;
+  @media (prefers-reduced-motion: no-preference) {
+    animation: knob-chip-reject-pulse 1s ease-out;
+  }
 }
 
 @keyframes knob-chip-reject-pulse {

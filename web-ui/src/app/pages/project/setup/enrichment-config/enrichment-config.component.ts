@@ -289,6 +289,17 @@ export class EnrichmentConfigComponent implements OnInit {
     return `knob-error-${field.name}`;
   }
 
+  /**
+   * Stable DOM id for the per-row "(label required)" / "(duplicate label)"
+   * hint span inside a composite editor. Wired into the label input's
+   * ``aria-describedby`` so screen readers announce the hint when focus
+   * lands on the offending input — mirrors the ``knobErrorId`` pattern
+   * used by the server-side 422 region.
+   */
+  rowHintId(field: CatalogueFieldDto, index: number): string {
+    return `knob-row-hint-${field.name}-${index}`;
+  }
+
   typeLabel(typeString: string): string {
     return TYPE_PILL_LABELS.get(typeString) ?? typeString;
   }
@@ -480,7 +491,7 @@ export class EnrichmentConfigComponent implements OnInit {
     const existingIndex = current.indexOf(trimmed);
     if (existingIndex !== -1) {
       // Dedupe: flash the existing chip instead of pushing a duplicate.
-      this.flashRejectedChip(field, existingIndex);
+      this.flashRejectedChip(field, existingIndex, trimmed);
       input.value = '';
       return;
     }
@@ -499,17 +510,34 @@ export class EnrichmentConfigComponent implements OnInit {
    */
   private readonly chipJustRejected = signal<string | null>(null);
 
+  /**
+   * Plain-text companion to ``chipJustRejected`` — rendered into a
+   * visually-hidden ``aria-live="polite"`` region so screen-reader users
+   * hear "<value> is already in the list" when the add-input clears.
+   * Without this, the dedupe is silent for non-sighted users (the chip
+   * pulse is purely visual and the input value vanishes).
+   */
+  readonly lastRejectedMessage = signal<string | null>(null);
+
   isChipJustRejected(field: CatalogueFieldDto, index: number): boolean {
     return this.chipJustRejected() === this.rowKey(field, index);
   }
 
-  private flashRejectedChip(field: CatalogueFieldDto, index: number): void {
+  private flashRejectedChip(
+    field: CatalogueFieldDto,
+    index: number,
+    value: string,
+  ): void {
     const key = this.rowKey(field, index);
     this.chipJustRejected.set(key);
+    this.lastRejectedMessage.set(`"${value}" is already in the list`);
     setTimeout(() => {
       // Only clear if our key is still the active one; a subsequent flash
       // on a different chip must not be wiped by an earlier timer.
-      if (this.chipJustRejected() === key) this.chipJustRejected.set(null);
+      if (this.chipJustRejected() === key) {
+        this.chipJustRejected.set(null);
+        this.lastRejectedMessage.set(null);
+      }
     }, 1000);
   }
 
@@ -799,6 +827,10 @@ export class EnrichmentConfigComponent implements OnInit {
   }
 
   /** Pre-compute the set of duplicate labels for a label/range-map field. */
+  // TODO(commit 11): activate this hint by switching the dict editor to an
+  // array-of-pairs pending shape with collapse-on-save — today
+  // ``writeLabelRangePairs`` collapses duplicates immediately on every
+  // keystroke, so this helper never returns a non-empty set in practice.
   duplicateLabels(field: CatalogueFieldDto): Set<string> {
     const seen = new Map<string, number>();
     const dupes = new Set<string>();
