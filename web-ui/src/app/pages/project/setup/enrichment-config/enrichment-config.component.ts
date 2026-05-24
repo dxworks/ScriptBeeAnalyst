@@ -185,9 +185,16 @@ export class EnrichmentConfigComponent implements OnInit {
    * the visual ``title`` tooltip and a visually-hidden sentence the screen
    * reader announces when the button gains focus. ``null`` means the button
    * is enabled and no explanation is needed.
+   *
+   * The ``saving()`` branch comes first because save-in-flight is the most
+   * actionable state — the click was registered, the user just needs to
+   * wait. The ``rerunning()`` case has no entry here: its label flips to
+   * "Rerunning…" which already communicates the state via the accessible
+   * name.
    */
   readonly rerunReason = computed<string | null>(() => {
     if (this.state() !== 'ready') return null;
+    if (this.saving()) return 'Saving — please wait';
     if (this.dirty()) return 'Save your changes before rerunning';
     if (!this.hasOverrides()) return 'No overrides to apply';
     return null;

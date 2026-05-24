@@ -503,13 +503,17 @@
 </div>
 
 @if (showRerunModal()) {
+  <!-- ``[loading]`` deliberately omitted — ``confirmRerun`` closes the modal
+       BEFORE flipping ``rerunning()``, so the modal's loading state would
+       never activate. The in-flight indicator lives on the toolbar button
+       ("Rerunning…" + spinner), per the plan's "keep the editor usable"
+       contract. -->
   <app-confirmation-modal
     title="Rerun enrichments?"
     [message]="rerunModalMessage()"
     confirmText="Rerun"
     cancelText="Cancel"
     type="warning"
-    [loading]="rerunning()"
     (confirmed)="confirmRerun()"
     (cancelled)="cancelRerun()"
   />
