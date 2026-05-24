@@ -123,6 +123,11 @@ class EnrichmentConfig:
     supernova_net_churn_min: int = 5000
 
     # ── B2 — CodeFrame thresholds ──────────────────────────────────────────
+    # ZoneCrossroad: minimum LIFETIME commits the file must have before the
+    # metric runs at all. dx pre-filters at this gate (``ZoneCrossroad.java:29``
+    # uses ``file.commits().size() >= 20``). Without it ScriptBee fires on
+    # very small files that have no meaningful zone signal.
+    zonecrossroad_min_file_commits: int = 20
     # ZoneCrossroad: minimum commits a file must have inside one UTC offset
     # before that offset counts as "significant". dx default
     # (ZoneCrossroad.java:16) is 10.

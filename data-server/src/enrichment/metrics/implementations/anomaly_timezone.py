@@ -41,6 +41,7 @@ if TYPE_CHECKING:
 _TRAIT_ZONE_CROSSROAD = "anomaly.cohesion.ZoneCrossroad"
 _TRAIT_CONCURRENT_ZONE_CROSSROAD = "anomaly.cohesion.ConcurrentZoneCrossroad"
 
+_DEFAULT_MIN_FILE_COMMITS = 20
 _DEFAULT_MIN_ZONE_COMMITS = 10
 _DEFAULT_CONCURRENT_STRICT_THRESHOLD = 5
 
@@ -56,6 +57,7 @@ class AnomalyTimezoneMetric(Metric):
         ]
     )
     config_fields: ClassVar[list[str]] = [
+        "zonecrossroad_min_file_commits",
         "zonecrossroad_min_zone_commits",
         "concurrent_zonecrossroad_strict_threshold",
     ]
@@ -69,6 +71,9 @@ class AnomalyTimezoneMetric(Metric):
         if commits_reg is None:
             return
 
+        min_file_commits = int(_config_field(
+            config, "zonecrossroad_min_file_commits", _DEFAULT_MIN_FILE_COMMITS
+        ))
         min_zone_commits = int(_config_field(
             config, "zonecrossroad_min_zone_commits", _DEFAULT_MIN_ZONE_COMMITS
         ))
@@ -104,7 +109,13 @@ class AnomalyTimezoneMetric(Metric):
                 zone_commit_count[zone] += 1
                 zones_per_period[period].add(zone)
 
-            if total_commits < 2:
+            # dx pre-filter (``ZoneCrossroad.java:29``): the metric only runs
+            # on files with enough lifetime commits for the zone signal to be
+            # meaningful. Without this gate ScriptBee fires on very small
+            # files, inflating the trait count. The knob is editable so a
+            # user can dial back to the previous permissive behaviour (``2``)
+            # if they want.
+            if total_commits < min_file_commits:
                 continue
 
             significant_zones = {

@@ -93,7 +93,8 @@ def test_zonecrossroad_fires_on_two_significant_zones():
 
 
 def test_zonecrossroad_suppressed_when_only_one_zone_significant():
-    """One zone has 10 commits, second zone has only 3 — below threshold."""
+    """Primary zone has 20 commits (passes the file gate and is significant),
+    secondary zone has only 3 — below per-zone significance threshold."""
     base = datetime(2026, 1, 1, 9, 0, tzinfo=UTC)
     utc_plus_2 = timezone(timedelta(hours=2))
     graph, project = build_v2_graph("tz2")
@@ -102,7 +103,7 @@ def test_zonecrossroad_suppressed_when_only_one_zone_significant():
     f = make_file("src/tz2.py", project.ref())
     graph.files.add(f)
 
-    for i in range(10):
+    for i in range(20):
         c = make_commit(
             f"u_{i}", "feat", alice,
             base + timedelta(days=i), project.ref(),
@@ -121,6 +122,64 @@ def test_zonecrossroad_suppressed_when_only_one_zone_significant():
     _run(graph)
     traits = _traits_for_file(graph, "src/tz2.py")
     assert "anomaly.cohesion.ZoneCrossroad" not in _trait_names(traits)
+
+
+def test_zonecrossroad_respects_min_file_commits_gate():
+    """File-level pre-filter mirrors dx (``ZoneCrossroad.java:29``):
+    files below ``zonecrossroad_min_file_commits`` skip the metric
+    entirely, even when each zone individually meets ``min_zone_commits``.
+
+    The test uses an explicit config (``min_file_commits=20``,
+    ``min_zone_commits=5``) to isolate the FILE gate from the per-zone gate.
+    A 15-commit / 25-commit pair built with the same shape produces
+    different outcomes purely because of the file gate.
+    """
+    import dataclasses
+    base = datetime(2026, 1, 1, 9, 0, tzinfo=UTC)
+    utc_plus_2 = timezone(timedelta(hours=2))
+    cfg = dataclasses.replace(
+        EnrichmentConfig(),
+        zonecrossroad_min_file_commits=20,
+        zonecrossroad_min_zone_commits=5,
+    )
+
+    def _build(name: str, n_utc: int, n_plus: int):
+        graph, project = build_v2_graph(name)
+        alice = make_account("Alice", "a@x", project.ref())
+        graph.git_accounts.add(alice)
+        f = make_file(f"src/{name}.py", project.ref())
+        graph.files.add(f)
+        for i in range(n_utc):
+            c = make_commit(
+                f"u_{i}", "feat", alice,
+                base + timedelta(days=i), project.ref(),
+            )
+            graph.commits.add(c)
+            add_change(graph, c, f, added=1)
+        for i in range(n_plus):
+            c = make_commit(
+                f"p_{i}", "feat", alice,
+                (base + timedelta(days=100 + i)).astimezone(utc_plus_2),
+                project.ref(),
+            )
+            graph.commits.add(c)
+            add_change(graph, c, f, added=1)
+        return graph
+
+    # 15 total (8 + 7): each zone ≥ ``min_zone_commits=5`` so both are
+    # significant — but total < file gate (20) → metric skips the file.
+    graph_below = _build("below", 8, 7)
+    run_pipeline(graph_below, cfg)
+    assert "anomaly.cohesion.ZoneCrossroad" not in _trait_names(
+        _traits_for_file(graph_below, "src/below.py")
+    )
+
+    # 25 total (13 + 12): identical zone-shape, above the file gate → fires.
+    graph_above = _build("above", 13, 12)
+    run_pipeline(graph_above, cfg)
+    assert "anomaly.cohesion.ZoneCrossroad" in _trait_names(
+        _traits_for_file(graph_above, "src/above.py")
+    )
 
 
 def test_zonecrossroad_no_fire_on_single_zone_file():
