@@ -102,18 +102,21 @@
   to { transform: rotate(360deg); }
 }
 
-// ── Family list (scaffold — full field editors land in commit 6/7) ──────────
+// ── Family list (collapsible details panels) ────────────────────────────────
 .family-list {
   display: flex;
   flex-direction: column;
   gap: var(--spacing-lg);
 }
 
+// Each family is a native <details> styled to match `.card`.
+// `padding` lives on the children so collapsed (= just the summary) and
+// expanded states share the same outer chrome without an empty bottom band.
 .family-card {
-  padding: var(--spacing-lg);
-  display: flex;
-  flex-direction: column;
-  gap: var(--spacing-md);
+  // `details` resets — strip the default browser disclosure marker so we
+  // can ship a custom one (rotating chevron) inside .family-disclosure.
+  &::-webkit-details-marker { display: none; }
+  &[open] > .family-card-header .family-disclosure { transform: rotate(90deg); }
 }
 
 .family-card-header {
@@ -122,6 +125,40 @@
   justify-content: space-between;
   gap: var(--spacing-md);
   flex-wrap: wrap;
+  padding: var(--spacing-lg);
+  cursor: pointer;
+  list-style: none;              // Firefox marker shim
+  user-select: none;
+
+  &::-webkit-details-marker { display: none; }
+  &::marker { content: ''; }
+
+  &:focus-visible {
+    outline: 2px solid var(--color-accent);
+    outline-offset: -2px;
+    border-radius: var(--radius-lg);
+  }
+}
+
+.family-card-header-titles {
+  display: inline-flex;
+  align-items: baseline;
+  gap: var(--spacing-sm);
+  min-width: 0;
+}
+
+// Custom disclosure caret — 6px right-pointing triangle that rotates 90deg
+// when the parent `details` is open. Pure CSS, no extra DOM.
+.family-disclosure {
+  display: inline-block;
+  width: 0;
+  height: 0;
+  border-top: 5px solid transparent;
+  border-bottom: 5px solid transparent;
+  border-left: 6px solid var(--color-text-muted);
+  transition: transform var(--transition-fast);
+  flex: 0 0 auto;
+  align-self: center;
 }
 
 .family-name {
@@ -137,36 +174,197 @@
   font-variant-numeric: tabular-nums;
 }
 
-.family-placeholder {
+// ── Per-knob row list ───────────────────────────────────────────────────────
+// `<dl>` so each row carries proper semantic label↔description pairing for
+// screen readers. CSS Grid promotes the dt (label cluster) and dd (value
+// cluster) into a two-column row at wider breakpoints, with a hard collapse
+// to a single column under ~640px.
+.knob-list {
   margin: 0;
-  font-size: 0.875rem;
-  line-height: 1.5;
+  padding: 0 var(--spacing-lg) var(--spacing-lg) var(--spacing-lg);
+  display: flex;
+  flex-direction: column;
+  gap: 0;                         // border separator owns the rhythm
+  border-top: 1px solid var(--color-border-light);
 }
 
-.family-field-names {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--spacing-xs) var(--spacing-sm);
+.knob-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(220px, auto);
+  gap: var(--spacing-md) var(--spacing-lg);
+  align-items: start;
+  padding: var(--spacing-md) 0;
+  border-bottom: 1px solid var(--color-border-light);
 
-  li {
-    display: inline-flex;
-    align-items: center;
+  &:last-child { border-bottom: none; }
+
+  // Subtle 2px accent-stripe on the left for overridden rows — gives the
+  // editor a one-glance read of "what's different from defaults" once
+  // commit 7 ships writes. Margin-left negative pulls the stripe flush
+  // with the card body's vertical edge.
+  &.knob-row-overridden {
+    padding-left: var(--spacing-md);
+    margin-left: calc(-1 * var(--spacing-md));
+    border-left: 2px solid var(--color-accent);
+  }
+
+  // ScriptBee-only knobs get a faint warning-tinted background so the
+  // "no dx baseline" badge isn't the only signal in a long list.
+  &.knob-row-no-baseline {
+    background-color: rgba(var(--color-warning-rgb), 0.04);
+  }
+}
+
+@media (max-width: 640px) {
+  .knob-row {
+    grid-template-columns: minmax(0, 1fr);
     gap: var(--spacing-xs);
   }
 }
 
-.field-name {
+.knob-label {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-xs);
+  min-width: 0;
+}
+
+.knob-label-line {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--spacing-sm);
+  flex-wrap: wrap;
+  min-width: 0;
+}
+
+.knob-human-label {
+  font-size: 0.875rem;
+  font-weight: 500;
+  color: var(--color-text-primary);
+}
+
+.knob-field-name {
   display: inline-block;
-  padding: 2px 8px;
+  padding: 1px 6px;
   background-color: var(--color-surface);
   border: 1px solid var(--color-border);
   border-radius: var(--radius-sm);
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 0.75rem;
+  font-size: 0.6875rem;
   color: var(--color-text-secondary);
+  letter-spacing: 0;
+}
+
+.knob-type-pill {
+  display: inline-block;
+  padding: 1px 6px;
+  background-color: var(--color-border-light);
+  border-radius: var(--radius-sm);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.6875rem;
+  color: var(--color-text-muted);
+  text-transform: lowercase;
+  letter-spacing: 0.02em;
+}
+
+.knob-meta-line {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--spacing-sm);
+  flex-wrap: wrap;
+  min-width: 0;
+}
+
+.knob-used-by {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--spacing-xs);
+  flex-wrap: wrap;
+  min-width: 0;
+}
+
+.knob-used-by-label {
+  font-size: 0.6875rem;
+  color: var(--color-text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.knob-used-by-badge {
+  font-size: 0.6875rem;
+  padding: 1px 8px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+.knob-used-by-overflow {
+  font-size: 0.6875rem;
+  padding: 1px 8px;
+  cursor: help;                   // tooltip lists the hidden metric names
+}
+
+.knob-no-baseline {
+  font-size: 0.6875rem;
+  padding: 1px 8px;
+}
+
+.knob-value {
+  margin: 0;
+  display: inline-flex;
+  align-items: baseline;
+  gap: var(--spacing-sm);
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  min-width: 0;
+  font-size: 0.875rem;
+  color: var(--color-text-primary);
+}
+
+@media (max-width: 640px) {
+  .knob-value { justify-content: flex-start; }
+}
+
+.knob-current {
+  font-weight: 500;
+}
+
+// Numeric values get tabular figures so a long column of ints/floats
+// aligns vertically without monospacing the whole row.
+.knob-current-numeric {
+  font-variant-numeric: tabular-nums;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+.knob-current-bool {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  text-transform: lowercase;
+}
+
+.knob-default-tag {
+  font-size: 0.6875rem;
+  padding: 1px 6px;
+  background-color: var(--color-border-light);
+  color: var(--color-text-muted);
+  border-radius: var(--radius-sm);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.knob-default {
+  display: inline-flex;
+  align-items: baseline;
+  gap: var(--spacing-xs);
+  color: var(--color-text-muted);
+  font-size: 0.75rem;
+  cursor: help;
+}
+
+.knob-default-label {
+  text-transform: lowercase;
+  letter-spacing: 0;
+}
+
+.knob-default-value {
+  font-variant-numeric: tabular-nums;
 }
 
 .text-muted {

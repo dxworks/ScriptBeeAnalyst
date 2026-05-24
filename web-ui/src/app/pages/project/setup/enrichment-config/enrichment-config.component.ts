@@ -2,12 +2,67 @@ import { Component, OnInit, computed, signal } from '@angular/core';
 import { CurrentProjectService } from '../../../../core/services/current-project.service';
 import {
   CatalogueFamilyDto,
+  CatalogueFieldDto,
   ConfigOverridesResponse,
   DataServerService,
   ProjectNotFoundError,
 } from '../../../../core/services/data-server.service';
 
 type ViewState = 'loading' | 'error' | 'ready' | 'no-project';
+
+/** Maximum "Used by" badges shown inline before collapsing into "+N more". */
+const USED_BY_VISIBLE_LIMIT = 3;
+
+/** Single source of truth for catalogue type strings → display pill labels. */
+const TYPE_PILL_LABELS: ReadonlyMap<string, string> = new Map<string, string>([
+  ['int', 'int'],
+  ['float', 'float'],
+  ['bool', 'bool'],
+  ['str', 'string'],
+  ['Optional[str]', 'string?'],
+  ['tuple[str, ...]', 'string list'],
+  ['list[tuple[str, int]]', 'label/int pairs'],
+  ['dict[str, tuple[int, int]]', 'label/range map'],
+  ['list[Pattern[str]]', 'regex list'],
+  ['list[tuple[str, Pattern[str]]]', 'label/regex pairs'],
+  ['Optional[dict[str, Any]]', 'object?'],
+]);
+
+/**
+ * Stable, type-aware deep equality.
+ *
+ * Replaces the JSON.stringify byte-identity check used by the scaffold. The
+ * catalogue ships defaults and current values through the same backend
+ * serialiser, so primitives, arrays and dicts always match byte-for-byte on
+ * read — but `JSON.stringify` is also order-sensitive on object keys, so as
+ * soon as the editor introduces patch-style writes (commit 7) the simpler
+ * helper would silently disagree with the server. The keys-as-set comparison
+ * here removes that hidden coupling while keeping the read path correct.
+ */
+function deepEqual(a: unknown, b: unknown): boolean {
+  if (Object.is(a, b)) return true;
+  if (a === null || b === null) return false;
+  if (typeof a !== typeof b) return false;
+  if (Array.isArray(a)) {
+    if (!Array.isArray(b) || a.length !== b.length) return false;
+    return a.every((item, i) => deepEqual(item, b[i]));
+  }
+  if (Array.isArray(b)) return false;
+  if (typeof a === 'object' && typeof b === 'object') {
+    const aKeys = Object.keys(a as Record<string, unknown>);
+    const bKeys = Object.keys(b as Record<string, unknown>);
+    if (aKeys.length !== bKeys.length) return false;
+    return aKeys.every(
+      k =>
+        Object.prototype.hasOwnProperty.call(b, k) &&
+        deepEqual(
+          (a as Record<string, unknown>)[k],
+          (b as Record<string, unknown>)[k],
+        ),
+    );
+  }
+  return false;
+}
 
 @Component({
   selector: 'app-enrichment-config',
@@ -29,6 +84,12 @@ export class EnrichmentConfigComponent implements OnInit {
   readonly overridesCount = computed(() => Object.keys(this.response()?.overrides ?? {}).length);
   readonly lastEdited = computed(() => this.response()?.updated_at ?? null);
   readonly hasOverrides = computed(() => this.overridesCount() > 0);
+
+  // Collapsed-state tracker for the per-family `<details>` panels. Default
+  // is "expanded" everywhere; the map only records the explicit overrides
+  // the user makes during the session. No localStorage yet — commit 11 may
+  // promote this to persistent state if it sticks in user testing.
+  private readonly collapsedFamiliesSignal = signal<Map<string, boolean>>(new Map());
 
   // Both toolbar buttons stay structurally present but disabled until
   // their handlers land: Save in commit 7 (typed inputs + save flow),
@@ -116,19 +177,120 @@ export class EnrichmentConfigComponent implements OnInit {
 
   familyMeta(family: CatalogueFamilyDto): string {
     const total = family.fields.length;
-    const overridden = family.fields.filter(f => !this.isDefault(f.current, f.default)).length;
+    const overridden = family.fields.filter(f => !deepEqual(f.current, f.default)).length;
     if (overridden === 0) {
       return `${total} knob${total === 1 ? '' : 's'}`;
     }
     return `${total} knob${total === 1 ? '' : 's'} · ${overridden} overridden`;
   }
 
-  // TODO(commit-6): replace JSON.stringify with stable deep-equal once knob rows are typed.
-  // Defaults can be primitives, arrays, or dicts. JSON.stringify works only
-  // because today both `default` and `current` flow through the same
-  // `_serialise_default` path on the backend, giving byte-identity. The
-  // typed per-knob row layer will need a real deep-compare helper.
-  private isDefault(current: unknown, fallback: unknown): boolean {
-    return JSON.stringify(current) === JSON.stringify(fallback);
+  // ── Collapsible families ────────────────────────────────────────────────
+  // The Map only carries explicit user toggles; "open by default" is encoded
+  // by the absence of an entry. This keeps the signal small (mostly empty)
+  // and the template predicate trivial.
+  isFamilyOpen(family: CatalogueFamilyDto): boolean {
+    return this.collapsedFamiliesSignal().get(family.name) !== true;
+  }
+
+  /**
+   * Mirror the native `<details>` toggle into our signal so a future
+   * "Collapse all" button (commit 11 polish) has a single map to mutate.
+   * We can't use `[open]` two-way because Angular doesn't expose a
+   * `(openChange)` for the details element; reading from the DOM via
+   * `(toggle)` is the idiomatic shape.
+   */
+  onFamilyToggle(family: CatalogueFamilyDto, event: Event): void {
+    const target = event.target as HTMLDetailsElement;
+    const collapsed = !target.open;
+    this.collapsedFamiliesSignal.update(prev => {
+      const next = new Map(prev);
+      if (collapsed) {
+        next.set(family.name, true);
+      } else {
+        next.delete(family.name);
+      }
+      return next;
+    });
+  }
+
+  // ── Per-knob row helpers ────────────────────────────────────────────────
+
+  isFieldDefault(field: CatalogueFieldDto): boolean {
+    return deepEqual(field.current, field.default);
+  }
+
+  /** snake_case → Title Case Words. Acronym-friendly enough for our knobs. */
+  humanLabel(fieldName: string): string {
+    return fieldName
+      .split('_')
+      .filter(Boolean)
+      .map(part => part.charAt(0).toUpperCase() + part.slice(1))
+      .join(' ');
+  }
+
+  /**
+   * Friendly label for the type pill. Falls back to the raw type string
+   * when the catalogue surfaces a shape we haven't enumerated — better to
+   * leak the dataclass type than to drop information.
+   */
+  typeLabel(typeString: string): string {
+    return TYPE_PILL_LABELS.get(typeString) ?? typeString;
+  }
+
+  /** First-N metric names with the "+M more" tail captured separately. */
+  visibleMetricNames(field: CatalogueFieldDto): string[] {
+    return field.metric_names.slice(0, USED_BY_VISIBLE_LIMIT);
+  }
+
+  overflowMetricCount(field: CatalogueFieldDto): number {
+    return Math.max(0, field.metric_names.length - USED_BY_VISIBLE_LIMIT);
+  }
+
+  overflowMetricTitle(field: CatalogueFieldDto): string {
+    return field.metric_names.slice(USED_BY_VISIBLE_LIMIT).join(', ');
+  }
+
+  /**
+   * Render a value into a single human-readable line.
+   *
+   * The catalogue surfaces six concrete shapes (int / float / bool / string
+   * / list / dict). Lists are truncated with an ellipsis past 4 entries so
+   * a 17-pattern `nature_patterns` default doesn't blow the row layout;
+   * the full value remains accessible via the row's `title` tooltip.
+   */
+  formatValue(value: unknown): string {
+    if (value === null || value === undefined) return '—';
+    if (typeof value === 'boolean') return value ? 'true' : 'false';
+    if (typeof value === 'number') {
+      if (!Number.isFinite(value)) return String(value);
+      return Number.isInteger(value) ? value.toString() : value.toString();
+    }
+    if (typeof value === 'string') return value;
+    if (Array.isArray(value)) {
+      if (value.length === 0) return '[]';
+      const head = value.slice(0, 4).map(v => this.formatValue(v));
+      const more = value.length - head.length;
+      return more > 0 ? `${head.join(', ')}, … (+${more})` : head.join(', ');
+    }
+    if (typeof value === 'object') {
+      const entries = Object.entries(value as Record<string, unknown>);
+      if (entries.length === 0) return '{}';
+      const head = entries
+        .slice(0, 3)
+        .map(([k, v]) => `${k}: ${this.formatValue(v)}`);
+      const more = entries.length - head.length;
+      return more > 0 ? `${head.join(', ')}, … (+${more})` : head.join(', ');
+    }
+    return String(value);
+  }
+
+  /** Full JSON serialisation used as a row tooltip so the truncated
+   * collection values are inspectable without leaving the page. */
+  fullValueTitle(value: unknown): string {
+    try {
+      return JSON.stringify(value, null, 2);
+    } catch {
+      return String(value);
+    }
   }
 }

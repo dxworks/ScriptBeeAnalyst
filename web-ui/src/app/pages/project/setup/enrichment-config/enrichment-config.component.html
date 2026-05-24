@@ -76,27 +76,78 @@
     } @else if (state() === 'ready') {
       <div class="family-list">
         @for (family of families(); track family.name) {
-          <section class="family-card card">
-            <header class="family-card-header">
-              <h3 class="family-name">{{ familyLabel(family.name) }}</h3>
+          <details
+            class="family-card card"
+            [attr.open]="isFamilyOpen(family) ? '' : null"
+            (toggle)="onFamilyToggle(family, $event)"
+          >
+            <summary class="family-card-header">
+              <span class="family-card-header-titles">
+                <span class="family-disclosure" aria-hidden="true"></span>
+                <h3 class="family-name">{{ familyLabel(family.name) }}</h3>
+              </span>
               <span class="family-meta">{{ familyMeta(family) }}</span>
-            </header>
-            <p class="family-placeholder text-muted">
-              Editing controls land in the next commit. Knobs grouped under this family:
-            </p>
-            <ul class="family-field-names">
+            </summary>
+
+            <dl class="knob-list">
               @for (field of family.fields; track field.name) {
-                <li>
-                  <code class="field-name">{{ field.name }}</code>
-                  @if (!field.dx_baseline) {
-                    <span class="badge badge-warning" title="ScriptBee-only metric — no dx baseline">
-                      no dx baseline
+                <div
+                  class="knob-row"
+                  [class.knob-row-overridden]="!isFieldDefault(field)"
+                  [class.knob-row-no-baseline]="!field.dx_baseline"
+                >
+                  <dt class="knob-label">
+                    <span class="knob-label-line">
+                      <span class="knob-human-label">{{ humanLabel(field.name) }}</span>
+                      <code class="knob-field-name">{{ field.name }}</code>
+                      <span class="knob-type-pill">{{ typeLabel(field.type) }}</span>
                     </span>
-                  }
-                </li>
+                    <span class="knob-meta-line">
+                      @if (field.metric_names.length > 0) {
+                        <span class="knob-used-by">
+                          <span class="knob-used-by-label">Used by</span>
+                          @for (metric of visibleMetricNames(field); track metric) {
+                            <span class="badge badge-primary knob-used-by-badge">{{ metric }}</span>
+                          }
+                          @if (overflowMetricCount(field) > 0) {
+                            <span
+                              class="badge badge-neutral knob-used-by-overflow"
+                              [attr.title]="overflowMetricTitle(field)"
+                            >
+                              +{{ overflowMetricCount(field) }} more
+                            </span>
+                          }
+                        </span>
+                      }
+                      @if (!field.dx_baseline) {
+                        <span class="badge badge-warning knob-no-baseline">
+                          no dx baseline
+                        </span>
+                      }
+                    </span>
+                  </dt>
+
+                  <dd class="knob-value" [attr.title]="fullValueTitle(field.current)">
+                    <span
+                      class="knob-current"
+                      [class.knob-current-numeric]="field.type === 'int' || field.type === 'float'"
+                      [class.knob-current-bool]="field.type === 'bool'"
+                    >
+                      {{ formatValue(field.current) }}
+                    </span>
+                    @if (isFieldDefault(field)) {
+                      <span class="knob-default-tag">default</span>
+                    } @else {
+                      <span class="knob-default" [attr.title]="fullValueTitle(field.default)">
+                        <span class="knob-default-label">default:</span>
+                        <span class="knob-default-value">{{ formatValue(field.default) }}</span>
+                      </span>
+                    }
+                  </dd>
+                </div>
               }
-            </ul>
-          </section>
+            </dl>
+          </details>
         }
       </div>
     }
