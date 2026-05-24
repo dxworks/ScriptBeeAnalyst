@@ -123,9 +123,11 @@ export class EnrichmentConfigComponent implements OnInit {
     return `${total} knob${total === 1 ? '' : 's'} · ${overridden} overridden`;
   }
 
-  // Defaults can be primitives, arrays, or dicts. JSON-stringify is good
-  // enough for an equality check on the scaffold; commits 6+ replace this
-  // with per-field type-aware comparisons.
+  // TODO(commit-6): replace JSON.stringify with stable deep-equal once knob rows are typed.
+  // Defaults can be primitives, arrays, or dicts. JSON.stringify works only
+  // because today both `default` and `current` flow through the same
+  // `_serialise_default` path on the backend, giving byte-identity. The
+  // typed per-knob row layer will need a real deep-compare helper.
   private isDefault(current: unknown, fallback: unknown): boolean {
     return JSON.stringify(current) === JSON.stringify(fallback);
   }

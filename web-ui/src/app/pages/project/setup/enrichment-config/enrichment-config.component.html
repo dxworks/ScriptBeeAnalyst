@@ -4,7 +4,8 @@
       <h2>Enrichment Config</h2>
       @if (state() === 'ready' && lastEdited()) {
         <p class="tab-header-subtitle">
-          Last edited {{ formatLastEdited(lastEdited()) }}
+          Last edited
+          <time [attr.datetime]="lastEdited()">{{ formatLastEdited(lastEdited()) }}</time>
         </p>
       } @else if (state() === 'ready' && !hasOverrides()) {
         <p class="tab-header-subtitle">No project-specific overrides yet — defaults shown below.</p>
@@ -28,7 +29,6 @@
         [disabled]="!canSave()"
         [attr.aria-disabled]="!canSave() || null"
         [attr.aria-label]="canSave() ? 'Save changes' : 'Save changes — make edits below to enable'"
-        title="Make edits to enable"
       >
         Save changes
       </button>
@@ -39,7 +39,6 @@
         [disabled]="!canRerun()"
         [attr.aria-disabled]="!canRerun() || null"
         [attr.aria-label]="canRerun() ? 'Rerun enrichments' : 'Rerun enrichments — save changes first'"
-        title="Save changes first"
       >
         Rerun enrichments
       </button>
