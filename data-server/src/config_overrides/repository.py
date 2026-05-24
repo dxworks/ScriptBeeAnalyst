@@ -1,9 +1,10 @@
 """Supabase-backed CRUD for the ``project_config_overrides`` table.
 
 Single-tenant local mode: every call uses the service-role client. No JWT,
-no user attribution, no RLS. Mirrors :class:`FilterRuleRepository` and the
-``fetch_project_component_mapping`` helper — see the implementation plan
-§3 for the rationale.
+no user attribution, no RLS. Writes mirror :class:`FilterRuleRepository`
+(exceptions propagate so the router can map them to HTTP status codes);
+reads mirror ``fetch_project_component_mapping`` (degrade to an empty
+shape so the build path stays alive on transient Supabase errors).
 
 One row per project, keyed by ``project_id`` (also the FK to projects).
 ``upsert`` is the only write path because the editor sends the full dict
@@ -13,6 +14,8 @@ from __future__ import annotations
 
 from datetime import datetime
 from typing import Any, Dict, Optional
+
+from postgrest.types import ReturnMethod
 
 from src.config_overrides.models import ConfigOverridesRow
 from src.logger import get_logger
@@ -88,10 +91,17 @@ class ConfigOverridesRepository:
             "project_id": project_id,
             "overrides": overrides,
         }
+        # Writes let Supabase errors bubble — the router maps them to HTTP status.
+        # `returning=representation` is explicit so we don't silently depend on
+        # the supabase-py default for the upserted row read-back.
         response = (
             get_service_client()
             .table(_TABLE)
-            .upsert(payload, on_conflict="project_id")
+            .upsert(
+                payload,
+                on_conflict="project_id",
+                returning=ReturnMethod.representation,
+            )
             .execute()
         )
         rows = response.data or []
@@ -101,6 +111,7 @@ class ConfigOverridesRepository:
 
     def delete(self, project_id: str) -> bool:
         """Drop the row (reset-to-defaults). Returns True if a row was removed."""
+        # Writes let Supabase errors bubble — the router maps them to HTTP status.
         response = (
             get_service_client()
             .table(_TABLE)

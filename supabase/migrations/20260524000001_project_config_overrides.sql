@@ -29,14 +29,8 @@ create table public.project_config_overrides (
   updated_at timestamptz not null default now()
 );
 
-create or replace function public.touch_project_config_overrides()
-returns trigger language plpgsql as $$
-begin
-  new.updated_at := now();
-  return new;
-end;
-$$;
-
-create trigger project_config_overrides_touch
+-- Reuse the schema-hardened helper from the initial migration; it sets
+-- new.updated_at = now() and pins search_path = ''.
+create trigger project_config_overrides_updated_at
 before update on public.project_config_overrides
-for each row execute function public.touch_project_config_overrides();
+for each row execute procedure public.handle_updated_at();
