@@ -209,9 +209,19 @@
   }
 
   // ScriptBee-only knobs get a faint warning-tinted background so the
-  // "no dx baseline" badge isn't the only signal in a long list.
+  // "no dx baseline" badge isn't the only signal in a long list. The
+  // :host-context dark-theme override below lifts the alpha because a 4%
+  // warning over the dark #1f2937 surface is barely perceptible. We use
+  // :host-context() so Angular's emulated encapsulation does NOT rewrite
+  // the `html[data-theme="dark"]` ancestor selector — plain
+  // `html[data-theme="dark"] &` would get a `[_ngcontent-…]` attribute
+  // appended to `html`, which never matches.
   &.knob-row-no-baseline {
     background-color: rgba(var(--color-warning-rgb), 0.04);
+
+    :host-context(html[data-theme="dark"]) & {
+      background-color: rgba(var(--color-warning-rgb), 0.08);
+    }
   }
 }
 

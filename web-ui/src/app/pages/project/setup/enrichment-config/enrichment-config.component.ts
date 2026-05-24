@@ -13,7 +13,12 @@ type ViewState = 'loading' | 'error' | 'ready' | 'no-project';
 /** Maximum "Used by" badges shown inline before collapsing into "+N more". */
 const USED_BY_VISIBLE_LIMIT = 3;
 
-/** Single source of truth for catalogue type strings → display pill labels. */
+/** Single source of truth for catalogue type strings → display pill labels.
+ *
+ * Covers every reachable catalogue field type. The hidden
+ * ``components_mapping_data`` field (``Optional[dict[str, Any]]``) is filtered
+ * out at the backend (``_HIDDEN_FIELDS`` in ``catalogue.py``) so it never
+ * reaches this map — adding it here would be a lie about what's editable. */
 const TYPE_PILL_LABELS: ReadonlyMap<string, string> = new Map<string, string>([
   ['int', 'int'],
   ['float', 'float'],
@@ -25,8 +30,18 @@ const TYPE_PILL_LABELS: ReadonlyMap<string, string> = new Map<string, string>([
   ['dict[str, tuple[int, int]]', 'label/range map'],
   ['list[Pattern[str]]', 'regex list'],
   ['list[tuple[str, Pattern[str]]]', 'label/regex pairs'],
-  ['Optional[dict[str, Any]]', 'object?'],
 ]);
+
+/** Tokens that should be upper-cased in human labels instead of title-cased.
+ *
+ * Hand-curated from the actual editable knob names — these are the only
+ * acronyms that appear today (``pr_size_*``, ``polarised_*`` does NOT contain
+ * one, ``dx_*`` doesn't surface in editable fields but is a domain term used
+ * elsewhere in our copy, ``loc_*`` shows up in ``dynamicblob_loc_min``, ``ci_*``
+ * is reserved for a future CI-noise classifier). Keep the set tight so it
+ * doesn't silently capitalise unintended substrings (e.g. a knob named
+ * ``citation_*`` should NOT get ``CItation``). */
+const HUMAN_LABEL_ACRONYMS: ReadonlySet<string> = new Set(['pr', 'dx', 'ci', 'loc']);
 
 /**
  * Stable, type-aware deep equality.
@@ -219,12 +234,21 @@ export class EnrichmentConfigComponent implements OnInit {
     return deepEqual(field.current, field.default);
   }
 
-  /** snake_case → Title Case Words. Acronym-friendly enough for our knobs. */
+  /** snake_case → Title Case Words, with acronyms upper-cased.
+   *
+   * Tokens in :data:`HUMAN_LABEL_ACRONYMS` (e.g. ``pr``, ``loc``) become
+   * ``PR``/``LOC`` instead of ``Pr``/``Loc`` so domain shorthand reads
+   * naturally. Everything else gets a plain Title Case pass. */
   humanLabel(fieldName: string): string {
     return fieldName
       .split('_')
       .filter(Boolean)
-      .map(part => part.charAt(0).toUpperCase() + part.slice(1))
+      .map(part => {
+        if (HUMAN_LABEL_ACRONYMS.has(part.toLowerCase())) {
+          return part.toUpperCase();
+        }
+        return part.charAt(0).toUpperCase() + part.slice(1);
+      })
       .join(' ');
   }
 
@@ -263,7 +287,11 @@ export class EnrichmentConfigComponent implements OnInit {
     if (typeof value === 'boolean') return value ? 'true' : 'false';
     if (typeof value === 'number') {
       if (!Number.isFinite(value)) return String(value);
-      return Number.isInteger(value) ? value.toString() : value.toString();
+      if (Number.isInteger(value)) return value.toString();
+      // Clamp float precision so an override saved as 0.7000000000000001 (a
+      // common JS float artefact) doesn't visually scream "modified" by
+      // rendering 17 trailing digits next to a clean 0.7 default.
+      return value.toLocaleString(undefined, { maximumFractionDigits: 4 });
     }
     if (typeof value === 'string') return value;
     if (Array.isArray(value)) {
@@ -285,10 +313,12 @@ export class EnrichmentConfigComponent implements OnInit {
   }
 
   /** Full JSON serialisation used as a row tooltip so the truncated
-   * collection values are inspectable without leaving the page. */
+   * collection values are inspectable without leaving the page. HTML
+   * ``title=""`` collapses whitespace and many browsers truncate long
+   * tooltips, so the compact (no-indent) form maximises useful content. */
   fullValueTitle(value: unknown): string {
     try {
-      return JSON.stringify(value, null, 2);
+      return JSON.stringify(value);
     } catch {
       return String(value);
     }
