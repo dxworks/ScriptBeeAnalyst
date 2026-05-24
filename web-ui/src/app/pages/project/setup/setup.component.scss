@@ -39,7 +39,11 @@
 
 .setup-content {
   flex: 1;
-  overflow-y: auto;
+  // No `overflow-y: auto` here — the window is the scroll container for
+  // all setup tabs, matching the rest of the app (`.app-header` is sticky
+  // at body-top, `_modals` overlay the viewport). An `overflow` here
+  // would confine `position: sticky` descendants to this box and break
+  // the enrichment-config toolbar.
   padding: var(--spacing-xl);
   max-width: 1100px;
   width: 100%;

@@ -240,7 +240,10 @@
                         <div class="knob-composite">
                           <ul class="knob-chip-list">
                             @for (item of asStringList(field); track $index) {
-                              <li class="knob-chip">
+                              <li
+                                class="knob-chip"
+                                [class.knob-chip-just-rejected]="isChipJustRejected(field, $index)"
+                              >
                                 <span class="knob-chip-text">{{ item }}</span>
                                 <button
                                   type="button"
@@ -320,6 +323,7 @@
                               <input
                                 type="text"
                                 class="form-input knob-input"
+                                [class.error]="needsLabel(field, $index, row.label) || isDuplicateLabel(field, row.label)"
                                 [value]="row.label"
                                 [attr.aria-label]="'Label for row ' + ($index + 1)"
                                 (input)="onLabelRangePairLabel(field, $index, $any($event.target).value)"
@@ -346,6 +350,11 @@
                                 [attr.aria-label]="'Remove ' + (row.label || 'row ' + ($index + 1))"
                                 (click)="onLabelRangePairRemove(field, $index)"
                               >×</button>
+                              @if (needsLabel(field, $index, row.label)) {
+                                <span class="knob-row-hint knob-row-hint-span">(label required)</span>
+                              } @else if (isDuplicateLabel(field, row.label)) {
+                                <span class="knob-row-hint knob-row-hint-span">(duplicate label)</span>
+                              }
                             }
                           </div>
                           <button
@@ -386,6 +395,7 @@
                               <input
                                 type="text"
                                 class="form-input knob-input knob-input-narrow"
+                                [class.error]="needsLabel(field, $index, row.label)"
                                 [value]="row.label"
                                 [attr.aria-label]="'Label for row ' + ($index + 1)"
                                 (input)="onLabelRegexPairLabel(field, $index, $any($event.target).value)"
@@ -404,6 +414,9 @@
                                 [attr.aria-label]="'Remove ' + (row.label || 'row ' + ($index + 1))"
                                 (click)="onLabelRegexPairRemove(field, $index)"
                               >×</button>
+                              @if (needsLabel(field, $index, row.label)) {
+                                <span class="knob-row-hint knob-row-hint-flex">(label required)</span>
+                              }
                             </div>
                           }
                           <button

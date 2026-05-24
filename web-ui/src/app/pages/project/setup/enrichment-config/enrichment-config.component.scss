@@ -4,12 +4,41 @@
   gap: var(--spacing-lg);
 }
 
+// Sticky toolbar. The window is the scroll container for the setup
+// shell, and `.app-header` is itself sticky at body-top (69px tall —
+// `main-layout.component.scss:9-14`). We anchor below it so the Save /
+// Discard / Rerun affordances stay reachable as the user scrolls through
+// long family lists. Margin/padding are negated and re-added so the
+// toolbar's background paints edge-to-edge across `.setup-content`'s
+// page padding and the rounded family cards scroll under it cleanly.
 .tab-header {
+  position: sticky;
+  // 69px clears `.app-header`; the project-tab and setup-tab strips
+  // intentionally scroll out of view because they're navigational, not
+  // action affordances.
+  top: 69px;
+  z-index: 10;
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
   gap: var(--spacing-lg);
   flex-wrap: wrap;
+  padding: var(--spacing-md) var(--spacing-xl);
+  margin: calc(-1 * var(--spacing-xl)) calc(-1 * var(--spacing-xl)) 0;
+  background-color: var(--color-surface);
+  border-bottom: 1px solid var(--color-border);
+  box-shadow: 0 1px 2px 0 rgb(0 0 0 / 0.04);
+
+  :host-context(html[data-theme="dark"]) & {
+    box-shadow: 0 1px 2px 0 rgb(0 0 0 / 0.2);
+  }
+}
+
+@media (max-width: 768px) {
+  .tab-header {
+    padding: var(--spacing-sm) var(--spacing-md);
+    margin: calc(-1 * var(--spacing-md)) calc(-1 * var(--spacing-md)) 0;
+  }
 }
 
 .tab-header-titles {
@@ -529,6 +558,28 @@
   margin-top: var(--spacing-xs);
 }
 
+// Inline hint placed under a composite-editor row — "(label required)" /
+// "(duplicate label)". Two variants: ``knob-row-hint-span`` spans the
+// full grid width inside ``.knob-pair-grid`` (label/range-map), while
+// ``knob-row-hint-flex`` lays out as a flex item beside its peers
+// (label/regex-pairs uses flex rows, not a grid).
+.knob-row-hint {
+  font-size: 0.6875rem;
+  color: var(--color-warning);
+  font-weight: 500;
+  line-height: 1.2;
+}
+
+.knob-row-hint-span {
+  grid-column: 1 / -1;
+  padding-bottom: var(--spacing-xs);
+}
+
+.knob-row-hint-flex {
+  flex-basis: 100%;
+  padding-top: 2px;
+}
+
 // Label/regex-pairs is wider than a grid can carry cleanly (the regex
 // column expands and we want each row stacked vertically on narrow
 // viewports), so we use flex rows instead of a grid.
@@ -559,6 +610,24 @@
   border-radius: var(--radius-full);
   font-size: 0.75rem;
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+// One-shot pulse on the existing chip when a duplicate "Add" is rejected —
+// the TS in ``flashRejectedChip`` toggles this class for ~1s then clears.
+// Uses warning tones so it reads as feedback, not an error.
+.knob-chip-just-rejected {
+  animation: knob-chip-reject-pulse 1s ease-out;
+}
+
+@keyframes knob-chip-reject-pulse {
+  0% {
+    background-color: rgba(var(--color-warning-rgb), 0.35);
+    transform: scale(1.04);
+  }
+  100% {
+    background-color: rgba(var(--color-accent-rgb), 0.08);
+    transform: scale(1);
+  }
 }
 
 .knob-chip-text { min-width: 0; }

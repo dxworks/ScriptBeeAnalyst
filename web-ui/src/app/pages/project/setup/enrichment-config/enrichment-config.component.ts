@@ -144,6 +144,15 @@ export class EnrichmentConfigComponent implements OnInit {
   /** Server-reported 422 — points the UI at the offending row. */
   readonly fieldError = signal<{ field: string; error: string } | null>(null);
 
+  /**
+   * Set of ``"<fieldName>#<rowIndex>"`` keys for composite-editor sub-rows
+   * the user has touched. Used to delay "(label required)" / duplicate-label
+   * hints until the user actually edits a freshly-added row — newly added
+   * empty rows shouldn't render with an error-shaped annotation. Reset
+   * alongside ``pendingOverridesSignal`` on save success / discard.
+   */
+  private readonly compositeDirtyRows = signal<Set<string>>(new Set());
+
   readonly saving = signal(false);
   readonly rerunning = signal(false);
 
@@ -409,17 +418,22 @@ export class EnrichmentConfigComponent implements OnInit {
   /** Drop every pending edit and dismiss any inline error. */
   discardAll(): void {
     this.pendingOverridesSignal.set(new Map());
+    this.compositeDirtyRows.set(new Set());
     this.fieldError.set(null);
   }
 
   // ── int / float input adapters ──────────────────────────────────────────
   // Template-driven inputs deliver strings; we coerce to number once at the
-  // boundary so the pending map stores the right type. An empty string maps
-  // to a 0 — the server's coercer rejects nonsensical values so we don't
-  // try to guess intent here.
+  // boundary so the pending map stores the right type. Empty / lone-minus
+  // inputs write ``null`` (NOT ``0``) so clearing the field doesn't pretend
+  // the user typed a valid 0. The pending-map equality check in
+  // ``setPending`` then auto-clears the entry when the current value is
+  // already ``null``-equivalent. Saving with a ``null`` numeric is the
+  // backstop — the server's coercer 422s on it. Mirrors the composite-
+  // editor semantics (``onLabelIntPairValue`` / ``onLabelRangePairStart``).
   onIntInput(field: CatalogueFieldDto, raw: string): void {
     if (raw === '' || raw === '-') {
-      this.setPending(field, 0);
+      this.setPending(field, null);
       return;
     }
     const value = Number.parseInt(raw, 10);
@@ -428,7 +442,7 @@ export class EnrichmentConfigComponent implements OnInit {
 
   onFloatInput(field: CatalogueFieldDto, raw: string): void {
     if (raw === '' || raw === '-') {
-      this.setPending(field, 0);
+      this.setPending(field, null);
       return;
     }
     const value = Number.parseFloat(raw);
@@ -462,9 +476,41 @@ export class EnrichmentConfigComponent implements OnInit {
   onStringListAdd(field: CatalogueFieldDto, input: HTMLInputElement): void {
     const trimmed = input.value.trim();
     if (!trimmed) return;
-    const next = [...this.asStringList(field), trimmed];
+    const current = this.asStringList(field);
+    const existingIndex = current.indexOf(trimmed);
+    if (existingIndex !== -1) {
+      // Dedupe: flash the existing chip instead of pushing a duplicate.
+      this.flashRejectedChip(field, existingIndex);
+      input.value = '';
+      return;
+    }
+    const next = [...current, trimmed];
     this.setPending(field, next);
     input.value = '';
+  }
+
+  /**
+   * Pulse a chip to acknowledge a duplicate "Add" attempt. The signal
+   * carries the ``"<fieldName>#<index>"`` key for ~1s; the template binds
+   * a CSS class via ``isChipJustRejected`` so the chip plays a one-shot
+   * animation. Cleared via ``setTimeout`` rather than a separate cleanup
+   * effect — the cost is one orphan timer per duplicate attempt, which is
+   * cheap and self-resolving.
+   */
+  private readonly chipJustRejected = signal<string | null>(null);
+
+  isChipJustRejected(field: CatalogueFieldDto, index: number): boolean {
+    return this.chipJustRejected() === this.rowKey(field, index);
+  }
+
+  private flashRejectedChip(field: CatalogueFieldDto, index: number): void {
+    const key = this.rowKey(field, index);
+    this.chipJustRejected.set(key);
+    setTimeout(() => {
+      // Only clear if our key is still the active one; a subsequent flash
+      // on a different chip must not be wiped by an earlier timer.
+      if (this.chipJustRejected() === key) this.chipJustRejected.set(null);
+    }, 1000);
   }
 
   onStringListRemove(field: CatalogueFieldDto, index: number): void {
@@ -588,12 +634,14 @@ export class EnrichmentConfigComponent implements OnInit {
   }
 
   onLabelRangePairLabel(field: CatalogueFieldDto, index: number, label: string): void {
+    this.markRowDirty(field, index);
     const rows = this.asLabelRangePairs(field);
     rows[index] = { ...rows[index], label };
     this.writeLabelRangePairs(field, rows);
   }
 
   onLabelRangePairStart(field: CatalogueFieldDto, index: number, raw: string): void {
+    this.markRowDirty(field, index);
     const rows = this.asLabelRangePairs(field);
     const parsed = raw === '' ? null : Number.parseInt(raw, 10);
     rows[index] = {
@@ -604,6 +652,7 @@ export class EnrichmentConfigComponent implements OnInit {
   }
 
   onLabelRangePairEnd(field: CatalogueFieldDto, index: number, raw: string): void {
+    this.markRowDirty(field, index);
     const rows = this.asLabelRangePairs(field);
     const parsed = raw === '' ? null : Number.parseInt(raw, 10);
     rows[index] = {
@@ -614,6 +663,8 @@ export class EnrichmentConfigComponent implements OnInit {
   }
 
   onLabelRangePairAdd(field: CatalogueFieldDto): void {
+    // New row deliberately NOT marked dirty — it stays hint-free until the
+    // user touches one of its inputs.
     const rows = [...this.asLabelRangePairs(field), { label: '', start: 0, end: 0 }];
     this.writeLabelRangePairs(field, rows);
   }
@@ -621,6 +672,7 @@ export class EnrichmentConfigComponent implements OnInit {
   onLabelRangePairRemove(field: CatalogueFieldDto, index: number): void {
     const rows = this.asLabelRangePairs(field).filter((_, i) => i !== index);
     this.writeLabelRangePairs(field, rows);
+    this.shiftDirtyRowsAfterRemove(field, index);
   }
 
   // ── label/regex-pairs editor (``list[tuple[str, Pattern[str]]]``) ───────
@@ -654,18 +706,21 @@ export class EnrichmentConfigComponent implements OnInit {
   }
 
   onLabelRegexPairLabel(field: CatalogueFieldDto, index: number, label: string): void {
+    this.markRowDirty(field, index);
     const rows = this.asLabelRegexPairs(field);
     rows[index] = { ...rows[index], label };
     this.writeLabelRegexPairs(field, rows);
   }
 
   onLabelRegexPairPattern(field: CatalogueFieldDto, index: number, regex: string): void {
+    this.markRowDirty(field, index);
     const rows = this.asLabelRegexPairs(field);
     rows[index] = { ...rows[index], regex };
     this.writeLabelRegexPairs(field, rows);
   }
 
   onLabelRegexPairAdd(field: CatalogueFieldDto): void {
+    // New row deliberately NOT marked dirty — see ``onLabelRangePairAdd``.
     const rows = [...this.asLabelRegexPairs(field), { label: '', regex: '' }];
     this.writeLabelRegexPairs(field, rows);
   }
@@ -673,6 +728,93 @@ export class EnrichmentConfigComponent implements OnInit {
   onLabelRegexPairRemove(field: CatalogueFieldDto, index: number): void {
     const rows = this.asLabelRegexPairs(field).filter((_, i) => i !== index);
     this.writeLabelRegexPairs(field, rows);
+    this.shiftDirtyRowsAfterRemove(field, index);
+  }
+
+  // ── Composite-editor row hints ──────────────────────────────────────────
+  // Two hints fire here, both soft (don't block save — the server is the
+  // source of truth for "is this payload valid"):
+  //
+  //  * "(label required)" — the row has been touched but its label is
+  //    blank. A freshly-added row stays hint-free until the user actually
+  //    edits one of its inputs, so the affordance reads as feedback,
+  //    NOT pre-emptive scolding.
+  //  * "(duplicate label)" — two or more rows in the SAME composite editor
+  //    share the same non-empty label. Renders on EVERY duplicate row so
+  //    the user can pick which one to rename without a "first wins"
+  //    surprise. Only used by the dict-shaped editor (``label/range-map``)
+  //    where duplicate labels silently collapse on PUT; list-of-pair
+  //    editors preserve duplicates so they don't get this hint.
+
+  private rowKey(field: CatalogueFieldDto, index: number): string {
+    return `${field.name}#${index}`;
+  }
+
+  /** Flag the given row as user-edited so its hints can render. */
+  private markRowDirty(field: CatalogueFieldDto, index: number): void {
+    const key = this.rowKey(field, index);
+    this.compositeDirtyRows.update(prev => {
+      if (prev.has(key)) return prev;
+      const next = new Set(prev);
+      next.add(key);
+      return next;
+    });
+  }
+
+  /**
+   * Re-key the dirty-row set after a row was removed at ``removedIndex``.
+   * Every higher-indexed dirty row shifts down by one; the removed row's
+   * key drops. Without this the hints would land on the wrong rows after
+   * a delete-from-middle.
+   */
+  private shiftDirtyRowsAfterRemove(
+    field: CatalogueFieldDto,
+    removedIndex: number,
+  ): void {
+    this.compositeDirtyRows.update(prev => {
+      const next = new Set<string>();
+      const prefix = `${field.name}#`;
+      for (const key of prev) {
+        if (!key.startsWith(prefix)) {
+          next.add(key);
+          continue;
+        }
+        const idx = Number.parseInt(key.slice(prefix.length), 10);
+        if (idx === removedIndex) continue;
+        if (idx > removedIndex) next.add(`${prefix}${idx - 1}`);
+        else next.add(key);
+      }
+      return next;
+    });
+  }
+
+  /** True iff the row has been touched by the user this session. */
+  isCompositeRowDirty(field: CatalogueFieldDto, index: number): boolean {
+    return this.compositeDirtyRows().has(this.rowKey(field, index));
+  }
+
+  /** Show "(label required)" iff the row has been touched AND label is blank. */
+  needsLabel(field: CatalogueFieldDto, index: number, label: string): boolean {
+    return this.isCompositeRowDirty(field, index) && label.trim() === '';
+  }
+
+  /** Pre-compute the set of duplicate labels for a label/range-map field. */
+  duplicateLabels(field: CatalogueFieldDto): Set<string> {
+    const seen = new Map<string, number>();
+    const dupes = new Set<string>();
+    for (const row of this.asLabelRangePairs(field)) {
+      const label = row.label.trim();
+      if (!label) continue;
+      const prior = seen.get(label) ?? 0;
+      if (prior >= 1) dupes.add(label);
+      seen.set(label, prior + 1);
+    }
+    return dupes;
+  }
+
+  isDuplicateLabel(field: CatalogueFieldDto, label: string): boolean {
+    if (!label.trim()) return false;
+    return this.duplicateLabels(field).has(label.trim());
   }
 
   // ── Save flow ───────────────────────────────────────────────────────────
@@ -700,6 +842,7 @@ export class EnrichmentConfigComponent implements OnInit {
       const refreshed = await this.dataServer.getConfigOverrides(projectId);
       this.response.set(refreshed);
       this.pendingOverridesSignal.set(new Map());
+      this.compositeDirtyRows.set(new Set());
       this.toast.success('Configuration saved');
     } catch (err) {
       if (err instanceof ConfigOverridesValidationError) {
