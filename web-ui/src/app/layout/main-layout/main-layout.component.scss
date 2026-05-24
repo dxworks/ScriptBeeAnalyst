@@ -11,6 +11,11 @@
   position: sticky;
   top: 0;
   z-index: 100;
+  // Reserve an explicit height that page-level sticky toolbars can anchor
+  // against (e.g. enrichment-config). The actual rendered height matches
+  // because ``.header-content`` padding + content stays ≤ this value;
+  // ``min-height`` keeps the floor stable across themes / font sizes.
+  min-height: var(--app-header-height);
 }
 
 .header-content {

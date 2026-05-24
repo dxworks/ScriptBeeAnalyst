@@ -1,4 +1,11 @@
-import { Component, OnInit, computed, signal } from '@angular/core';
+import {
+  Component,
+  DestroyRef,
+  OnInit,
+  computed,
+  inject,
+  signal,
+} from '@angular/core';
 import { FormsModule } from '@angular/forms';
 import { ConfirmationModalComponent } from '../../../../shared/components/confirmation-modal/confirmation-modal.component';
 import { CurrentProjectService } from '../../../../core/services/current-project.service';
@@ -217,11 +224,32 @@ export class EnrichmentConfigComponent implements OnInit {
     return `This recomputes all metrics ${target} with the current overrides. May take several minutes.`;
   });
 
+  /**
+   * Used by ``flashRejectedChip`` to cancel its pending clear-timer when
+   * the component is destroyed mid-1s window — without this, the timer
+   * would tick on a torn-down component and write to a now-orphan signal.
+   */
+  private readonly destroyRef = inject(DestroyRef);
+
+  /** Currently-scheduled clear handle for the chip-reject pulse, if any. */
+  private chipRejectClearHandle: ReturnType<typeof setTimeout> | null = null;
+
   constructor(
     private dataServer: DataServerService,
     private currentProject: CurrentProjectService,
     private toast: ToastService,
-  ) {}
+  ) {
+    this.destroyRef.onDestroy(() => {
+      if (this.chipRejectClearHandle !== null) {
+        clearTimeout(this.chipRejectClearHandle);
+        this.chipRejectClearHandle = null;
+      }
+      if (this.justSavedClearHandle !== null) {
+        clearTimeout(this.justSavedClearHandle);
+        this.justSavedClearHandle = null;
+      }
+    });
+  }
 
   ngOnInit(): void {
     void this.load();
@@ -552,9 +580,9 @@ export class EnrichmentConfigComponent implements OnInit {
    * Pulse a chip to acknowledge a duplicate "Add" attempt. The signal
    * carries the ``"<fieldName>#<index>"`` key for ~1s; the template binds
    * a CSS class via ``isChipJustRejected`` so the chip plays a one-shot
-   * animation. Cleared via ``setTimeout`` rather than a separate cleanup
-   * effect — the cost is one orphan timer per duplicate attempt, which is
-   * cheap and self-resolving.
+   * animation. The clear-timer is tracked on ``chipRejectClearHandle`` and
+   * cancelled in ``destroyRef.onDestroy`` so a teardown mid-flash doesn't
+   * write to a torn-down signal.
    */
   private readonly chipJustRejected = signal<string | null>(null);
 
@@ -566,6 +594,35 @@ export class EnrichmentConfigComponent implements OnInit {
    * pulse is purely visual and the input value vanishes).
    */
   readonly lastRejectedMessage = signal<string | null>(null);
+
+  /**
+   * Field names whose row should play the brief save-flash animation.
+   * Populated immediately after a successful save with the keys that
+   * transitioned dirty→clean; cleared after the 200ms keyframe window.
+   */
+  private readonly justSavedRows = signal<Set<string>>(new Set());
+
+  /** Pending clear handle for ``justSavedRows`` — same lifecycle as the
+   *  chip-reject timer; cancelled in ``destroyRef.onDestroy``. */
+  private justSavedClearHandle: ReturnType<typeof setTimeout> | null = null;
+
+  isRowJustSaved(field: CatalogueFieldDto): boolean {
+    return this.justSavedRows().has(field.name);
+  }
+
+  private flashJustSavedRows(fieldNames: Set<string>): void {
+    if (fieldNames.size === 0) return;
+    this.justSavedRows.set(fieldNames);
+    if (this.justSavedClearHandle !== null) {
+      clearTimeout(this.justSavedClearHandle);
+    }
+    // 250ms gives the 200ms keyframe a margin so the class doesn't drop
+    // mid-animation on slower machines.
+    this.justSavedClearHandle = setTimeout(() => {
+      this.justSavedRows.set(new Set());
+      this.justSavedClearHandle = null;
+    }, 250);
+  }
 
   isChipJustRejected(field: CatalogueFieldDto, index: number): boolean {
     return this.chipJustRejected() === this.rowKey(field, index);
@@ -579,13 +636,17 @@ export class EnrichmentConfigComponent implements OnInit {
     const key = this.rowKey(field, index);
     this.chipJustRejected.set(key);
     this.lastRejectedMessage.set(`"${value}" is already in the list`);
-    setTimeout(() => {
-      // Only clear if our key is still the active one; a subsequent flash
-      // on a different chip must not be wiped by an earlier timer.
+    // Cancel any earlier in-flight clear so a back-to-back rejection on a
+    // different chip doesn't get wiped by the previous timer firing.
+    if (this.chipRejectClearHandle !== null) {
+      clearTimeout(this.chipRejectClearHandle);
+    }
+    this.chipRejectClearHandle = setTimeout(() => {
       if (this.chipJustRejected() === key) {
         this.chipJustRejected.set(null);
         this.lastRejectedMessage.set(null);
       }
+      this.chipRejectClearHandle = null;
     }, 1000);
   }
 
@@ -874,27 +935,50 @@ export class EnrichmentConfigComponent implements OnInit {
     return this.isCompositeRowDirty(field, index) && label.trim() === '';
   }
 
-  /** Pre-compute the set of duplicate labels for a label/range-map field. */
-  // TODO(commit 11): activate this hint by switching the dict editor to an
-  // array-of-pairs pending shape with collapse-on-save — today
-  // ``writeLabelRangePairs`` collapses duplicates immediately on every
-  // keystroke, so this helper never returns a non-empty set in practice.
-  duplicateLabels(field: CatalogueFieldDto): Set<string> {
-    const seen = new Map<string, number>();
-    const dupes = new Set<string>();
-    for (const row of this.asLabelRangePairs(field)) {
-      const label = row.label.trim();
-      if (!label) continue;
-      const prior = seen.get(label) ?? 0;
-      if (prior >= 1) dupes.add(label);
-      seen.set(label, prior + 1);
+  /**
+   * Pre-computed ``fieldName → duplicate-label set`` for every label/range-map
+   * field in the catalogue. Tracks both the response (current dict shape)
+   * and pending edits so per-row ``isDuplicateLabel`` is an O(1) lookup
+   * instead of rebuilding the set per row per render.
+   *
+   * TODO(commit 11+): activate this hint by switching the dict editor to an
+   * array-of-pairs pending shape with collapse-on-save — today
+   * ``writeLabelRangePairs`` collapses duplicates immediately on every
+   * keystroke, so the result of this computed is always an empty set in
+   * practice. The cached shape is ready for when the dormant code wakes up.
+   */
+  private readonly duplicateLabelsByField = computed<Map<string, Set<string>>>(() => {
+    // Touch the signals so the computed is correctly invalidated on edits.
+    this.pendingOverridesSignal();
+    this.response();
+    const out = new Map<string, Set<string>>();
+    for (const family of this.families()) {
+      for (const field of family.fields) {
+        if (this.inputKind(field) !== 'label-range-map') continue;
+        const seen = new Map<string, number>();
+        const dupes = new Set<string>();
+        for (const row of this.asLabelRangePairs(field)) {
+          const label = row.label.trim();
+          if (!label) continue;
+          const prior = seen.get(label) ?? 0;
+          if (prior >= 1) dupes.add(label);
+          seen.set(label, prior + 1);
+        }
+        out.set(field.name, dupes);
+      }
     }
-    return dupes;
+    return out;
+  });
+
+  duplicateLabels(field: CatalogueFieldDto): Set<string> {
+    return this.duplicateLabelsByField().get(field.name) ?? new Set();
   }
 
   isDuplicateLabel(field: CatalogueFieldDto, label: string): boolean {
-    if (!label.trim()) return false;
-    return this.duplicateLabels(field).has(label.trim());
+    const trimmed = label.trim();
+    if (!trimmed) return false;
+    const dupes = this.duplicateLabelsByField().get(field.name);
+    return dupes !== undefined && dupes.has(trimmed);
   }
 
   // ── Save flow ───────────────────────────────────────────────────────────
@@ -916,14 +1000,27 @@ export class EnrichmentConfigComponent implements OnInit {
     this.fieldError.set(null);
     try {
       await this.dataServer.putConfigOverrides(projectId, merged);
-      // Refetch the catalogue+overrides so ``current`` reflects the
-      // server's authoritative state (it may have normalised composite
-      // shapes back to the canonical form), then clear pending.
-      const refreshed = await this.dataServer.getConfigOverrides(projectId);
-      this.response.set(refreshed);
+      // PUT succeeded — clear pending state IMMEDIATELY so a subsequent
+      // refetch failure can't leave the UI dirty after a server-confirmed
+      // save. The refetch below realigns ``current`` with whatever the
+      // server normalised; if it fails the user keeps clean state and the
+      // toast tells them to retry-load. The set of just-saved field names
+      // drives the row save-flash animation.
+      const justSavedFields = new Set(pending.keys());
       this.pendingOverridesSignal.set(new Map());
       this.compositeDirtyRows.set(new Set());
+      this.flashJustSavedRows(justSavedFields);
       this.toast.success('Configuration saved');
+      try {
+        const refreshed = await this.dataServer.getConfigOverrides(projectId);
+        this.response.set(refreshed);
+      } catch (refetchErr) {
+        // Save succeeded but refetch did not — log to console and surface
+        // a soft warning so the user knows to reload if values look stale.
+        // No need to revert pending; the server is authoritative.
+        console.warn('config_overrides: post-save refetch failed', refetchErr);
+        this.toast.warning('Saved — reload the page to see normalised values');
+      }
     } catch (err) {
       if (err instanceof ConfigOverridesValidationError) {
         this.fieldError.set({ field: err.field, error: err.message });

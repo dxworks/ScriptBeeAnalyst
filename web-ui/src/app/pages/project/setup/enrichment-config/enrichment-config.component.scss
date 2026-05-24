@@ -5,18 +5,18 @@
 }
 
 // Sticky toolbar. The window is the scroll container for the setup
-// shell, and `.app-header` is itself sticky at body-top (69px tall —
-// `main-layout.component.scss:9-14`). We anchor below it so the Save /
+// shell, and `.app-header` is itself sticky at body-top. We anchor
+// below it via the shared ``--app-header-height`` token so the Save /
 // Discard / Rerun affordances stay reachable as the user scrolls through
 // long family lists. Margin/padding are negated and re-added so the
 // toolbar's background paints edge-to-edge across `.setup-content`'s
 // page padding and the rounded family cards scroll under it cleanly.
 .tab-header {
   position: sticky;
-  // 69px clears `.app-header`; the project-tab and setup-tab strips
-  // intentionally scroll out of view because they're navigational, not
-  // action affordances.
-  top: 69px;
+  // Anchors below ``.app-header`` via the shared token; the project-tab
+  // and setup-tab strips intentionally scroll out of view because
+  // they're navigational, not action affordances.
+  top: var(--app-header-height);
   z-index: 10;
   display: flex;
   align-items: flex-start;
@@ -460,7 +460,6 @@
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   text-align: right;
   max-width: 160px;
-  margin-left: auto;
 }
 
 .knob-input-inline {
@@ -619,6 +618,9 @@
 // reduced motion get only the aria-live announcement (the visual pulse is
 // dropped).
 .knob-chip-just-rejected {
+  // ``transform-origin: center`` is defensive — keeps the pulse centred
+  // even if a future SCSS change moves the origin via inherited styles.
+  transform-origin: center;
   @media (prefers-reduced-motion: no-preference) {
     animation: knob-chip-reject-pulse 1s ease-out;
   }
@@ -740,6 +742,44 @@
   font-size: 0.8125rem;
   color: var(--color-error);
   font-weight: 500;
+}
+
+// Subtle informational hint shown above the family list when the project
+// has no persisted overrides yet — softer than ``.empty-state`` (we still
+// render the catalogue beneath it) but visually anchored at the top of
+// the body so the user knows the values below are defaults.
+.empty-overrides-hint {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-sm);
+  padding: var(--spacing-sm) var(--spacing-md);
+  background-color: var(--color-surface-card);
+  border: 1px solid var(--color-border-light);
+  border-radius: var(--radius-md);
+  font-size: 0.8125rem;
+  color: var(--color-text-muted);
+}
+
+.empty-overrides-hint-icon {
+  flex: 0 0 auto;
+  color: var(--color-text-muted);
+  opacity: 0.7;
+}
+
+// Brief scale-in on a row that just transitioned dirty→clean (saved).
+// Pure CSS via class binding; the TS toggles ``knob-row-just-saved`` for
+// a one-tick window. Same reduced-motion gate as the chip pulse.
+.knob-row-just-saved {
+  transform-origin: center;
+  @media (prefers-reduced-motion: no-preference) {
+    animation: knob-row-save-flash 200ms ease-out;
+  }
+}
+
+@keyframes knob-row-save-flash {
+  0%   { transform: scale(1); }
+  50%  { transform: scale(1.02); }
+  100% { transform: scale(1); }
 }
 
 .text-muted    { color: var(--color-text-muted); }

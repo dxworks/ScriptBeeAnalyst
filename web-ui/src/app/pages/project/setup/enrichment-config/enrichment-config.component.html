@@ -42,7 +42,7 @@
         type="button"
         [disabled]="!canSave()"
         [attr.aria-disabled]="!canSave() || null"
-        [attr.aria-label]="canSave() ? 'Save changes' : 'Save changes — make edits below to enable'"
+        [attr.aria-describedby]="!canSave() && !saving() ? 'enrichment-config-save-reason' : null"
         (click)="onSave()"
       >
         @if (saving()) {
@@ -77,6 +77,15 @@
     @if (rerunReason()) {
       <span id="enrichment-config-rerun-reason" class="sr-only">
         Rerun enrichments — {{ rerunReason() }}.
+      </span>
+    }
+
+    <!-- Save button companion. Mirrors the Rerun pattern — when the button
+         is disabled and not mid-save, we surface "make edits below to
+         enable" so screen-reader users hear the actionable hint. -->
+    @if (!canSave() && !saving()) {
+      <span id="enrichment-config-save-reason" class="sr-only">
+        Save changes — make edits below to enable.
       </span>
     }
 
@@ -120,6 +129,22 @@
         <button class="btn btn-secondary btn-sm" type="button" (click)="retry()">Retry</button>
       </div>
     } @else if (state() === 'ready') {
+      @if (!hasOverrides() && !dirty()) {
+        <div class="empty-overrides-hint" role="note">
+          <svg
+            class="empty-overrides-hint-icon"
+            width="16" height="16"
+            viewBox="0 0 24 24"
+            fill="none" stroke="currentColor" stroke-width="2"
+            aria-hidden="true"
+          >
+            <circle cx="12" cy="12" r="10" />
+            <line x1="12" y1="16" x2="12" y2="12" />
+            <line x1="12" y1="8" x2="12.01" y2="8" />
+          </svg>
+          <span>No project-specific overrides yet — defaults shown below.</span>
+        </div>
+      }
       <div class="family-list">
         @for (family of families(); track family.name) {
           <details
@@ -143,6 +168,7 @@
                   [class.knob-row-pending]="isFieldPending(field)"
                   [class.knob-row-error]="hasFieldError(field)"
                   [class.knob-row-no-baseline]="!field.dx_baseline"
+                  [class.knob-row-just-saved]="isRowJustSaved(field)"
                 >
                   <dt class="knob-label" [id]="knobLabelId(field)">
                     <span class="knob-label-line">

@@ -279,6 +279,8 @@ export class DataServerService {
    * "rerun" endpoint exists. The wrapper exists so editor callers spell out
    * their intent in service-call grammar instead of leaking the generic
    * "build" verb into UI code that means "rerun with my saved overrides".
+   *
+   * @see buildProject
    */
   async rerunEnrichments(projectId: string): Promise<BuildResult> {
     return this.buildProject(projectId);

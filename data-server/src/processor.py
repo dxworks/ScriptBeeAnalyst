@@ -577,6 +577,10 @@ def build_graph(
     # inject the data when Supabase has something to inject.
     mapping_data = fetch_project_component_mapping(project_id)
     if mapping_data is not None:
+        # ``DEFAULT_CONFIG`` is referenced here AND inside
+        # ``_apply_project_overrides`` — duplication is intentional. Each
+        # branch defends its own concern (component mapping vs. config
+        # overrides) so a failure in one does not cascade into the other.
         effective_config = replace(
             config if config is not None else DEFAULT_CONFIG,
             components_mapping_data=mapping_data,
@@ -610,7 +614,7 @@ def _apply_project_overrides(
         overrides = ConfigOverridesRepository().get(project_id).overrides
     except Exception:  # noqa: BLE001 — never block the build on Supabase errors
         logger.exception(
-            "config_overrides fetch failed for project %s — using base config",
+            "config_overrides setup failed for project %s — using base config",
             project_id,
         )
         return base
