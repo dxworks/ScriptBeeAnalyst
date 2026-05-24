@@ -33,6 +33,7 @@ Decisions deferred to the orchestrator's per-thesis design call:
 """
 from __future__ import annotations
 
+import re
 from dataclasses import fields as dataclass_fields
 from typing import Any, Dict, List, Mapping, Optional
 
@@ -40,6 +41,9 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from src.enrichment.config import DEFAULT_CONFIG, EnrichmentConfig
 from src.enrichment.metrics import METRICS
+from src.logger import get_logger
+
+LOG = get_logger(__name__)
 
 
 # Knobs that exist on EnrichmentConfig but the editor must NOT surface.
@@ -166,11 +170,16 @@ def _home_family(metric_names: list[str]) -> str:
     Falls back to ``"classifiers"`` for unknown metric names — defensive,
     so adding a metric without updating ``_METRIC_FAMILY`` still produces
     a renderable catalogue (visible misplacement is better than a 500).
+    The misconfig is logged so it surfaces in normal operations.
     """
     for metric_name in metric_names:
         family = _METRIC_FAMILY.get(metric_name)
         if family is not None:
             return family
+    LOG.warning(
+        "no _METRIC_FAMILY entry for any of %r — defaulting to 'classifiers'",
+        metric_names,
+    )
     return "classifiers"
 
 
@@ -178,18 +187,43 @@ def _has_no_dx_baseline(field_name: str) -> bool:
     return any(field_name.startswith(p) for p in _NO_DX_BASELINE_PREFIXES)
 
 
+# Inline-flag glyphs for re flags that survive the JSON round-trip. UNICODE
+# is the engine default in Python 3 and never needs to be re-encoded.
+_INLINE_FLAG_CHARS: tuple[tuple[int, str], ...] = (
+    (re.IGNORECASE, "i"),
+    (re.MULTILINE, "m"),
+    (re.DOTALL, "s"),
+    (re.VERBOSE, "x"),
+)
+
+
+def _serialise_regex(pattern: re.Pattern[str]) -> str:
+    """Render a compiled pattern as a self-contained source string.
+
+    Non-default flags (everything except :data:`re.UNICODE`) are encoded
+    as an inline ``(?flags)`` prefix so :func:`re.compile` on the round-
+    tripped string reproduces the original flag set. Without this the
+    default ``NATURE_PATTERNS`` (all ``re.IGNORECASE``) would silently
+    become case-sensitive after a save-and-load cycle.
+    """
+    flags = pattern.flags & ~re.UNICODE
+    glyphs = "".join(ch for bit, ch in _INLINE_FLAG_CHARS if flags & bit)
+    if not glyphs:
+        return pattern.pattern
+    return f"(?{glyphs}){pattern.pattern}"
+
+
 def _serialise_default(value: Any) -> Any:
     """Coerce a dataclass default into a JSON-safe shape for the wire.
 
-    Regex patterns become their source string; tuples become lists. The
-    catalogue is read-only metadata, so we ship a representation the
+    Regex patterns become their source string with non-default flags
+    encoded inline (see :func:`_serialise_regex`); tuples become lists.
+    The catalogue is read-only metadata, so we ship a representation the
     browser can render — the merge layer does the inverse coercion on
     PUT.
     """
-    import re
-
     if isinstance(value, re.Pattern):
-        return value.pattern
+        return _serialise_regex(value)
     if isinstance(value, tuple):
         return [_serialise_default(v) for v in value]
     if isinstance(value, list):
@@ -234,12 +268,10 @@ def build_catalogue(overrides: Optional[Mapping[str, Any]] = None) -> CatalogueR
 
     # Iterate the metric→fields index so families come out in the
     # registration order documented in §3 of the implementation plan.
-    seen: set[str] = set()
+    # The index is already keyed uniquely by field name (setdefault).
     for field_name, metric_names in index.items():
-        if field_name in seen or field_name in _HIDDEN_FIELDS:
-            seen.add(field_name)
+        if field_name in _HIDDEN_FIELDS:
             continue
-        seen.add(field_name)
 
         dc_field = declared.get(field_name)
         if dc_field is None:

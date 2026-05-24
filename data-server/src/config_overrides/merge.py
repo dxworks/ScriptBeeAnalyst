@@ -24,10 +24,16 @@ import re
 from dataclasses import fields as dataclass_fields, replace
 from typing import Any, Mapping
 
+from src.config_overrides.catalogue import _HIDDEN_FIELDS, editable_field_names
 from src.enrichment.config import EnrichmentConfig
 from src.logger import get_logger
 
 LOG = get_logger(__name__)
+
+
+def _bad_type(value: Any) -> str:
+    """Render ``value``'s type AND repr for debugger-friendly error messages."""
+    return f"{type(value).__name__} ({value!r})"
 
 
 class OverrideCoercionError(ValueError):
@@ -44,7 +50,7 @@ class OverrideCoercionError(ValueError):
 
 def _coerce_bool(field: str, value: Any) -> bool:
     if not isinstance(value, bool):
-        raise OverrideCoercionError(field, f"expected bool, got {type(value).__name__}")
+        raise OverrideCoercionError(field, f"expected bool, got {_bad_type(value)}")
     return value
 
 
@@ -52,32 +58,32 @@ def _coerce_int(field: str, value: Any) -> int:
     # JSON has no separate int type; pydantic-decoded ints come in as int.
     # bool is an int subclass in Python — reject explicitly.
     if isinstance(value, bool) or not isinstance(value, int):
-        raise OverrideCoercionError(field, f"expected int, got {type(value).__name__}")
+        raise OverrideCoercionError(field, f"expected int, got {_bad_type(value)}")
     return value
 
 
 def _coerce_float(field: str, value: Any) -> float:
     # Accept ints as floats (JSON 0.8 stays 0.8; JSON 1 widens to 1.0).
     if isinstance(value, bool) or not isinstance(value, (int, float)):
-        raise OverrideCoercionError(field, f"expected number, got {type(value).__name__}")
+        raise OverrideCoercionError(field, f"expected number, got {_bad_type(value)}")
     return float(value)
 
 
 def _coerce_str(field: str, value: Any) -> str:
     if not isinstance(value, str):
-        raise OverrideCoercionError(field, f"expected string, got {type(value).__name__}")
+        raise OverrideCoercionError(field, f"expected string, got {_bad_type(value)}")
     return value
 
 
 def _coerce_str_tuple(field: str, value: Any) -> tuple[str, ...]:
     """``tuple[str, ...]`` — JSON arrives as ``list[str]``."""
     if not isinstance(value, (list, tuple)):
-        raise OverrideCoercionError(field, f"expected array, got {type(value).__name__}")
+        raise OverrideCoercionError(field, f"expected array, got {_bad_type(value)}")
     out: list[str] = []
     for i, item in enumerate(value):
         if not isinstance(item, str):
             raise OverrideCoercionError(
-                field, f"element {i} expected string, got {type(item).__name__}"
+                field, f"element {i} expected string, got {_bad_type(item)}"
             )
         out.append(item)
     return tuple(out)
@@ -90,9 +96,14 @@ def _coerce_issue_age_buckets(field: str, value: Any) -> list[tuple[str, int]]:
     ``[{"label": "<1w", "max_days": 7}, ...]`` (form-editor shape). The
     UI sends the dict shape; the wire-shape branch keeps round-trip
     sanity in tests.
+
+    TODO: normalize-at-router. The router will canonicalise incoming
+    writes to the compact ``[label, max_days]`` shape (matches the
+    catalogue serialiser output). Merge keeps tolerating both as
+    defense in depth for hand-edited JSONB rows.
     """
     if not isinstance(value, list):
-        raise OverrideCoercionError(field, f"expected array, got {type(value).__name__}")
+        raise OverrideCoercionError(field, f"expected array, got {_bad_type(value)}")
     out: list[tuple[str, int]] = []
     for i, item in enumerate(value):
         label: Any
@@ -104,15 +115,15 @@ def _coerce_issue_age_buckets(field: str, value: Any) -> list[tuple[str, int]]:
             label, bound = item[0], item[1]
         else:
             raise OverrideCoercionError(
-                field, f"element {i} expected [label, max_days] or {{label, max_days}}"
+                field, f"element {i} expected [label, max_days] or {{label, max_days}}, got {_bad_type(item)}"
             )
         if not isinstance(label, str):
             raise OverrideCoercionError(
-                field, f"element {i} 'label' expected string, got {type(label).__name__}"
+                field, f"element {i} 'label' expected string, got {_bad_type(label)}"
             )
         if isinstance(bound, bool) or not isinstance(bound, int):
             raise OverrideCoercionError(
-                field, f"element {i} 'max_days' expected int, got {type(bound).__name__}"
+                field, f"element {i} 'max_days' expected int, got {_bad_type(bound)}"
             )
         out.append((label, bound))
     return out
@@ -121,47 +132,58 @@ def _coerce_issue_age_buckets(field: str, value: Any) -> list[tuple[str, int]]:
 def _coerce_daytime_buckets(field: str, value: Any) -> dict[str, tuple[int, int]]:
     """``dict[str, tuple[int, int]]`` — JSON object → dict of two-int tuples."""
     if not isinstance(value, dict):
-        raise OverrideCoercionError(field, f"expected object, got {type(value).__name__}")
+        raise OverrideCoercionError(field, f"expected object, got {_bad_type(value)}")
     out: dict[str, tuple[int, int]] = {}
     for label, bounds in value.items():
         if not isinstance(label, str):
-            raise OverrideCoercionError(field, f"bucket key expected string, got {type(label).__name__}")
+            raise OverrideCoercionError(field, f"bucket key expected string, got {_bad_type(label)}")
         if not isinstance(bounds, (list, tuple)) or len(bounds) != 2:
             raise OverrideCoercionError(
-                field, f"bucket {label!r} expected [start_hour, end_hour]"
+                field, f"bucket {label!r} expected [start_hour, end_hour], got {_bad_type(bounds)}"
             )
         start, end = bounds
         if isinstance(start, bool) or not isinstance(start, int):
-            raise OverrideCoercionError(field, f"bucket {label!r} start_hour expected int")
+            raise OverrideCoercionError(field, f"bucket {label!r} start_hour expected int, got {_bad_type(start)}")
         if isinstance(end, bool) or not isinstance(end, int):
-            raise OverrideCoercionError(field, f"bucket {label!r} end_hour expected int")
+            raise OverrideCoercionError(field, f"bucket {label!r} end_hour expected int, got {_bad_type(end)}")
         out[label] = (start, end)
     return out
 
 
 def _coerce_regex_list(field: str, value: Any) -> list[re.Pattern[str]]:
-    """``list[Pattern[str]]`` — JSON arrives as ``list[str]``; recompile each."""
+    """``list[Pattern[str]]`` — JSON arrives as ``list[str]``; recompile each.
+
+    Source strings may include inline ``(?flags)`` modifiers (see
+    :func:`catalogue._serialise_regex`); :func:`re.compile` honors them
+    natively, so no flag handling is needed here.
+    """
     if not isinstance(value, list):
-        raise OverrideCoercionError(field, f"expected array of regex strings, got {type(value).__name__}")
+        raise OverrideCoercionError(field, f"expected array of regex strings, got {_bad_type(value)}")
     out: list[re.Pattern[str]] = []
     for i, item in enumerate(value):
         if not isinstance(item, str):
             raise OverrideCoercionError(
-                field, f"element {i} expected regex string, got {type(item).__name__}"
+                field, f"element {i} expected regex string, got {_bad_type(item)}"
             )
         try:
             out.append(re.compile(item))
         except re.error as exc:
             raise OverrideCoercionError(
-                field, f"element {i} is not a valid regex: {exc}"
+                field, f"element {i} is not a valid regex: {exc} (source={item!r})"
             ) from exc
     return out
 
 
 def _coerce_nature_patterns(field: str, value: Any) -> list[tuple[str, re.Pattern[str]]]:
-    """``list[tuple[str, Pattern[str]]]`` — JSON as ``list[{label, regex}]`` or ``list[[label, regex]]``."""
+    """``list[tuple[str, Pattern[str]]]`` — JSON as ``list[{label, regex}]`` or ``list[[label, regex]]``.
+
+    TODO: normalize-at-router. Same rationale as
+    :func:`_coerce_issue_age_buckets`: the router will canonicalise
+    incoming writes to ``[label, regex]``; the dict branch here stays
+    as defense in depth.
+    """
     if not isinstance(value, list):
-        raise OverrideCoercionError(field, f"expected array, got {type(value).__name__}")
+        raise OverrideCoercionError(field, f"expected array, got {_bad_type(value)}")
     out: list[tuple[str, re.Pattern[str]]] = []
     for i, item in enumerate(value):
         label: Any
@@ -173,21 +195,21 @@ def _coerce_nature_patterns(field: str, value: Any) -> list[tuple[str, re.Patter
             label, pattern = item[0], item[1]
         else:
             raise OverrideCoercionError(
-                field, f"element {i} expected [label, regex] or {{label, regex}}"
+                field, f"element {i} expected [label, regex] or {{label, regex}}, got {_bad_type(item)}"
             )
         if not isinstance(label, str):
             raise OverrideCoercionError(
-                field, f"element {i} 'label' expected string, got {type(label).__name__}"
+                field, f"element {i} 'label' expected string, got {_bad_type(label)}"
             )
         if not isinstance(pattern, str):
             raise OverrideCoercionError(
-                field, f"element {i} 'regex' expected string, got {type(pattern).__name__}"
+                field, f"element {i} 'regex' expected string, got {_bad_type(pattern)}"
             )
         try:
             out.append((label, re.compile(pattern)))
         except re.error as exc:
             raise OverrideCoercionError(
-                field, f"element {i} is not a valid regex: {exc}"
+                field, f"element {i} is not a valid regex: {exc} (source={pattern!r})"
             ) from exc
     return out
 
@@ -224,14 +246,16 @@ def apply_overrides(
 ) -> EnrichmentConfig:
     """Return a clone of ``base`` with each ``overrides[name]`` applied.
 
-    Unknown keys are skipped with a warning — defensive in case a field
-    was removed from :class:`EnrichmentConfig` without the override row
-    being migrated. The build path must stay alive on stale data;
-    validation belongs in the PUT endpoint.
+    Unknown AND catalogue-hidden keys are skipped with a warning —
+    defensive in case a field was removed from :class:`EnrichmentConfig`
+    without the override row being migrated, OR a pre-feature JSONB row
+    still carries ``components_mapping_*`` / ``idle_threshold_days``.
+    The router rejects new writes of hidden fields; the merge tolerates
+    stale ones so the build path stays alive.
 
-    Shape mismatches on KNOWN keys raise :class:`OverrideCoercionError`
-    — that signals genuine data corruption (somebody hand-edited the
-    JSONB outside the PUT validator).
+    Shape mismatches on KNOWN, EDITABLE keys raise
+    :class:`OverrideCoercionError` — that signals genuine data corruption
+    (somebody hand-edited the JSONB outside the PUT validator).
     """
     if not overrides:
         return base
@@ -240,6 +264,13 @@ def apply_overrides(
     coerced: dict[str, Any] = {}
 
     for name, raw_value in overrides.items():
+        if name in _HIDDEN_FIELDS:
+            LOG.warning(
+                "config override references hidden field %r — skipping "
+                "(edit via the dedicated UI, not the config editor)",
+                name,
+            )
+            continue
         dc_field = declared.get(name)
         if dc_field is None:
             LOG.warning(
@@ -251,6 +282,37 @@ def apply_overrides(
     if not coerced:
         return base
     return replace(base, **coerced)
+
+
+def _assert_coercer_coverage() -> None:
+    """Fail-fast: every editable field must have a coercer for its declared type.
+
+    Runs at module load. Catches:
+
+    * A future contributor adding a field to :class:`EnrichmentConfig`
+      and referencing it in some metric's ``config_fields`` without also
+      registering a coercer for its type.
+    * The ``from __future__ import annotations`` directive being removed
+      from :mod:`src.enrichment.config` (which would turn ``f.type``
+      from a string into a real type object — and break the dict lookup
+      below).
+    """
+    declared = {f.name: f for f in dataclass_fields(EnrichmentConfig)}
+    missing: list[tuple[str, str]] = []
+    for name in editable_field_names():
+        dc_field = declared[name]
+        declared_type = str(dc_field.type)
+        if declared_type not in _COERCERS_BY_TYPE:
+            missing.append((name, declared_type))
+    if missing:
+        rendered = ", ".join(f"{n}: {t}" for n, t in missing)
+        raise RuntimeError(
+            f"config_overrides.merge has no coercer for editable field(s): "
+            f"{rendered}. Add a coercer to _COERCERS_BY_TYPE."
+        )
+
+
+_assert_coercer_coverage()
 
 
 __all__ = [
