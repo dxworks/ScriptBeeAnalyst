@@ -83,6 +83,8 @@ from src.common.kernel import Graph
 from src.common.people import SourceKind
 from src.common.pickle_store import PickleStore
 from src.config import RECURSION_LIMIT, SUPABASE_SERVICE_KEY, SUPABASE_URL
+from src.config_overrides.merge import OverrideCoercionError, apply_overrides
+from src.config_overrides.repository import ConfigOverridesRepository
 from src.enrichment.config import DEFAULT_CONFIG, EnrichmentConfig
 from src.supabase_client import get_service_client
 from src.enrichment.metrics.implementations.component_resolver import (
@@ -581,11 +583,51 @@ def build_graph(
         )
     else:
         effective_config = config
+    effective_config = _apply_project_overrides(project_id, effective_config)
     graph, pipeline_result = build_graph_from_bundles(
         project_id, bundles, config=effective_config
     )
     save_graph_to_disk(graph)
     return graph, pipeline_result
+
+
+def _apply_project_overrides(
+    project_id: str, base: Optional[EnrichmentConfig]
+) -> Optional[EnrichmentConfig]:
+    """Overlay the project's stored config overrides onto ``base``.
+
+    Reads ``ConfigOverridesRepository`` once per ``build_graph`` call.
+    On any failure (Supabase down, corrupt JSONB shape) the build path
+    must stay alive — log the offending field/project at ERROR and
+    return ``base`` unchanged so enrichment runs against defaults.
+
+    The repository's ``get`` already degrades to an empty-overrides row
+    when Supabase is unreachable, so the only raise path here is
+    :class:`OverrideCoercionError` from :func:`apply_overrides` —
+    triggered by hand-edited or schema-drifted JSONB.
+    """
+    try:
+        overrides = ConfigOverridesRepository().get(project_id).overrides
+    except Exception:  # noqa: BLE001 — never block the build on Supabase errors
+        logger.exception(
+            "config_overrides fetch failed for project %s — using base config",
+            project_id,
+        )
+        return base
+    if not overrides:
+        return base
+    starting_point = base if base is not None else DEFAULT_CONFIG
+    try:
+        return apply_overrides(starting_point, overrides)
+    except OverrideCoercionError as exc:
+        logger.error(
+            "config_overrides merge failed for project %s on field %s: %s — "
+            "using base config",
+            project_id,
+            exc.field,
+            exc,
+        )
+        return base
 
 
 # ---------------------------------------------------------------------------
