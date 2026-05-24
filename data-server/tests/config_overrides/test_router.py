@@ -132,6 +132,98 @@ class TestPut:
             stored = s["project_config_overrides"][0]["overrides"]
             assert stored == {"nature_patterns": [["hotfix", r"^HOTFIX:"]]}
 
+    def test_empty_overrides_put_clears_prior_state(self):
+        """PUT {} replaces the row with an empty dict and bumps updated_at.
+
+        Proves the "clear all overrides" UX path: a Discard-and-Save with
+        no remaining edits empties the row but still records the action.
+        """
+        with patched_supabase(store=_store_with_project()):
+            client = TestClient(server.app)
+
+            # Seed with one knob.
+            first = client.put(
+                f"/projects/{PROJECT_ID}/config-overrides",
+                json={"overrides": {"bugmagnet_min_bugfix_commits": 9}},
+            )
+            assert first.status_code == 200, first.text
+            first_updated = first.json()["updated_at"]
+            assert first_updated is not None
+
+            # Confirm it landed.
+            mid = client.get(f"/projects/{PROJECT_ID}/config-overrides")
+            assert mid.json()["overrides"] == {"bugmagnet_min_bugfix_commits": 9}
+
+            # Clear with an empty payload.
+            second = client.put(
+                f"/projects/{PROJECT_ID}/config-overrides",
+                json={"overrides": {}},
+            )
+            assert second.status_code == 200, second.text
+            body = second.json()
+            assert body["overrides"] == {}
+            assert body["updated_at"] is not None
+            assert body["updated_at"] > first_updated, (
+                "updated_at must advance on the clearing write "
+                f"(first={first_updated}, second={body['updated_at']})"
+            )
+
+            # Final GET confirms the row is empty.
+            after = client.get(f"/projects/{PROJECT_ID}/config-overrides")
+            assert after.status_code == 200
+            assert after.json()["overrides"] == {}
+
+    def test_catalogue_current_round_trip_after_dict_shape_put(self):
+        """End-to-end normalise → store → catalogue overlay for a composite field.
+
+        PUT issue_age_buckets in DICT shape, GET, assert:
+
+        * the catalogue field's ``current`` reflects the value,
+        * the stored row holds the COMPACT shape.
+
+        This is the proof that the dict→compact normalisation feeds back
+        through the catalogue's ``current`` overlay without the UI having
+        to reshape on its side.
+        """
+        with patched_supabase(store=_store_with_project()) as (s, _):
+            client = TestClient(server.app)
+
+            put_response = client.put(
+                f"/projects/{PROJECT_ID}/config-overrides",
+                json={"overrides": {
+                    "issue_age_buckets": [
+                        {"label": "<3d", "max_days": 3},
+                        {"label": ">3d", "max_days": 1000000000},
+                    ]
+                }},
+            )
+            assert put_response.status_code == 200, put_response.text
+
+            # Storage: compact form.
+            stored = s["project_config_overrides"][0]["overrides"]
+            assert stored == {
+                "issue_age_buckets": [["<3d", 3], [">3d", 1000000000]],
+            }
+
+            # Catalogue overlay: `current` reflects the stored value.
+            get_response = client.get(f"/projects/{PROJECT_ID}/config-overrides")
+            assert get_response.status_code == 200
+            body = get_response.json()
+            assert body["overrides"] == {
+                "issue_age_buckets": [["<3d", 3], [">3d", 1000000000]],
+            }
+
+            fields_flat = [
+                f for fam in body["catalogue"]["families"] for f in fam["fields"]
+            ]
+            iab = next(f for f in fields_flat if f["name"] == "issue_age_buckets")
+            assert iab["current"] == [["<3d", 3], [">3d", 1000000000]]
+            # Default still surfaces unchanged for comparison.
+            assert iab["default"] == [
+                ["<1w", 7], ["1-4w", 28], ["1-3m", 90],
+                ["3-12m", 365], [">1y", 1000000000],
+            ]
+
     def test_unknown_field_returns_422(self):
         with patched_supabase(store=_store_with_project()):
             client = TestClient(server.app)

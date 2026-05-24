@@ -19,7 +19,7 @@ from __future__ import annotations
 from typing import Any, Dict
 
 from fastapi import APIRouter, HTTPException
-from fastapi.responses import JSONResponse, Response
+from fastapi.responses import JSONResponse, Response  # Response: decorator-level response_class
 
 from src.config_overrides.catalogue import (
     CatalogueResponse,
@@ -60,6 +60,10 @@ def _project_exists(project_id: str) -> bool:
             .execute()
         )
     except Exception as exc:  # noqa: BLE001 — defensive probe
+        # TODO(multi-tenant): masking probe failures as "exists" is safe
+        # only in the single-tenant local-mode deployment — under RLS the
+        # caller may legitimately be denied and we must NOT degrade open.
+        # Revisit when the project moves off service-role-only access.
         LOG.warning("project existence probe failed for %s: %s", project_id, exc)
         return True
     return bool(response.data)
@@ -87,6 +91,8 @@ def _validate_payload(overrides: Dict[str, Any]) -> JSONResponse | None:
     The first failing key short-circuits so the UI can highlight one
     input at a time.
     """
+    # Envelope intentionally carries `field` so the UI can highlight the
+    # offending input — diverges from the codebase's plain `{error}` shape.
     allowed = editable_field_names()
     for name in overrides.keys():
         if name in _HIDDEN_FIELDS:
@@ -149,6 +155,9 @@ async def put_config_overrides(project_id: str, payload: ConfigOverridesPayload)
     try:
         apply_overrides(DEFAULT_CONFIG, normalised)
     except OverrideCoercionError as exc:
+        # Envelope intentionally carries `field` so the UI can highlight
+        # the offending input — diverges from the codebase's plain
+        # `{error}` shape.
         return JSONResponse(
             {"field": exc.field, "error": str(exc)},
             status_code=422,
@@ -185,7 +194,6 @@ async def delete_config_overrides(project_id: str):
         raise HTTPException(
             status_code=500, detail=f"failed to delete overrides: {exc}"
         )
-    return Response(status_code=204)
 
 
 config_overrides_router = router

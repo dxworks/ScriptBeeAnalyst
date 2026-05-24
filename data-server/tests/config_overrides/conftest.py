@@ -10,13 +10,32 @@ code reaches for.
 This pattern matches :mod:`tests.chunk_08.test_components_endpoints`
 and :mod:`tests.chunk_08.test_processor_component_mapping_fetch` —
 no real network calls, no Supabase test container.
+
+The fake bumps ``updated_at`` on every upsert so callers can assert
+that a re-write moved the timestamp forward — mirroring the
+``project_config_overrides_updated_at`` BEFORE-UPDATE trigger from the
+real migration.
 """
 from __future__ import annotations
 
+import itertools
 import os
 from contextlib import contextmanager
 from typing import Any, Dict, List, Optional
 from unittest.mock import patch
+
+
+# Strictly increasing pseudo-timestamps the fake uses for every upsert.
+# Module-level so a single test process produces monotonically growing
+# values even across multiple ``patched_supabase`` contexts.
+_UPDATED_AT_COUNTER = itertools.count(1)
+
+
+def _next_updated_at() -> str:
+    n = next(_UPDATED_AT_COUNTER)
+    # Pad to two digits per slot so lexicographic comparison stays
+    # equivalent to numeric for the first ~10k bumps — plenty for tests.
+    return f"2026-05-24T12:00:{n:02d}+00:00"
 
 # Env shims so importing the server module doesn't blow up. Mirrors the
 # pattern used by the smart_merge / chunk_08 fixtures.
@@ -92,14 +111,15 @@ class FakeQuery:
         if self._action == "upsert":
             assert self._upsert_payload is not None
             self._store.setdefault(self._table, [])
+            stamped = {**self._upsert_payload, "updated_at": _next_updated_at()}
             # Replace by primary key if present, else append.
-            pk = self._upsert_payload.get("project_id")
+            pk = stamped.get("project_id")
             existing = self._store[self._table]
             for i, row in enumerate(existing):
                 if row.get("project_id") == pk:
-                    existing[i] = {**row, **self._upsert_payload}
+                    existing[i] = {**row, **stamped}
                     return FakeResponse([existing[i]])
-            existing.append({**self._upsert_payload, "updated_at": "2026-05-24T12:00:00+00:00"})
+            existing.append(stamped)
             return FakeResponse([existing[-1]])
 
         if self._action == "delete":
