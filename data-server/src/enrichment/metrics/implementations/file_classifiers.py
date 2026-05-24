@@ -34,7 +34,7 @@ if TYPE_CHECKING:
     from src.common.kernel import Graph
 
 
-_DEFAULT_RECENT_WINDOW_DAYS = 90
+_DEFAULT_RECENT_WINDOW_DAYS = 336
 
 
 @METRICS.register

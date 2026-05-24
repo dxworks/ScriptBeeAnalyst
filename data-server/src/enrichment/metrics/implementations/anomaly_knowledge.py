@@ -493,12 +493,12 @@ class _KnowledgeConfig:
         o.team_churn_set_change_ratio = float(_cf(
             config, "team_churn_set_change_ratio", 0.5,
         ))
-        o.weak_owner_max_share = float(_cf(config, "weak_owner_max_share", 0.2))
+        o.weak_owner_max_share = float(_cf(config, "weak_owner_max_share", 0.4))
         o.weak_owner_min_active_authors = int(_cf(
             config, "weak_owner_min_active_authors", 2,
         ))
         o.orphancauser_min_orphan_files = int(_cf(
-            config, "orphancauser_min_orphan_files", 3,
+            config, "orphancauser_min_orphan_files", 10,
         ))
         o.orphancauser_min_lifetime_commits = int(_cf(
             config, "orphancauser_min_lifetime_commits", 10,

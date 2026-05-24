@@ -43,7 +43,8 @@ if TYPE_CHECKING:
     from src.common.kernel import Graph
 
 
-_DEFAULT_TIME_WINDOWED_HOURS = 24
+_DEFAULT_TIME_WINDOWED_HOURS = 0.5
+_DEFAULT_COMPONENT_MIN_COUNT = 80
 
 
 @BUILDERS.register
@@ -58,6 +59,13 @@ class CochangeComponentTimeWindowedBuilder(RelationBuilder):
         hours = _config_field(
             graph, "time_windowed_cochange_hours", _DEFAULT_TIME_WINDOWED_HOURS
         )
+        min_count = _config_field(
+            graph,
+            "time_windowed_cochange_component_min_count",
+            _DEFAULT_COMPONENT_MIN_COUNT,
+        )
+        if min_count is None or min_count < 0:
+            min_count = 0
         yield from aggregate_file_relations_to_components(
             graph,
             source_kind="cochange_file_time_windowed",
@@ -66,6 +74,7 @@ class CochangeComponentTimeWindowedBuilder(RelationBuilder):
                 "hours": float(hours) if hours is not None else 0.0,
                 "strength": round(strength, 4),
             },
+            min_strength=float(min_count),
         )
 
 

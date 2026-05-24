@@ -68,9 +68,11 @@ def _trait_names(traits) -> set[str]:
     return {t.name for t in traits}
 
 
-def _run(graph: Graph) -> None:
+def _run(graph: Graph, config: Optional[EnrichmentConfig] = None) -> None:
     """Run the full pipeline on ``graph`` (catches per-metric errors)."""
-    run_pipeline(graph, EnrichmentConfig())
+    cfg = config if config is not None else EnrichmentConfig()
+    graph.__dict__["config"] = cfg
+    run_pipeline(graph, cfg)
 
 
 # ----------------------------------------------------------------------
@@ -149,7 +151,7 @@ def test_owner_churn_emitted_when_dominant_author_changes():
         graph.commits.add(c)
         add_change(graph, c, f, added=50)
 
-    _run(graph)
+    _run(graph, EnrichmentConfig(recent_window_days=90))
     traits = _traits_for_file(graph, "src/oc.py")
     t = _trait(traits, "anomaly.knowledge.OwnerChurn")
     assert t is not None
@@ -175,7 +177,7 @@ def test_solitaire_emitted_when_one_active_rest_idle():
         graph.commits.add(c)
         add_change(graph, c, f, added=10)
 
-    _run(graph)
+    _run(graph, EnrichmentConfig(recent_window_days=90))
     traits = _traits_for_file(graph, "src/sol.py")
     assert _trait(traits, "anomaly.knowledge.Solitaire") is not None
 
@@ -201,7 +203,7 @@ def test_team_churn_emitted_when_recent_set_differs():
         graph.commits.add(cm)
         add_change(graph, cm, f, added=10)
 
-    _run(graph)
+    _run(graph, EnrichmentConfig(recent_window_days=90))
     traits = _traits_for_file(graph, "src/tc.py")
     t = _trait(traits, "anomaly.knowledge.TeamChurn")
     assert t is not None

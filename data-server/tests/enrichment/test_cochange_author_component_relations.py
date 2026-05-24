@@ -153,8 +153,12 @@ def test_author_time_windowed_emits_for_close_cross_author_commits():
     strength >= 1.
     """
     g, alice, bob, _fa, _fb = _build_two_author_two_file_graph_recent("auth-tw-1")
-    _attach_config(g, EnrichmentConfig(time_windowed_cochange_hours=24))
-    run_pipeline(g, EnrichmentConfig(time_windowed_cochange_hours=24))
+    cfg = EnrichmentConfig(
+        time_windowed_cochange_hours=24,
+        time_windowed_cochange_file_min_count=1,
+    )
+    _attach_config(g, cfg)
+    run_pipeline(g, cfg)
 
     rels = list(g.relations.of_kind("cochange_author_time_windowed"))
     pair_rel = [r for r in rels if {r.source.id, r.target.id} == {alice.id, bob.id}]
@@ -221,7 +225,9 @@ def test_author_time_windowed_counts_multiple_pairs_in_window():
         g.commits.add(cb)
         add_change(g, ca, f, added=1)
         add_change(g, cb, f, added=1)
-    run_pipeline(g, EnrichmentConfig())
+    cfg = EnrichmentConfig(time_windowed_cochange_hours=24)
+    _attach_config(g, cfg)
+    run_pipeline(g, cfg)
     rels = [
         r for r in g.relations.of_kind("cochange_author_time_windowed")
         if {r.source.id, r.target.id} == {alice.id, bob.id}
@@ -394,7 +400,12 @@ def test_cochange_component_emits_empty_when_no_file_cochange():
 # ======================================================================
 def test_cochange_component_time_windowed_aggregates_file_time_windowed(tmp_path):
     g, _alice, _bob, _fa, _fb = _build_two_author_two_file_graph_recent("comp-tw-1")
-    cfg = EnrichmentConfig(components_mapping_path=_build_two_components_mapping(tmp_path))
+    cfg = EnrichmentConfig(
+        components_mapping_path=_build_two_components_mapping(tmp_path),
+        time_windowed_cochange_hours=24,
+        time_windowed_cochange_file_min_count=1,
+        time_windowed_cochange_component_min_count=1,
+    )
     _attach_config(g, cfg)
     run_pipeline(g, cfg)
     rels = list(g.relations.of_kind("cochange_component_time_windowed"))
@@ -438,7 +449,12 @@ def test_pipeline_emits_all_chunk_14_kinds(tmp_path):
     """End-to-end: a single ``run_pipeline`` over the fixture emits each
     of the six Chunk-14 kinds (LIFETIME at minimum)."""
     g, _alice, _bob, _fa, _fb = _build_two_author_two_file_graph_recent("chunk14-smoke")
-    cfg = EnrichmentConfig(components_mapping_path=_build_two_components_mapping(tmp_path))
+    cfg = EnrichmentConfig(
+        components_mapping_path=_build_two_components_mapping(tmp_path),
+        time_windowed_cochange_hours=24,
+        time_windowed_cochange_file_min_count=1,
+        time_windowed_cochange_component_min_count=1,
+    )
     _attach_config(g, cfg)
     run_pipeline(g, cfg)
     expected = {

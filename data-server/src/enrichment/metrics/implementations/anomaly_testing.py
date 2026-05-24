@@ -85,7 +85,7 @@ class AnomalyTestingMetric(Metric):
         production_file_refs = _file_refs_with_role(classifiers, "production")
 
         bugmagnet_min = int(_config_field(
-            config, "bugmagnet_min_bugfix_commits", 5
+            config, "bugmagnet_min_bugfix_commits", 10
         ))
         bugmagnet_ratio_min = float(_config_field(
             config, "bugmagnet_ratio_min", 0.40

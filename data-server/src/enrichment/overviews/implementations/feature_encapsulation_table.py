@@ -70,9 +70,9 @@ COLUMNS: list[str] = [
 
 
 _DEFAULTS: dict[str, int] = {
-    "feature_encapsulation_wide_files_min": 20,
+    "feature_encapsulation_wide_files_min": 40,
     "feature_encapsulation_deep_churn_min": 500,
-    "feature_encapsulation_high_impact_files_min": 10,
+    "feature_encapsulation_high_impact_files_min": 40,
     "feature_encapsulation_scattered_components_min": 3,
 }
 

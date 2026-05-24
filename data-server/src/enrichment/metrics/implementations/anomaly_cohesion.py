@@ -428,7 +428,7 @@ class _CohesionConfig:
         o.pulsar_min_commits = int(_cf(config, "pulsar_min_commits", 6))
         o.pulsar_min_intervals = int(_cf(config, "pulsar_min_intervals", 3))
         o.supernova_net_churn_min = int(_cf(config, "supernova_net_churn_min", 5000))
-        o.frequent_changer_lifetime_min = int(_cf(config, "frequent_changer_lifetime_min", 50))
+        o.frequent_changer_lifetime_min = int(_cf(config, "frequent_changer_lifetime_min", 20))
         o.frequent_changer_recent_min = int(_cf(config, "frequent_changer_recent_min", 10))
         o.flicker_cv_min = float(_cf(config, "flicker_cv_min", 1.2))
         o.flicker_min_recent_commits = int(_cf(config, "flicker_min_recent_commits", 4))
@@ -508,7 +508,7 @@ def _resolve_recent_cutoff(graph: Any, commits_reg: Any, config: Any) -> Optiona
     explicit = getattr(graph, "recent_cutoff", None)
     if explicit is not None:
         return ensure_aware(explicit)
-    window_days = int(_cf(config, "recent_window_days", 90))
+    window_days = int(_cf(config, "recent_window_days", 336))
     latest: Optional[datetime] = None
     try:
         for c in commits_reg:

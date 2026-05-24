@@ -57,7 +57,8 @@ if TYPE_CHECKING:
 # Defaults mirror :class:`EnrichmentConfig` so a graph without a config
 # still produces sane output.
 _DEFAULT_MAX_FILES_PER_COMMIT = 20
-_DEFAULT_TIME_WINDOWED_HOURS = 24
+_DEFAULT_TIME_WINDOWED_HOURS = 0.5
+_DEFAULT_FILE_MIN_COUNT = 20
 
 
 @BUILDERS.register
@@ -88,6 +89,11 @@ class CochangeFileTimeWindowedBuilder(RelationBuilder):
         )
         if hours is None or hours <= 0:
             return
+        min_count = _config_field(
+            graph, "time_windowed_cochange_file_min_count", _DEFAULT_FILE_MIN_COUNT
+        )
+        if min_count is None or min_count < 1:
+            min_count = 1
 
         changes_by_commit = _changes_by_commit_index(graph)
         commit_get = _entity_by_id(getattr(graph, "commits", None))
@@ -154,11 +160,19 @@ class CochangeFileTimeWindowedBuilder(RelationBuilder):
                         recent[pair] += 1
 
         yield from _emit_pairs(
-            self.relation_kind, WindowKind.LIFETIME, lifetime, hours=hours
+            self.relation_kind,
+            WindowKind.LIFETIME,
+            lifetime,
+            hours=hours,
+            min_count=min_count,
         )
         if cutoff is not None:
             yield from _emit_pairs(
-                self.relation_kind, WindowKind.RECENT, recent, hours=hours
+                self.relation_kind,
+                WindowKind.RECENT,
+                recent,
+                hours=hours,
+                min_count=min_count,
             )
         # Silence the unused-import lint when commit_get is not exercised
         # (kept for future symmetry with sibling builders).
@@ -231,8 +245,11 @@ def _emit_pairs(
     pairs: dict[tuple[Any, Any], int],
     *,
     hours: Any,
+    min_count: int,
 ) -> Iterable[Relation]:
     for (src, tgt), count in pairs.items():
+        if count < min_count:
+            continue
         rid = Relation.canonical_id(src, tgt, relation_kind, window)
         yield Relation(
             id=rid,

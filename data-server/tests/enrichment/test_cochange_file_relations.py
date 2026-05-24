@@ -72,6 +72,20 @@ def _attach_recent_cutoff(graph, cutoff: Optional[datetime]) -> None:
     graph.__dict__["recent_cutoff"] = cutoff
 
 
+def _attach_config(graph, cfg: EnrichmentConfig) -> None:
+    graph.__dict__["config"] = cfg
+
+
+# Small-scenario tests below build graphs with strength=1 pairs. The dx-
+# parity defaults gate file edges at count >= 20, so emission tests must
+# attach a config with ``file_min_count=1`` (and a 24h window for legacy
+# scenarios that placed commits >30 min apart).
+_EMIT_CFG = EnrichmentConfig(
+    time_windowed_cochange_hours=24,
+    time_windowed_cochange_file_min_count=1,
+)
+
+
 # ======================================================================
 # Catalog wiring (all three)
 # ======================================================================
@@ -129,6 +143,7 @@ def test_time_windowed_emits_for_close_in_time_distinct_commits():
     add_change(g, c1, fa, added=5)
     add_change(g, c2, fb, added=5)
 
+    _attach_config(g, _EMIT_CFG)
     rels = list(CochangeFileTimeWindowedBuilder().build(g))
     pairs = _pair_lookup(rels, "cochange_file_time_windowed")
     assert ("src/a.py", "src/b.py") in pairs
@@ -240,6 +255,7 @@ def test_time_windowed_recent_window_emits_when_cutoff_set():
     add_change(g, c1, fa, added=5)
     add_change(g, c2, fb, added=5)
 
+    _attach_config(g, _EMIT_CFG)
     _attach_recent_cutoff(g, now - timedelta(days=1))
 
     rels = list(CochangeFileTimeWindowedBuilder().build(g))
@@ -294,6 +310,46 @@ def test_time_windowed_canonical_id_is_deterministic():
         return [r.id for r in CochangeFileTimeWindowedBuilder().build(g)]
 
     assert sorted(_build()) == sorted(_build())
+
+
+def test_time_windowed_min_count_gate_suppresses_below_threshold():
+    """A single cross-commit co-change MUST NOT emit when the file
+    min-count gate is set above 1. Matches dx
+    ``files_SharedTimeWindow`` 1st arg = 20.
+    """
+    g, p = build_v2_graph("tw-gate")
+    alice = make_account("Alice", "alice@example.com", p.ref())
+    g.git_accounts.add(alice)
+    fa = make_file("src/a.py", p.ref())
+    fb = make_file("src/b.py", p.ref())
+    g.files.add(fa)
+    g.files.add(fb)
+
+    now = datetime.now(UTC)
+    c1 = make_commit("c1", "m", alice, now - timedelta(minutes=10), p.ref())
+    c2 = make_commit("c2", "m", alice, now - timedelta(minutes=5), p.ref())
+    g.commits.add(c1)
+    g.commits.add(c2)
+    add_change(g, c1, fa, added=5)
+    add_change(g, c2, fb, added=5)
+
+    # Below the default gate (20): no emission.
+    _attach_config(g, EnrichmentConfig(time_windowed_cochange_hours=1))
+    rels = list(CochangeFileTimeWindowedBuilder().build(g))
+    assert _pair_lookup(rels, "cochange_file_time_windowed") == {}
+
+    # Same scenario with the gate dropped to 1: edge appears.
+    _attach_config(
+        g,
+        EnrichmentConfig(
+            time_windowed_cochange_hours=1,
+            time_windowed_cochange_file_min_count=1,
+        ),
+    )
+    rels = list(CochangeFileTimeWindowedBuilder().build(g))
+    pairs = _pair_lookup(rels, "cochange_file_time_windowed")
+    assert ("src/a.py", "src/b.py") in pairs
+    assert pairs[("src/a.py", "src/b.py")].extras["count"] == 1
 
 
 # ======================================================================
@@ -573,7 +629,8 @@ def test_all_three_kinds_present_after_pipeline_run():
     add_change(g, c2, fa, added=2)
     add_change(g, c2, fb, added=1)
 
-    result = run_pipeline(g, EnrichmentConfig())
+    _attach_config(g, _EMIT_CFG)
+    result = run_pipeline(g, _EMIT_CFG)
     # No errors from our three builders specifically.
     builder_errors = {
         e.name for e in result.errors if e.step == "builder"

@@ -55,8 +55,10 @@ def _trait(traits, name: str):
     return next((t for t in traits if t.name == name), None)
 
 
-def _run(graph) -> None:
-    run_pipeline(graph, EnrichmentConfig())
+def _run(graph, config: EnrichmentConfig | None = None) -> None:
+    cfg = config if config is not None else EnrichmentConfig()
+    graph.__dict__["config"] = cfg
+    run_pipeline(graph, cfg)
 
 
 # ----------------------------------------------------------------------
@@ -252,7 +254,10 @@ def test_orphan_causers_fires_for_retired_author_of_many_orphan_files():
             graph.commits.add(c)
             add_change(graph, c, ff, added=10)
 
-    _run(graph)
+    _run(graph, EnrichmentConfig(
+        recent_window_days=90,
+        orphancauser_min_orphan_files=3,
+    ))
     # Sanity — each file is Orphan (single author + stale).
     for ff in files:
         traits = _traits_for_file(graph, ff.path)

@@ -100,7 +100,9 @@ def _build_golden_graph():
         graph.commits.add(c)
         add_change(graph, c, test_bug, added=15, deleted=0)
 
-    run_pipeline(graph, EnrichmentConfig())
+    cfg = EnrichmentConfig(bugmagnet_min_bugfix_commits=5)
+    graph.__dict__["config"] = cfg
+    run_pipeline(graph, cfg)
     return graph
 
 

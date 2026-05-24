@@ -55,7 +55,7 @@ if TYPE_CHECKING:
     from src.common.kernel import EntityRef, Graph
 
 
-_DEFAULT_TIME_WINDOWED_HOURS = 24
+_DEFAULT_TIME_WINDOWED_HOURS = 0.5
 
 
 @BUILDERS.register

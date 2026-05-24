@@ -77,6 +77,7 @@ def aggregate_file_relations_to_components(
     source_kind: str,
     target_kind: str,
     extras_factory=None,
+    min_strength: float = 0.0,
 ) -> Iterable[Relation]:
     """Aggregate file-* relations into component-* relations.
 
@@ -128,6 +129,8 @@ def aggregate_file_relations_to_components(
             pair = _ordered_pair_names(a_name, b_name)
             accum[pair] += float(rel.strength)
         for (a_name, b_name), strength in accum.items():
+            if strength < min_strength:
+                continue
             src_ref = EntityRef(kind=EntityKind.COMPONENT, id=a_name)
             tgt_ref = EntityRef(kind=EntityKind.COMPONENT, id=b_name)
             rid = Relation.canonical_id(src_ref, tgt_ref, target_kind, window)

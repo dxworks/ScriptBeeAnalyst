@@ -103,9 +103,10 @@ def test_bugmagnet_emitted_on_buggy_file():
         add_change(graph, c, f, added=5)
 
     # Classifiers must run before the testing metric.
-    _consume_metric(graph, FileClassifierMetric())
-    _consume_metric(graph, CommitClassifierMetric())
-    _consume_metric(graph, AnomalyTestingMetric())
+    cfg = EnrichmentConfig(bugmagnet_min_bugfix_commits=5)
+    _consume_metric(graph, FileClassifierMetric(), cfg)
+    _consume_metric(graph, CommitClassifierMetric(), cfg)
+    _consume_metric(graph, AnomalyTestingMetric(), cfg)
 
     traits = graph.traits.for_target(f.ref())
     names = _trait_names(traits)

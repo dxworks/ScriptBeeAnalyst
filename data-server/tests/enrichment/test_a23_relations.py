@@ -124,7 +124,12 @@ def test_file_time_windowed_emits_for_close_in_time_distinct_commits():
     add_change(g, c1, fa, added=5)
     add_change(g, c2, fb, added=5)
 
-    run_pipeline(g, EnrichmentConfig(time_windowed_cochange_hours=24))
+    cfg = EnrichmentConfig(
+        time_windowed_cochange_hours=24,
+        time_windowed_cochange_file_min_count=1,
+    )
+    g.__dict__["config"] = cfg
+    run_pipeline(g, cfg)
     pairs = {
         tuple(sorted((r.source.id, r.target.id))): r
         for r in g.relations.of_kind("cochange_file_time_windowed")
@@ -187,7 +192,9 @@ def test_author_time_windowed_counts_commits_inside_window():
         g.commits.add(c)
         add_change(g, c, f, added=1)
 
-    run_pipeline(g, EnrichmentConfig(time_windowed_cochange_hours=24))
+    cfg = EnrichmentConfig(time_windowed_cochange_hours=24)
+    g.__dict__["config"] = cfg
+    run_pipeline(g, cfg)
     edges = [
         r for r in g.relations.of_kind("cochange_author_time_windowed")
         if {r.source.id, r.target.id} == {alice.id, bob.id}
@@ -258,7 +265,12 @@ def test_component_cochange_aggregations_emit_when_file_pairs_present(tmp_path):
     config via ``__dict__`` to bypass Pydantic's ``extra="forbid"``.
     """
     g, _alice, _bob = _build_two_author_two_file_graph_recent("a23-comp")
-    cfg = EnrichmentConfig(components_mapping_path=_components_mapping_path(tmp_path))
+    cfg = EnrichmentConfig(
+        components_mapping_path=_components_mapping_path(tmp_path),
+        time_windowed_cochange_hours=24,
+        time_windowed_cochange_file_min_count=1,
+        time_windowed_cochange_component_min_count=1,
+    )
     g.__dict__["config"] = cfg
     run_pipeline(g, cfg)
     for kind in (

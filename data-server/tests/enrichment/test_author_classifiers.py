@@ -108,7 +108,7 @@ def test_idle_when_last_commit_outside_window():
     graph.commits.add(fresh)
     add_change(graph, fresh, f)
 
-    out = list(AuthorClassifierMetric().compute(graph, EnrichmentConfig()))
+    out = list(AuthorClassifierMetric().compute(graph, EnrichmentConfig(recent_window_days=90)))
     for cls in out:
         graph.classifiers.add(cls)
 
