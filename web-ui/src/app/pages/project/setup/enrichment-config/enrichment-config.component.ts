@@ -1,5 +1,6 @@
 import { Component, OnInit, computed, signal } from '@angular/core';
 import { FormsModule } from '@angular/forms';
+import { ConfirmationModalComponent } from '../../../../shared/components/confirmation-modal/confirmation-modal.component';
 import { CurrentProjectService } from '../../../../core/services/current-project.service';
 import {
   CatalogueFamilyDto,
@@ -110,7 +111,7 @@ function deepEqual(a: unknown, b: unknown): boolean {
 @Component({
   selector: 'app-enrichment-config',
   standalone: true,
-  imports: [FormsModule],
+  imports: [FormsModule, ConfirmationModalComponent],
   templateUrl: './enrichment-config.component.html',
   styleUrl: './enrichment-config.component.scss',
 })
@@ -163,11 +164,51 @@ export class EnrichmentConfigComponent implements OnInit {
     () => this.dirty() && !this.saving() && this.state() === 'ready',
   );
 
-  /** Rerun stays disabled in commit 7; commit 8 turns it on. */
-  readonly canRerun = signal(false);
+  /**
+   * Rerun is offered only when the project has PERSISTED overrides AND
+   * there are no pending unsaved edits — a rerun with no overrides reruns
+   * with defaults (same as today's build trigger, nothing to learn here),
+   * and a rerun with pending edits would silently use stale persisted
+   * state. The user must save first.
+   */
+  readonly canRerun = computed(
+    () =>
+      this.state() === 'ready' &&
+      this.hasOverrides() &&
+      !this.dirty() &&
+      !this.rerunning() &&
+      !this.saving(),
+  );
+
+  /**
+   * Human-readable reason for the Rerun button's current state. Drives both
+   * the visual ``title`` tooltip and a visually-hidden sentence the screen
+   * reader announces when the button gains focus. ``null`` means the button
+   * is enabled and no explanation is needed.
+   */
+  readonly rerunReason = computed<string | null>(() => {
+    if (this.state() !== 'ready') return null;
+    if (this.dirty()) return 'Save your changes before rerunning';
+    if (!this.hasOverrides()) return 'No overrides to apply';
+    return null;
+  });
+
+  /** True while the rerun confirmation modal is open. */
+  readonly showRerunModal = signal(false);
 
   /** Pending count shown next to the Save / Discard buttons. */
   readonly pendingCount = computed(() => this.pendingOverridesSignal().size);
+
+  /**
+   * Body text for the confirmation modal. Bakes the project name in so the
+   * user double-checks they're acting on the right project. Falls back to a
+   * generic phrasing when ``loadedProjectName`` is not yet populated.
+   */
+  readonly rerunModalMessage = computed(() => {
+    const name = this.currentProject.loadedProjectName();
+    const target = name ? `for "${name}"` : 'for this project';
+    return `This recomputes all metrics ${target} with the current overrides. May take several minutes.`;
+  });
 
   constructor(
     private dataServer: DataServerService,
@@ -887,6 +928,48 @@ export class EnrichmentConfigComponent implements OnInit {
       }
     } finally {
       this.saving.set(false);
+    }
+  }
+
+  // ── Rerun flow ─────────────────────────────────────────────────────────
+  // Plan §4 step 6 — Rerun triggers the existing ``/projects/{id}/build``
+  // endpoint (no separate rerun endpoint; the build path re-applies persisted
+  // overrides on every invocation). Editor stays usable while the rerun
+  // runs: the user can start drafting the next round of edits.
+
+  /** Open the confirmation modal. Guarded by ``canRerun`` so a misclick on
+   *  the disabled button is a no-op. */
+  requestRerun(): void {
+    if (!this.canRerun()) return;
+    this.showRerunModal.set(true);
+  }
+
+  /** User dismissed the modal — close without side effects. */
+  cancelRerun(): void {
+    this.showRerunModal.set(false);
+  }
+
+  async confirmRerun(): Promise<void> {
+    const projectId = this.currentProject.loadedProjectId();
+    if (!projectId) {
+      this.showRerunModal.set(false);
+      return;
+    }
+    this.showRerunModal.set(false);
+    this.rerunning.set(true);
+    try {
+      const result = await this.dataServer.rerunEnrichments(projectId);
+      if (result.success) {
+        this.toast.success('Rerun complete');
+      } else {
+        this.toast.error(result.error ?? 'Failed to rerun enrichments');
+      }
+    } catch (err) {
+      const message =
+        err instanceof Error ? err.message : 'Failed to rerun enrichments';
+      this.toast.error(message);
+    } finally {
+      this.rerunning.set(false);
     }
   }
 }

@@ -273,6 +273,18 @@ export class DataServerService {
   }
 
   /**
+   * Rerun the enrichment pipeline for a project. Delegates to ``buildProject``
+   * because the existing ``/projects/{id}/build`` endpoint already re-runs the
+   * full pipeline against the latest persisted overrides — no separate
+   * "rerun" endpoint exists. The wrapper exists so editor callers spell out
+   * their intent in service-call grammar instead of leaking the generic
+   * "build" verb into UI code that means "rerun with my saved overrides".
+   */
+  async rerunEnrichments(projectId: string): Promise<BuildResult> {
+    return this.buildProject(projectId);
+  }
+
+  /**
    * Load project graph into data-server memory
    * @param projectId - UUID of the project
    * @returns LoadProjectResult with success status, stats, and message

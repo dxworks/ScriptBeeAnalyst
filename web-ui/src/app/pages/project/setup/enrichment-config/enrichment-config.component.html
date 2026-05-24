@@ -58,11 +58,27 @@
         type="button"
         [disabled]="!canRerun()"
         [attr.aria-disabled]="!canRerun() || null"
-        [attr.aria-label]="canRerun() ? 'Rerun enrichments' : 'Rerun enrichments — save changes first'"
+        [attr.aria-describedby]="rerunReason() ? 'enrichment-config-rerun-reason' : null"
+        [attr.title]="rerunReason()"
+        (click)="requestRerun()"
       >
-        Rerun enrichments
+        @if (rerunning()) {
+          <span class="spinner-tiny" aria-hidden="true"></span>
+          <span>Rerunning…</span>
+        } @else {
+          <span>Rerun enrichments</span>
+        }
       </button>
     </div>
+
+    <!-- Screen-reader-only reason sentence. Bound to the Rerun button via
+         aria-describedby so non-sighted users hear WHY the button is
+         disabled instead of just hearing "button, disabled". -->
+    @if (rerunReason()) {
+      <span id="enrichment-config-rerun-reason" class="sr-only">
+        Rerun enrichments — {{ rerunReason() }}.
+      </span>
+    }
 
     <!-- Visually-hidden summary referenced by the Discard button via
          aria-describedby so screen-reader users hear the pending count
@@ -485,3 +501,16 @@
     }
   </div>
 </div>
+
+@if (showRerunModal()) {
+  <app-confirmation-modal
+    title="Rerun enrichments?"
+    [message]="rerunModalMessage()"
+    confirmText="Rerun"
+    cancelText="Cancel"
+    type="warning"
+    [loading]="rerunning()"
+    (confirmed)="confirmRerun()"
+    (cancelled)="cancelRerun()"
+  />
+}
