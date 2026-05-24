@@ -20,5 +20,6 @@ export class SetupComponent {
   readonly tabs: SetupTab[] = [
     { id: 'author-matching', label: 'Author Matching', path: 'author-matching' },
     { id: 'exclusion-rules', label: 'Exclusion Rules', path: 'exclusion-rules' },
+    { id: 'enrichment-config', label: 'Enrichment Config', path: 'enrichment-config' },
   ];
 }

@@ -120,6 +120,62 @@ export interface FilterRulesListResponse {
   rules: FilterRuleDto[];
 }
 
+// ── Config overrides DTOs ───────────────────────────────────────────────────
+// Mirror the Pydantic shapes in data-server/src/config_overrides/. The
+// catalogue is read-only metadata; the overrides dict is the editable state.
+
+/**
+ * One editable knob the editor renders. `current` already reflects any
+ * persisted override (the server overlays before returning), so the UI
+ * shows `current` in the input and flags it modified when `current !=
+ * default`. `metric_names` powers the "Used by" badge. `dx_baseline` is
+ * `false` for ScriptBee-only traits (Cathedral, BusFactor1, etc.).
+ */
+export interface CatalogueFieldDto {
+  name: string;
+  type: string;
+  default: unknown;
+  current: unknown;
+  metric_names: string[];
+  dx_baseline: boolean;
+}
+
+export interface CatalogueFamilyDto {
+  name: string;
+  fields: CatalogueFieldDto[];
+}
+
+export interface CatalogueResponseDto {
+  families: CatalogueFamilyDto[];
+}
+
+/**
+ * GET /projects/{id}/config-overrides response shape. The server returns
+ * the catalogue + the persisted overrides dict + the row's updated_at in
+ * a single round-trip — the editor never needs a second call.
+ */
+export interface ConfigOverridesResponse {
+  catalogue: CatalogueResponseDto;
+  overrides: Record<string, unknown>;
+  updated_at: string | null;
+}
+
+export interface ConfigOverridesWriteResponse {
+  overrides: Record<string, unknown>;
+  updated_at: string | null;
+}
+
+/**
+ * Tagged error a caller can `instanceof`-check after a config-overrides
+ * GET to render an "unknown project" empty state vs. a transport failure.
+ */
+export class ProjectNotFoundError extends Error {
+  constructor(message = 'Project not found.') {
+    super(message);
+    this.name = 'ProjectNotFoundError';
+  }
+}
+
 // ── Components page DTOs ────────────────────────────────────────────────────
 // Mirror the contract locked by data-server B3 (src/server.py around line 1216).
 // owner/status are intentionally absent — the data-server doesn't return them
@@ -635,6 +691,41 @@ export class DataServerService {
       console.error('Failed to list filter rules:', err);
       return [];
     }
+  }
+
+  // ── Config Overrides Methods ────────────────────────────────────────────
+
+  /**
+   * Fetch the catalogue + persisted overrides + updated_at for the given
+   * project in a single round-trip. Throws :class:`ProjectNotFoundError`
+   * on 404 so the editor can render an "unknown project" empty state;
+   * any other failure throws a generic Error.
+   */
+  async getConfigOverrides(projectId: string): Promise<ConfigOverridesResponse> {
+    try {
+      return await firstValueFrom(
+        this.http.get<ConfigOverridesResponse>(
+          `${this.baseUrl}/projects/${projectId}/config-overrides`,
+        ),
+      );
+    } catch (err) {
+      throw this.toConfigOverridesError(err);
+    }
+  }
+
+  private toConfigOverridesError(err: unknown): Error {
+    if (err instanceof HttpErrorResponse) {
+      if (err.status === 0) {
+        return new Error(`Unable to connect to data server at ${this.baseUrl}`);
+      }
+      if (err.status === 404) {
+        const message = err.error?.error || 'Project not found.';
+        return new ProjectNotFoundError(message);
+      }
+      const message = err.error?.error || err.error?.detail || err.message;
+      return new Error(message || `Config overrides request failed (${err.status})`);
+    }
+    return err instanceof Error ? err : new Error('Unexpected error');
   }
 
   /**

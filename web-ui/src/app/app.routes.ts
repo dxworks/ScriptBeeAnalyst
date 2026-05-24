@@ -47,6 +47,13 @@ export const routes: Routes = [
                     m => m.ExclusionRulesComponent,
                   ),
               },
+              {
+                path: 'enrichment-config',
+                loadComponent: () =>
+                  import(
+                    './pages/project/setup/enrichment-config/enrichment-config.component'
+                  ).then(m => m.EnrichmentConfigComponent),
+              },
             ],
           },
           {
