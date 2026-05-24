@@ -1,12 +1,15 @@
 import { Component, OnInit, computed, signal } from '@angular/core';
+import { FormsModule } from '@angular/forms';
 import { CurrentProjectService } from '../../../../core/services/current-project.service';
 import {
   CatalogueFamilyDto,
   CatalogueFieldDto,
   ConfigOverridesResponse,
+  ConfigOverridesValidationError,
   DataServerService,
   ProjectNotFoundError,
 } from '../../../../core/services/data-server.service';
+import { ToastService } from '../../../../core/services/toast.service';
 
 type ViewState = 'loading' | 'error' | 'ready' | 'no-project';
 
@@ -32,16 +35,41 @@ const TYPE_PILL_LABELS: ReadonlyMap<string, string> = new Map<string, string>([
   ['list[tuple[str, Pattern[str]]]', 'label/regex pairs'],
 ]);
 
-/** Tokens that should be upper-cased in human labels instead of title-cased.
- *
- * Hand-curated from the actual editable knob names — these are the only
- * acronyms that appear today (``pr_size_*``, ``polarised_*`` does NOT contain
- * one, ``dx_*`` doesn't surface in editable fields but is a domain term used
- * elsewhere in our copy, ``loc_*`` shows up in ``dynamicblob_loc_min``, ``ci_*``
- * is reserved for a future CI-noise classifier). Keep the set tight so it
- * doesn't silently capitalise unintended substrings (e.g. a knob named
- * ``citation_*`` should NOT get ``CItation``). */
+/** Tokens that should be upper-cased in human labels instead of title-cased. */
 const HUMAN_LABEL_ACRONYMS: ReadonlySet<string> = new Set(['pr', 'dx', 'ci', 'loc']);
+
+/** Discriminator used by the template to dispatch to the correct input. */
+export type KnobInputKind =
+  | 'int'
+  | 'float'
+  | 'bool'
+  | 'string'
+  | 'string-optional'
+  | 'string-list'
+  | 'label-int-pairs'
+  | 'label-range-map'
+  | 'regex-list'
+  | 'label-regex-pairs'
+  | 'unsupported';
+
+/** Single editable row inside a label/int-pairs composite editor. */
+export interface LabelIntPair {
+  label: string;
+  value: number | null;
+}
+
+/** Single editable row inside a label/range-map composite editor. */
+export interface LabelRangePair {
+  label: string;
+  start: number | null;
+  end: number | null;
+}
+
+/** Single editable row inside a label/regex-pairs composite editor. */
+export interface LabelRegexPair {
+  label: string;
+  regex: string;
+}
 
 /**
  * Stable, type-aware deep equality.
@@ -50,9 +78,9 @@ const HUMAN_LABEL_ACRONYMS: ReadonlySet<string> = new Set(['pr', 'dx', 'ci', 'lo
  * catalogue ships defaults and current values through the same backend
  * serialiser, so primitives, arrays and dicts always match byte-for-byte on
  * read — but `JSON.stringify` is also order-sensitive on object keys, so as
- * soon as the editor introduces patch-style writes (commit 7) the simpler
- * helper would silently disagree with the server. The keys-as-set comparison
- * here removes that hidden coupling while keeping the read path correct.
+ * soon as the editor introduces patch-style writes the simpler helper would
+ * silently disagree with the server. The keys-as-set comparison here removes
+ * that hidden coupling while keeping the read path correct.
  */
 function deepEqual(a: unknown, b: unknown): boolean {
   if (Object.is(a, b)) return true;
@@ -82,7 +110,7 @@ function deepEqual(a: unknown, b: unknown): boolean {
 @Component({
   selector: 'app-enrichment-config',
   standalone: true,
-  imports: [],
+  imports: [FormsModule],
   templateUrl: './enrichment-config.component.html',
   styleUrl: './enrichment-config.component.scss',
 })
@@ -96,35 +124,46 @@ export class EnrichmentConfigComponent implements OnInit {
   readonly families = computed<CatalogueFamilyDto[]>(
     () => this.response()?.catalogue.families ?? [],
   );
-  readonly overridesCount = computed(() => Object.keys(this.response()?.overrides ?? {}).length);
+  readonly persistedOverridesCount = computed(
+    () => Object.keys(this.response()?.overrides ?? {}).length,
+  );
   readonly lastEdited = computed(() => this.response()?.updated_at ?? null);
-  readonly hasOverrides = computed(() => this.overridesCount() > 0);
+  readonly hasOverrides = computed(() => this.persistedOverridesCount() > 0);
 
-  // Collapsed-state tracker for the per-family `<details>` panels. Default
-  // is "expanded" everywhere; the map only records the explicit overrides
-  // the user makes during the session. No localStorage yet — commit 11 may
-  // promote this to persistent state if it sticks in user testing.
+  // Collapsed-state tracker for the per-family `<details>` panels.
   private readonly collapsedFamiliesSignal = signal<Map<string, boolean>>(new Map());
 
-  // Both toolbar buttons stay structurally present but disabled until
-  // their handlers land: Save in commit 7 (typed inputs + save flow),
-  // Rerun in commit 8 (rerun trigger + progress UI). The flags below
-  // are wired now so the next two commits only have to flip them on
-  // rather than introducing new state.
-  readonly dirty = signal(false);
+  // ── Editing state ──────────────────────────────────────────────────────
+  // ``pendingOverridesSignal`` holds the user's unsaved edits, keyed by
+  // field name. Map mutations always go through a fresh ``new Map(prev)``
+  // so signal change detection fires. A key is REMOVED (not set to the
+  // current value) when the user reverts an edit back to ``field.current`` —
+  // that way ``size === 0`` is the single source of "clean".
+  private readonly pendingOverridesSignal = signal<Map<string, unknown>>(new Map());
+
+  /** Server-reported 422 — points the UI at the offending row. */
+  readonly fieldError = signal<{ field: string; error: string } | null>(null);
+
+  readonly saving = signal(false);
   readonly rerunning = signal(false);
-  readonly saveEnabled = signal(false);
-  readonly rerunEnabled = signal(false);
+
+  /** True iff the user has at least one unsaved edit. */
+  readonly dirty = computed(() => this.pendingOverridesSignal().size > 0);
+
   readonly canSave = computed(
-    () => this.saveEnabled() && this.dirty() && this.state() === 'ready',
+    () => this.dirty() && !this.saving() && this.state() === 'ready',
   );
-  readonly canRerun = computed(
-    () => this.rerunEnabled() && !this.rerunning() && this.state() === 'ready',
-  );
+
+  /** Rerun stays disabled in commit 7; commit 8 turns it on. */
+  readonly canRerun = signal(false);
+
+  /** Pending count shown next to the Save / Discard buttons. */
+  readonly pendingCount = computed(() => this.pendingOverridesSignal().size);
 
   constructor(
     private dataServer: DataServerService,
     private currentProject: CurrentProjectService,
+    private toast: ToastService,
   ) {}
 
   ngOnInit(): void {
@@ -192,53 +231,32 @@ export class EnrichmentConfigComponent implements OnInit {
 
   familyMeta(family: CatalogueFamilyDto): string {
     const total = family.fields.length;
-    const overridden = family.fields.filter(f => !deepEqual(f.current, f.default)).length;
+    const overridden = family.fields.filter(f => this.isFieldOverridden(f)).length;
     if (overridden === 0) {
       return `${total} knob${total === 1 ? '' : 's'}`;
     }
-    return `${total} knob${total === 1 ? '' : 's'} · ${overridden} overridden`;
+    return `${total} knob${total === 1 ? '' : 's'} · ${overridden} modified`;
   }
 
   // ── Collapsible families ────────────────────────────────────────────────
-  // The Map only carries explicit user toggles; "open by default" is encoded
-  // by the absence of an entry. This keeps the signal small (mostly empty)
-  // and the template predicate trivial.
   isFamilyOpen(family: CatalogueFamilyDto): boolean {
     return this.collapsedFamiliesSignal().get(family.name) !== true;
   }
 
-  /**
-   * Mirror the native `<details>` toggle into our signal so a future
-   * "Collapse all" button (commit 11 polish) has a single map to mutate.
-   * We can't use `[open]` two-way because Angular doesn't expose a
-   * `(openChange)` for the details element; reading from the DOM via
-   * `(toggle)` is the idiomatic shape.
-   */
   onFamilyToggle(family: CatalogueFamilyDto, event: Event): void {
     const target = event.target as HTMLDetailsElement;
     const collapsed = !target.open;
     this.collapsedFamiliesSignal.update(prev => {
       const next = new Map(prev);
-      if (collapsed) {
-        next.set(family.name, true);
-      } else {
-        next.delete(family.name);
-      }
+      if (collapsed) next.set(family.name, true);
+      else next.delete(family.name);
       return next;
     });
   }
 
   // ── Per-knob row helpers ────────────────────────────────────────────────
 
-  isFieldDefault(field: CatalogueFieldDto): boolean {
-    return deepEqual(field.current, field.default);
-  }
-
-  /** snake_case → Title Case Words, with acronyms upper-cased.
-   *
-   * Tokens in :data:`HUMAN_LABEL_ACRONYMS` (e.g. ``pr``, ``loc``) become
-   * ``PR``/``LOC`` instead of ``Pr``/``Loc`` so domain shorthand reads
-   * naturally. Everything else gets a plain Title Case pass. */
+  /** snake_case → Title Case Words, with acronyms upper-cased. */
   humanLabel(fieldName: string): string {
     return fieldName
       .split('_')
@@ -252,16 +270,20 @@ export class EnrichmentConfigComponent implements OnInit {
       .join(' ');
   }
 
-  /**
-   * Friendly label for the type pill. Falls back to the raw type string
-   * when the catalogue surfaces a shape we haven't enumerated — better to
-   * leak the dataclass type than to drop information.
-   */
+  /** Stable DOM id for ARIA wiring (``aria-labelledby``). */
+  knobLabelId(field: CatalogueFieldDto): string {
+    return `knob-label-${field.name}`;
+  }
+
+  /** Stable DOM id for the inline error region under a row. */
+  knobErrorId(field: CatalogueFieldDto): string {
+    return `knob-error-${field.name}`;
+  }
+
   typeLabel(typeString: string): string {
     return TYPE_PILL_LABELS.get(typeString) ?? typeString;
   }
 
-  /** First-N metric names with the "+M more" tail captured separately. */
   visibleMetricNames(field: CatalogueFieldDto): string[] {
     return field.metric_names.slice(0, USED_BY_VISIBLE_LIMIT);
   }
@@ -274,53 +296,422 @@ export class EnrichmentConfigComponent implements OnInit {
     return field.metric_names.slice(USED_BY_VISIBLE_LIMIT).join(', ');
   }
 
-  /**
-   * Render a value into a single human-readable line.
-   *
-   * The catalogue surfaces six concrete shapes (int / float / bool / string
-   * / list / dict). Lists are truncated with an ellipsis past 4 entries so
-   * a 17-pattern `nature_patterns` default doesn't blow the row layout;
-   * the full value remains accessible via the row's `title` tooltip.
-   */
-  formatValue(value: unknown): string {
-    if (value === null || value === undefined) return '—';
-    if (typeof value === 'boolean') return value ? 'true' : 'false';
-    if (typeof value === 'number') {
-      if (!Number.isFinite(value)) return String(value);
-      if (Number.isInteger(value)) return value.toString();
-      // Clamp float precision so an override saved as 0.7000000000000001 (a
-      // common JS float artefact) doesn't visually scream "modified" by
-      // rendering 17 trailing digits next to a clean 0.7 default.
-      return value.toLocaleString(undefined, { maximumFractionDigits: 4 });
-    }
-    if (typeof value === 'string') return value;
-    if (Array.isArray(value)) {
-      if (value.length === 0) return '[]';
-      const head = value.slice(0, 4).map(v => this.formatValue(v));
-      const more = value.length - head.length;
-      return more > 0 ? `${head.join(', ')}, … (+${more})` : head.join(', ');
-    }
-    if (typeof value === 'object') {
-      const entries = Object.entries(value as Record<string, unknown>);
-      if (entries.length === 0) return '{}';
-      const head = entries
-        .slice(0, 3)
-        .map(([k, v]) => `${k}: ${this.formatValue(v)}`);
-      const more = entries.length - head.length;
-      return more > 0 ? `${head.join(', ')}, … (+${more})` : head.join(', ');
-    }
-    return String(value);
+  /** True iff the (pending OR persisted) value differs from the dataclass default. */
+  isFieldOverridden(field: CatalogueFieldDto): boolean {
+    return !deepEqual(this.effectiveValue(field), field.default);
   }
 
-  /** Full JSON serialisation used as a row tooltip so the truncated
-   * collection values are inspectable without leaving the page. HTML
-   * ``title=""`` collapses whitespace and many browsers truncate long
-   * tooltips, so the compact (no-indent) form maximises useful content. */
-  fullValueTitle(value: unknown): string {
+  /** True iff there is an unsaved edit on this field. */
+  isFieldPending(field: CatalogueFieldDto): boolean {
+    return this.pendingOverridesSignal().has(field.name);
+  }
+
+  /** True iff the server returned a 422 pointing at this field. */
+  hasFieldError(field: CatalogueFieldDto): boolean {
+    return this.fieldError()?.field === field.name;
+  }
+
+  /** Effective value the input should reflect — pending first, else current. */
+  effectiveValue(field: CatalogueFieldDto): unknown {
+    const pending = this.pendingOverridesSignal();
+    return pending.has(field.name) ? pending.get(field.name) : field.current;
+  }
+
+  /** Per-type narrowed accessors so the template can stay strictly typed. */
+  effectiveString(field: CatalogueFieldDto): string {
+    const value = this.effectiveValue(field);
+    return value == null ? '' : String(value);
+  }
+
+  effectiveNumber(field: CatalogueFieldDto): number {
+    const value = this.effectiveValue(field);
+    return typeof value === 'number' && Number.isFinite(value) ? value : 0;
+  }
+
+  effectiveBool(field: CatalogueFieldDto): boolean {
+    return this.effectiveValue(field) === true;
+  }
+
+  // ── Input kind dispatcher ───────────────────────────────────────────────
+  /**
+   * Map the catalogue's raw dataclass type string onto the discriminator
+   * the template uses to render the right input. Unrecognised types fall
+   * back to ``"unsupported"`` which renders read-only — better than
+   * silently dropping a future field type.
+   */
+  inputKind(field: CatalogueFieldDto): KnobInputKind {
+    switch (field.type) {
+      case 'int':
+        return 'int';
+      case 'float':
+        return 'float';
+      case 'bool':
+        return 'bool';
+      case 'str':
+        return 'string';
+      case 'Optional[str]':
+        return 'string-optional';
+      case 'tuple[str, ...]':
+        return 'string-list';
+      case 'list[tuple[str, int]]':
+        return 'label-int-pairs';
+      case 'dict[str, tuple[int, int]]':
+        return 'label-range-map';
+      case 'list[Pattern[str]]':
+        return 'regex-list';
+      case 'list[tuple[str, Pattern[str]]]':
+        return 'label-regex-pairs';
+      default:
+        return 'unsupported';
+    }
+  }
+
+  // ── Pending-state mutation API ──────────────────────────────────────────
+
+  /**
+   * Set ``value`` as the pending edit for ``field``. When ``value`` deep-
+   * equals ``field.current`` the key is REMOVED instead — that way going
+   * "5 → 7 → 5" with a manual revert clears the pending state without a
+   * separate "discard this field" gesture.
+   */
+  setPending(field: CatalogueFieldDto, value: unknown): void {
+    this.pendingOverridesSignal.update(prev => {
+      const next = new Map(prev);
+      if (deepEqual(value, field.current)) {
+        next.delete(field.name);
+      } else {
+        next.set(field.name, value);
+      }
+      return next;
+    });
+    // Any further edit dismisses a previous inline error so the user sees
+    // the new value isn't pre-flagged. The server is the source of truth
+    // for "is this value valid" — we don't try to mirror the validator
+    // client-side past obvious shape checks (composite editors).
+    if (this.fieldError()?.field === field.name) {
+      this.fieldError.set(null);
+    }
+  }
+
+  /** Reset a single field's pending edit — used by the per-row "Reset" link. */
+  resetField(field: CatalogueFieldDto): void {
+    this.pendingOverridesSignal.update(prev => {
+      if (!prev.has(field.name)) return prev;
+      const next = new Map(prev);
+      next.delete(field.name);
+      return next;
+    });
+    if (this.fieldError()?.field === field.name) {
+      this.fieldError.set(null);
+    }
+  }
+
+  /** Drop every pending edit and dismiss any inline error. */
+  discardAll(): void {
+    this.pendingOverridesSignal.set(new Map());
+    this.fieldError.set(null);
+  }
+
+  // ── int / float input adapters ──────────────────────────────────────────
+  // Template-driven inputs deliver strings; we coerce to number once at the
+  // boundary so the pending map stores the right type. An empty string maps
+  // to a 0 — the server's coercer rejects nonsensical values so we don't
+  // try to guess intent here.
+  onIntInput(field: CatalogueFieldDto, raw: string): void {
+    if (raw === '' || raw === '-') {
+      this.setPending(field, 0);
+      return;
+    }
+    const value = Number.parseInt(raw, 10);
+    if (Number.isFinite(value)) this.setPending(field, value);
+  }
+
+  onFloatInput(field: CatalogueFieldDto, raw: string): void {
+    if (raw === '' || raw === '-') {
+      this.setPending(field, 0);
+      return;
+    }
+    const value = Number.parseFloat(raw);
+    if (Number.isFinite(value)) this.setPending(field, value);
+  }
+
+  onBoolChange(field: CatalogueFieldDto, value: boolean): void {
+    this.setPending(field, value);
+  }
+
+  onStringInput(field: CatalogueFieldDto, value: string): void {
+    this.setPending(field, value);
+  }
+
+  /** Clear an Optional[str] back to ``null`` via the row's "×" button. */
+  clearOptionalString(field: CatalogueFieldDto): void {
+    this.setPending(field, null);
+  }
+
+  // ── string-list editor (``tuple[str, ...]``) ────────────────────────────
+  /**
+   * Read the current effective value as a string list. The wire encoding
+   * for ``tuple[str, ...]`` is JSON ``string[]`` — guarded fallback to
+   * ``[]`` for the rare unsupported shape so the editor never crashes.
+   */
+  asStringList(field: CatalogueFieldDto): string[] {
+    const value = this.effectiveValue(field);
+    return Array.isArray(value) ? (value as unknown[]).map(v => String(v)) : [];
+  }
+
+  onStringListAdd(field: CatalogueFieldDto, input: HTMLInputElement): void {
+    const trimmed = input.value.trim();
+    if (!trimmed) return;
+    const next = [...this.asStringList(field), trimmed];
+    this.setPending(field, next);
+    input.value = '';
+  }
+
+  onStringListRemove(field: CatalogueFieldDto, index: number): void {
+    const next = this.asStringList(field).filter((_, i) => i !== index);
+    this.setPending(field, next);
+  }
+
+  // ── regex-list editor (``list[Pattern[str]]``) ──────────────────────────
+  // Edited as a multiline textarea, one regex per line. Empty lines drop
+  // (a regex that matches nothing is useless and would only confuse the
+  // backend coercer). The server compiles each pattern on PUT — we don't
+  // try to mirror Python regex flavour client-side.
+  asRegexLines(field: CatalogueFieldDto): string {
+    const value = this.effectiveValue(field);
+    if (!Array.isArray(value)) return '';
+    return (value as unknown[]).map(v => String(v)).join('\n');
+  }
+
+  onRegexLinesInput(field: CatalogueFieldDto, raw: string): void {
+    const lines = raw
+      .split('\n')
+      .map(line => line.trim())
+      .filter(Boolean);
+    this.setPending(field, lines);
+  }
+
+  // ── label/int-pairs editor (``list[tuple[str, int]]``) ──────────────────
+  // The catalogue serialises ``list[tuple[str, int]]`` as ``[[label, value],
+  // ...]`` (canonical). We read both that shape AND the descriptive
+  // ``[{label, max_days}, ...]`` form (the merge layer tolerates both as
+  // defense-in-depth — hand-edited JSONB rows may carry either). We always
+  // WRITE the canonical list-of-list form; the router's
+  // ``normalize_for_storage`` keeps it canonical end-to-end.
+  asLabelIntPairs(field: CatalogueFieldDto): LabelIntPair[] {
+    const value = this.effectiveValue(field);
+    if (!Array.isArray(value)) return [];
+    return (value as unknown[]).map(item => {
+      if (Array.isArray(item) && item.length >= 2) {
+        const v = item[1];
+        return {
+          label: String(item[0] ?? ''),
+          value: typeof v === 'number' && Number.isFinite(v) ? v : null,
+        };
+      }
+      if (item && typeof item === 'object') {
+        const rec = item as Record<string, unknown>;
+        const v = rec['max_days'] ?? rec['value'];
+        return {
+          label: String(rec['label'] ?? ''),
+          value: typeof v === 'number' && Number.isFinite(v) ? v : null,
+        };
+      }
+      return { label: '', value: null };
+    });
+  }
+
+  private writeLabelIntPairs(field: CatalogueFieldDto, rows: LabelIntPair[]): void {
+    // Canonical wire form: ``[[label, value], ...]``. We coerce nulls to 0
+    // to avoid sending nonsensical payloads — the server's coercer would
+    // reject ``null`` anyway, but failing inline is cleaner.
+    const next = rows.map(r => [r.label, r.value ?? 0]);
+    this.setPending(field, next);
+  }
+
+  onLabelIntPairLabel(field: CatalogueFieldDto, index: number, label: string): void {
+    const rows = this.asLabelIntPairs(field);
+    rows[index] = { ...rows[index], label };
+    this.writeLabelIntPairs(field, rows);
+  }
+
+  onLabelIntPairValue(field: CatalogueFieldDto, index: number, raw: string): void {
+    const rows = this.asLabelIntPairs(field);
+    const parsed = raw === '' ? null : Number.parseInt(raw, 10);
+    rows[index] = {
+      ...rows[index],
+      value: parsed !== null && Number.isFinite(parsed) ? parsed : null,
+    };
+    this.writeLabelIntPairs(field, rows);
+  }
+
+  onLabelIntPairAdd(field: CatalogueFieldDto): void {
+    const rows = [...this.asLabelIntPairs(field), { label: '', value: 0 }];
+    this.writeLabelIntPairs(field, rows);
+  }
+
+  onLabelIntPairRemove(field: CatalogueFieldDto, index: number): void {
+    const rows = this.asLabelIntPairs(field).filter((_, i) => i !== index);
+    this.writeLabelIntPairs(field, rows);
+  }
+
+  // ── label/range-map editor (``dict[str, tuple[int, int]]``) ─────────────
+  asLabelRangePairs(field: CatalogueFieldDto): LabelRangePair[] {
+    const value = this.effectiveValue(field);
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return [];
+    return Object.entries(value as Record<string, unknown>).map(([label, range]) => {
+      if (Array.isArray(range) && range.length >= 2) {
+        const a = range[0];
+        const b = range[1];
+        return {
+          label,
+          start: typeof a === 'number' && Number.isFinite(a) ? a : null,
+          end: typeof b === 'number' && Number.isFinite(b) ? b : null,
+        };
+      }
+      return { label, start: null, end: null };
+    });
+  }
+
+  private writeLabelRangePairs(
+    field: CatalogueFieldDto,
+    rows: LabelRangePair[],
+  ): void {
+    // Canonical dict form: ``{label: [start, end]}``. Empty labels are
+    // dropped silently — a row with no label is mid-edit, not a payload.
+    const next: Record<string, [number, number]> = {};
+    for (const r of rows) {
+      if (!r.label) continue;
+      next[r.label] = [r.start ?? 0, r.end ?? 0];
+    }
+    this.setPending(field, next);
+  }
+
+  onLabelRangePairLabel(field: CatalogueFieldDto, index: number, label: string): void {
+    const rows = this.asLabelRangePairs(field);
+    rows[index] = { ...rows[index], label };
+    this.writeLabelRangePairs(field, rows);
+  }
+
+  onLabelRangePairStart(field: CatalogueFieldDto, index: number, raw: string): void {
+    const rows = this.asLabelRangePairs(field);
+    const parsed = raw === '' ? null : Number.parseInt(raw, 10);
+    rows[index] = {
+      ...rows[index],
+      start: parsed !== null && Number.isFinite(parsed) ? parsed : null,
+    };
+    this.writeLabelRangePairs(field, rows);
+  }
+
+  onLabelRangePairEnd(field: CatalogueFieldDto, index: number, raw: string): void {
+    const rows = this.asLabelRangePairs(field);
+    const parsed = raw === '' ? null : Number.parseInt(raw, 10);
+    rows[index] = {
+      ...rows[index],
+      end: parsed !== null && Number.isFinite(parsed) ? parsed : null,
+    };
+    this.writeLabelRangePairs(field, rows);
+  }
+
+  onLabelRangePairAdd(field: CatalogueFieldDto): void {
+    const rows = [...this.asLabelRangePairs(field), { label: '', start: 0, end: 0 }];
+    this.writeLabelRangePairs(field, rows);
+  }
+
+  onLabelRangePairRemove(field: CatalogueFieldDto, index: number): void {
+    const rows = this.asLabelRangePairs(field).filter((_, i) => i !== index);
+    this.writeLabelRangePairs(field, rows);
+  }
+
+  // ── label/regex-pairs editor (``list[tuple[str, Pattern[str]]]``) ───────
+  asLabelRegexPairs(field: CatalogueFieldDto): LabelRegexPair[] {
+    const value = this.effectiveValue(field);
+    if (!Array.isArray(value)) return [];
+    return (value as unknown[]).map(item => {
+      if (Array.isArray(item) && item.length >= 2) {
+        return { label: String(item[0] ?? ''), regex: String(item[1] ?? '') };
+      }
+      if (item && typeof item === 'object') {
+        const rec = item as Record<string, unknown>;
+        return {
+          label: String(rec['label'] ?? ''),
+          regex: String(rec['regex'] ?? ''),
+        };
+      }
+      return { label: '', regex: '' };
+    });
+  }
+
+  private writeLabelRegexPairs(
+    field: CatalogueFieldDto,
+    rows: LabelRegexPair[],
+  ): void {
+    // Canonical wire form: ``[[label, regex_source], ...]``. The server's
+    // merge layer compiles the regex; client-side we only trim leading and
+    // trailing whitespace.
+    const next = rows.map(r => [r.label, r.regex.trim()]);
+    this.setPending(field, next);
+  }
+
+  onLabelRegexPairLabel(field: CatalogueFieldDto, index: number, label: string): void {
+    const rows = this.asLabelRegexPairs(field);
+    rows[index] = { ...rows[index], label };
+    this.writeLabelRegexPairs(field, rows);
+  }
+
+  onLabelRegexPairPattern(field: CatalogueFieldDto, index: number, regex: string): void {
+    const rows = this.asLabelRegexPairs(field);
+    rows[index] = { ...rows[index], regex };
+    this.writeLabelRegexPairs(field, rows);
+  }
+
+  onLabelRegexPairAdd(field: CatalogueFieldDto): void {
+    const rows = [...this.asLabelRegexPairs(field), { label: '', regex: '' }];
+    this.writeLabelRegexPairs(field, rows);
+  }
+
+  onLabelRegexPairRemove(field: CatalogueFieldDto, index: number): void {
+    const rows = this.asLabelRegexPairs(field).filter((_, i) => i !== index);
+    this.writeLabelRegexPairs(field, rows);
+  }
+
+  // ── Save flow ───────────────────────────────────────────────────────────
+  async onSave(): Promise<void> {
+    const projectId = this.currentProject.loadedProjectId();
+    if (!projectId || !this.canSave()) return;
+
+    const persisted = this.response()?.overrides ?? {};
+    const pending = this.pendingOverridesSignal();
+
+    // Merge persisted dict with the pending edits — the PUT endpoint
+    // replaces the whole dict, so we must send the full effective state.
+    const merged: Record<string, unknown> = { ...persisted };
+    for (const [name, value] of pending.entries()) {
+      merged[name] = value;
+    }
+
+    this.saving.set(true);
+    this.fieldError.set(null);
     try {
-      return JSON.stringify(value);
-    } catch {
-      return String(value);
+      await this.dataServer.putConfigOverrides(projectId, merged);
+      // Refetch the catalogue+overrides so ``current`` reflects the
+      // server's authoritative state (it may have normalised composite
+      // shapes back to the canonical form), then clear pending.
+      const refreshed = await this.dataServer.getConfigOverrides(projectId);
+      this.response.set(refreshed);
+      this.pendingOverridesSignal.set(new Map());
+      this.toast.success('Configuration saved');
+    } catch (err) {
+      if (err instanceof ConfigOverridesValidationError) {
+        this.fieldError.set({ field: err.field, error: err.message });
+        this.toast.warning(`Some changes weren't saved: ${err.message}`);
+      } else {
+        const message =
+          err instanceof Error ? err.message : 'Failed to save configuration';
+        this.toast.error(message);
+      }
+    } finally {
+      this.saving.set(false);
     }
   }
 }

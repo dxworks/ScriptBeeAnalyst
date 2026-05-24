@@ -36,6 +36,13 @@
   align-items: center;
   gap: var(--spacing-sm);
   flex-wrap: wrap;
+
+  // Save button spinner adornment.
+  .btn {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--spacing-xs);
+  }
 }
 
 .tab-header-meta-count {
@@ -45,6 +52,27 @@
   margin-right: var(--spacing-xs);
 }
 
+.dirty-indicator {
+  color: var(--color-warning);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+// Tailwind ships sr-only globally, but in case it isn't applied to this
+// component's encapsulated tree we keep a local definition so the
+// pending-summary text stays out of sight.
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
 .tab-body {
   display: flex;
   flex-direction: column;
@@ -52,8 +80,6 @@
 }
 
 // ── Loading / error / no-project empty states ───────────────────────────────
-// Reuses the same .empty-state pattern as exclusion-rules so the visual
-// vocabulary is consistent across setup tabs.
 .empty-state {
   display: flex;
   flex-direction: column;
@@ -73,19 +99,9 @@
     margin-bottom: var(--spacing-md);
   }
 
-  h3 {
-    margin: 0;
-    color: var(--color-text-primary);
-  }
-
-  p {
-    margin: 0;
-    max-width: 480px;
-  }
-
-  .btn {
-    margin-top: var(--spacing-sm);
-  }
+  h3 { margin: 0; color: var(--color-text-primary); }
+  p  { margin: 0; max-width: 480px; }
+  .btn { margin-top: var(--spacing-sm); }
 }
 
 .spinner-large {
@@ -96,6 +112,23 @@
   border-radius: 50%;
   animation: spin 0.8s linear infinite;
   margin-bottom: var(--spacing-md);
+}
+
+// Tiny inline spinner for the Save button — mirrors the pattern used by
+// project-card.component.scss so the visual vocabulary stays consistent.
+.spinner-tiny {
+  width: 12px;
+  height: 12px;
+  border: 2px solid rgba(255, 255, 255, 0.3);
+  border-top-color: white;
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+  display: inline-block;
+
+  &.spinner-tiny-dark {
+    border-color: rgba(var(--color-accent-rgb), 0.2);
+    border-top-color: var(--color-accent);
+  }
 }
 
 @keyframes spin {
@@ -109,12 +142,7 @@
   gap: var(--spacing-lg);
 }
 
-// Each family is a native <details> styled to match `.card`.
-// `padding` lives on the children so collapsed (= just the summary) and
-// expanded states share the same outer chrome without an empty bottom band.
 .family-card {
-  // `details` resets — strip the default browser disclosure marker so we
-  // can ship a custom one (rotating chevron) inside .family-disclosure.
   &::-webkit-details-marker { display: none; }
   &[open] > .family-card-header .family-disclosure { transform: rotate(90deg); }
 }
@@ -127,7 +155,7 @@
   flex-wrap: wrap;
   padding: var(--spacing-lg);
   cursor: pointer;
-  list-style: none;              // Firefox marker shim
+  list-style: none;
   user-select: none;
 
   &::-webkit-details-marker { display: none; }
@@ -147,8 +175,6 @@
   min-width: 0;
 }
 
-// Custom disclosure caret — 6px right-pointing triangle that rotates 90deg
-// when the parent `details` is open. Pure CSS, no extra DOM.
 .family-disclosure {
   display: inline-block;
   width: 0;
@@ -184,13 +210,16 @@
   padding: 0 var(--spacing-lg) var(--spacing-lg) var(--spacing-lg);
   display: flex;
   flex-direction: column;
-  gap: 0;                         // border separator owns the rhythm
+  gap: 0;
   border-top: 1px solid var(--color-border-light);
 }
 
 .knob-row {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(220px, auto);
+  // The value column needs more room for the composite editors (label/int
+  // pairs, regex textarea) — 320px minimum keeps two-column form layouts
+  // readable while still allowing the label column to claim the rest.
+  grid-template-columns: minmax(0, 1fr) minmax(320px, auto);
   gap: var(--spacing-md) var(--spacing-lg);
   align-items: start;
   padding: var(--spacing-md) 0;
@@ -198,24 +227,27 @@
 
   &:last-child { border-bottom: none; }
 
-  // Subtle 2px accent-stripe on the left for overridden rows — gives the
-  // editor a one-glance read of "what's different from defaults" once
-  // commit 7 ships writes. Margin-left negative pulls the stripe flush
-  // with the card body's vertical edge.
+  // 2px accent stripe whenever the row carries a pending edit OR a saved
+  // override — the user reads "this row differs from defaults" at a glance.
+  // Pending edits get a brighter accent than persisted overrides, but the
+  // stripe lives in both branches so the layout stays stable.
   &.knob-row-overridden {
     padding-left: var(--spacing-md);
     margin-left: calc(-1 * var(--spacing-md));
     border-left: 2px solid var(--color-accent);
   }
 
-  // ScriptBee-only knobs get a faint warning-tinted background so the
-  // "no dx baseline" badge isn't the only signal in a long list. The
-  // :host-context dark-theme override below lifts the alpha because a 4%
-  // warning over the dark #1f2937 surface is barely perceptible. We use
-  // :host-context() so Angular's emulated encapsulation does NOT rewrite
-  // the `html[data-theme="dark"]` ancestor selector — plain
-  // `html[data-theme="dark"] &` would get a `[_ngcontent-…]` attribute
-  // appended to `html`, which never matches.
+  &.knob-row-pending {
+    background-color: rgba(var(--color-accent-rgb), 0.03);
+  }
+
+  &.knob-row-error {
+    background-color: rgba(var(--color-error-rgb), 0.05);
+    border-left: 2px solid var(--color-error);
+    padding-left: var(--spacing-md);
+    margin-left: calc(-1 * var(--spacing-md));
+  }
+
   &.knob-row-no-baseline {
     background-color: rgba(var(--color-warning-rgb), 0.04);
 
@@ -277,6 +309,19 @@
   letter-spacing: 0.02em;
 }
 
+// Tag that lights up next to the row label when the user has an unsaved
+// edit on this knob — a stronger affordance than the row stripe alone.
+.knob-pending-tag {
+  font-size: 0.6875rem;
+  padding: 1px 6px;
+  background-color: rgba(var(--color-accent-rgb), 0.12);
+  color: var(--color-accent);
+  border-radius: var(--radius-sm);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  font-weight: 600;
+}
+
 .knob-meta-line {
   display: inline-flex;
   align-items: center;
@@ -309,7 +354,7 @@
 .knob-used-by-overflow {
   font-size: 0.6875rem;
   padding: 1px 8px;
-  cursor: help;                   // tooltip lists the hidden metric names
+  cursor: help;
 }
 
 .knob-no-baseline {
@@ -319,11 +364,11 @@
 
 .knob-value {
   margin: 0;
-  display: inline-flex;
-  align-items: baseline;
+  display: flex;
+  align-items: flex-start;
   gap: var(--spacing-sm);
   justify-content: flex-end;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   min-width: 0;
   font-size: 0.875rem;
   color: var(--color-text-primary);
@@ -333,20 +378,268 @@
   .knob-value { justify-content: flex-start; }
 }
 
-.knob-current {
+// Column wrapping the actual input. Right-aligned in light mode (matches
+// the read-only scaffold rhythm) but the input itself stretches as the
+// content demands — composites (regex list, label/int pairs) flex
+// out to the full column width.
+.knob-input-cell {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: var(--spacing-xs);
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+// Right column of the value cell — holds either the "default" tag (when
+// the field is unchanged) or the per-row "Reset" link (when pending).
+.knob-value-meta {
+  display: inline-flex;
+  align-items: center;
+  flex-shrink: 0;
+  min-width: 56px;
+  justify-content: flex-end;
+}
+
+// Compact input variant. The global .form-input is full-width with chunky
+// padding (modal forms) — for per-knob editing we want a denser variant
+// that still inherits focus / error styles.
+.knob-input {
+  padding: 4px 8px;
+  font-size: 0.8125rem;
+  min-width: 0;
+  width: 100%;
+  font-family: inherit;
+
+  &:focus {
+    outline: none;
+    border-color: var(--color-accent);
+    box-shadow: 0 0 0 3px rgba(var(--color-accent-rgb), 0.1);
+  }
+
+  &.error {
+    border-color: var(--color-error);
+
+    &:focus {
+      box-shadow: 0 0 0 3px rgba(var(--color-error-rgb), 0.1);
+    }
+  }
+}
+
+.knob-input-numeric {
+  font-variant-numeric: tabular-nums;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  text-align: right;
+  max-width: 160px;
+  margin-left: auto;
+}
+
+.knob-input-inline {
+  max-width: 240px;
+}
+
+.knob-input-narrow {
+  max-width: 180px;
+}
+
+.knob-input-textarea {
+  width: 100%;
+  resize: vertical;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.75rem;
+  text-align: left;
+}
+
+.knob-input-regex {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+// Bool + checkbox row — checkbox sits next to a textual "true/false" so
+// the visual matches the read-only render from commit 6.
+.knob-bool-control {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--spacing-sm);
+  cursor: pointer;
+  user-select: none;
+
+  input[type="checkbox"] {
+    width: 16px;
+    height: 16px;
+    accent-color: var(--color-accent);
+    cursor: pointer;
+  }
+}
+
+.knob-bool-value {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.8125rem;
+  color: var(--color-text-primary);
+}
+
+// String-with-clear control.
+.knob-string-control {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--spacing-xs);
+  width: 100%;
+  max-width: 360px;
+}
+
+// Composite editor container — used by string-list, label/int-pairs,
+// label/range-map, regex-list, label/regex-pairs.
+.knob-composite {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-xs);
+  width: 100%;
+  align-items: stretch;
+}
+
+// Pair-grid for label+value (2 columns) and label+start+end (3 columns)
+// composite editors. The trailing column carries the remove icon button.
+.knob-pair-grid {
+  display: grid;
+  gap: var(--spacing-xs) var(--spacing-sm);
+  align-items: center;
+}
+
+.knob-pair-grid-2 {
+  grid-template-columns: minmax(0, 1fr) 90px 28px;
+}
+
+.knob-pair-grid-3 {
+  grid-template-columns: minmax(0, 1fr) 80px 80px 28px;
+}
+
+.knob-pair-head {
+  font-size: 0.6875rem;
+  color: var(--color-text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
   font-weight: 500;
 }
 
-// Numeric values get tabular figures so a long column of ints/floats
-// aligns vertically without monospacing the whole row.
-.knob-current-numeric {
-  font-variant-numeric: tabular-nums;
+.knob-pair-head-value { text-align: right; }
+.knob-pair-head-actions { /* spacer */ }
+
+.knob-pair-add {
+  align-self: flex-start;
+  margin-top: var(--spacing-xs);
+}
+
+// Label/regex-pairs is wider than a grid can carry cleanly (the regex
+// column expands and we want each row stacked vertically on narrow
+// viewports), so we use flex rows instead of a grid.
+.knob-regex-pair-row {
+  display: flex;
+  gap: var(--spacing-xs);
+  align-items: flex-start;
+  width: 100%;
+}
+
+// Chip list (string-list editor).
+.knob-chip-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--spacing-xs);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.knob-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--spacing-xs);
+  padding: 2px 8px;
+  background-color: rgba(var(--color-accent-rgb), 0.08);
+  color: var(--color-accent);
+  border-radius: var(--radius-full);
+  font-size: 0.75rem;
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
 }
 
-.knob-current-bool {
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  text-transform: lowercase;
+.knob-chip-text { min-width: 0; }
+
+.knob-chip-add {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--spacing-xs);
+  margin-top: var(--spacing-xs);
+}
+
+// Lightweight icon button used by chip-remove, optional-string-clear, and
+// composite-editor row-remove. Single style covers all three contexts via
+// a size modifier.
+.btn-icon {
+  appearance: none;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--color-text-muted);
+  width: 24px;
+  height: 24px;
+  border-radius: var(--radius-sm);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  font-size: 1rem;
+  line-height: 1;
+  padding: 0;
+  transition: background-color var(--transition-fast), color var(--transition-fast);
+
+  &:hover {
+    background-color: var(--color-surface-hover);
+    color: var(--color-text-primary);
+  }
+
+  &:focus-visible {
+    outline: 2px solid var(--color-accent);
+    outline-offset: 1px;
+  }
+
+  &:disabled {
+    color: var(--color-border);
+    cursor: not-allowed;
+  }
+}
+
+.btn-icon-small {
+  width: 18px;
+  height: 18px;
+  font-size: 0.875rem;
+}
+
+// "Reset" text-link mid-row. Matches the inline-link affordance used by
+// the dashboard for "Edit" / "Delete" prompts.
+.btn-link {
+  appearance: none;
+  background: transparent;
+  border: none;
+  padding: 0;
+  font-size: 0.75rem;
+  color: var(--color-accent);
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+
+  &:hover:not(:disabled) {
+    color: var(--color-accent-dark);
+  }
+
+  &:focus-visible {
+    outline: 2px solid var(--color-accent);
+    outline-offset: 2px;
+    border-radius: var(--radius-sm);
+  }
+
+  &:disabled {
+    color: var(--color-text-muted);
+    cursor: not-allowed;
+    text-decoration: none;
+  }
 }
 
 .knob-default-tag {
@@ -359,28 +652,21 @@
   letter-spacing: 0.04em;
 }
 
-.knob-default {
-  display: inline-flex;
-  align-items: baseline;
-  gap: var(--spacing-xs);
-  color: var(--color-text-muted);
+.knob-unsupported {
   font-size: 0.75rem;
-  cursor: help;
-}
-
-.knob-default-label {
-  text-transform: lowercase;
-  letter-spacing: 0;
-}
-
-.knob-default-value {
-  font-variant-numeric: tabular-nums;
-}
-
-.text-muted {
   color: var(--color-text-muted);
+  font-style: italic;
 }
 
-.text-secondary {
-  color: var(--color-text-secondary);
+// Inline error region under a row. Spans both columns of the grid so the
+// error reads as belonging to the whole row.
+.knob-error {
+  grid-column: 1 / -1;
+  margin-top: var(--spacing-xs);
+  font-size: 0.8125rem;
+  color: var(--color-error);
+  font-weight: 500;
 }
+
+.text-muted    { color: var(--color-text-muted); }
+.text-secondary { color: var(--color-text-secondary); }

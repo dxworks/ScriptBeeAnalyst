@@ -15,8 +15,12 @@
     <div class="tab-header-actions">
       <span class="tab-header-meta-count">
         @if (state() === 'ready') {
-          @if (hasOverrides()) {
-            {{ overridesCount() }} override{{ overridesCount() === 1 ? '' : 's' }}
+          @if (dirty()) {
+            <span class="dirty-indicator" aria-live="polite">
+              {{ pendingCount() }} unsaved change{{ pendingCount() === 1 ? '' : 's' }}
+            </span>
+          } @else if (hasOverrides()) {
+            {{ persistedOverridesCount() }} override{{ persistedOverridesCount() === 1 ? '' : 's' }}
           } @else {
             {{ families().length }} famil{{ families().length === 1 ? 'y' : 'ies' }}
           }
@@ -24,13 +28,29 @@
       </span>
 
       <button
+        class="btn btn-ghost btn-sm"
+        type="button"
+        [disabled]="!dirty() || saving()"
+        (click)="discardAll()"
+        [attr.aria-describedby]="dirty() ? 'enrichment-config-dirty-summary' : null"
+      >
+        Discard changes
+      </button>
+
+      <button
         class="btn btn-secondary btn-sm"
         type="button"
         [disabled]="!canSave()"
         [attr.aria-disabled]="!canSave() || null"
         [attr.aria-label]="canSave() ? 'Save changes' : 'Save changes — make edits below to enable'"
+        (click)="onSave()"
       >
-        Save changes
+        @if (saving()) {
+          <span class="spinner-tiny spinner-tiny-dark" aria-hidden="true"></span>
+          <span>Saving…</span>
+        } @else {
+          <span>Save changes</span>
+        }
       </button>
 
       <button
@@ -43,6 +63,16 @@
         Rerun enrichments
       </button>
     </div>
+
+    <!-- Visually-hidden summary referenced by the Discard button via
+         aria-describedby so screen-reader users hear the pending count
+         when the button gains focus. -->
+    @if (dirty()) {
+      <span id="enrichment-config-dirty-summary" class="sr-only">
+        {{ pendingCount() }} unsaved change{{ pendingCount() === 1 ? '' : 's' }} —
+        Discard will revert every input back to its saved value.
+      </span>
+    }
   </header>
 
   <div class="tab-body">
@@ -93,14 +123,21 @@
               @for (field of family.fields; track field.name) {
                 <div
                   class="knob-row"
-                  [class.knob-row-overridden]="!isFieldDefault(field)"
+                  [class.knob-row-overridden]="isFieldOverridden(field)"
+                  [class.knob-row-pending]="isFieldPending(field)"
+                  [class.knob-row-error]="hasFieldError(field)"
                   [class.knob-row-no-baseline]="!field.dx_baseline"
                 >
-                  <dt class="knob-label">
+                  <dt class="knob-label" [id]="knobLabelId(field)">
                     <span class="knob-label-line">
                       <span class="knob-human-label">{{ humanLabel(field.name) }}</span>
                       <code class="knob-field-name">{{ field.name }}</code>
                       <span class="knob-type-pill">{{ typeLabel(field.type) }}</span>
+                      @if (isFieldPending(field)) {
+                        <span class="knob-pending-tag" aria-label="Unsaved edit on this row">
+                          unsaved
+                        </span>
+                      }
                     </span>
                     <span class="knob-meta-line">
                       @if (field.metric_names.length > 0) {
@@ -127,23 +164,291 @@
                     </span>
                   </dt>
 
-                  <dd class="knob-value" [attr.title]="fullValueTitle(field.current)">
-                    <span
-                      class="knob-current"
-                      [class.knob-current-numeric]="field.type === 'int' || field.type === 'float'"
-                      [class.knob-current-bool]="field.type === 'bool'"
-                    >
-                      {{ formatValue(field.current) }}
-                    </span>
-                    @if (isFieldDefault(field)) {
-                      <span class="knob-default-tag">default</span>
-                    } @else {
-                      <span class="knob-default" [attr.title]="fullValueTitle(field.default)">
-                        <span class="knob-default-label">default:</span>
-                        <span class="knob-default-value">{{ formatValue(field.default) }}</span>
-                      </span>
-                    }
+                  <dd class="knob-value">
+                    <div class="knob-input-cell">
+                      <!-- ── int ─────────────────────────────────────── -->
+                      @if (inputKind(field) === 'int') {
+                        <input
+                          type="number"
+                          class="form-input knob-input knob-input-numeric"
+                          step="1"
+                          [class.error]="hasFieldError(field)"
+                          [value]="effectiveNumber(field)"
+                          [attr.aria-labelledby]="knobLabelId(field)"
+                          [attr.aria-invalid]="hasFieldError(field) || null"
+                          [attr.aria-describedby]="hasFieldError(field) ? knobErrorId(field) : null"
+                          (input)="onIntInput(field, $any($event.target).value)"
+                        />
+                      }
+
+                      <!-- ── float ───────────────────────────────────── -->
+                      @if (inputKind(field) === 'float') {
+                        <input
+                          type="number"
+                          class="form-input knob-input knob-input-numeric"
+                          step="0.01"
+                          [class.error]="hasFieldError(field)"
+                          [value]="effectiveNumber(field)"
+                          [attr.aria-labelledby]="knobLabelId(field)"
+                          [attr.aria-invalid]="hasFieldError(field) || null"
+                          [attr.aria-describedby]="hasFieldError(field) ? knobErrorId(field) : null"
+                          (input)="onFloatInput(field, $any($event.target).value)"
+                        />
+                      }
+
+                      <!-- ── bool ────────────────────────────────────── -->
+                      @if (inputKind(field) === 'bool') {
+                        <label class="knob-bool-control">
+                          <input
+                            type="checkbox"
+                            [checked]="effectiveBool(field)"
+                            [attr.aria-labelledby]="knobLabelId(field)"
+                            [attr.aria-invalid]="hasFieldError(field) || null"
+                            [attr.aria-describedby]="hasFieldError(field) ? knobErrorId(field) : null"
+                            (change)="onBoolChange(field, $any($event.target).checked)"
+                          />
+                          <span class="knob-bool-value">{{ effectiveBool(field) ? 'true' : 'false' }}</span>
+                        </label>
+                      }
+
+                      <!-- ── string / Optional[str] ──────────────────── -->
+                      @if (inputKind(field) === 'string' || inputKind(field) === 'string-optional') {
+                        <span class="knob-string-control">
+                          <input
+                            type="text"
+                            class="form-input knob-input"
+                            [class.error]="hasFieldError(field)"
+                            [value]="effectiveString(field)"
+                            [attr.aria-labelledby]="knobLabelId(field)"
+                            [attr.aria-invalid]="hasFieldError(field) || null"
+                            [attr.aria-describedby]="hasFieldError(field) ? knobErrorId(field) : null"
+                            (input)="onStringInput(field, $any($event.target).value)"
+                          />
+                          @if (inputKind(field) === 'string-optional' && effectiveString(field) !== '') {
+                            <button
+                              type="button"
+                              class="btn-icon"
+                              [attr.aria-label]="'Clear ' + humanLabel(field.name)"
+                              (click)="clearOptionalString(field)"
+                            >×</button>
+                          }
+                        </span>
+                      }
+
+                      <!-- ── string list ─────────────────────────────── -->
+                      @if (inputKind(field) === 'string-list') {
+                        <div class="knob-composite">
+                          <ul class="knob-chip-list">
+                            @for (item of asStringList(field); track $index) {
+                              <li class="knob-chip">
+                                <span class="knob-chip-text">{{ item }}</span>
+                                <button
+                                  type="button"
+                                  class="btn-icon btn-icon-small"
+                                  [attr.aria-label]="'Remove ' + item"
+                                  (click)="onStringListRemove(field, $index)"
+                                >×</button>
+                              </li>
+                            }
+                          </ul>
+                          <span class="knob-chip-add">
+                            <input
+                              #stringListInput
+                              type="text"
+                              class="form-input knob-input knob-input-inline"
+                              placeholder="Add value…"
+                              [attr.aria-labelledby]="knobLabelId(field)"
+                              (keydown.enter)="onStringListAdd(field, stringListInput); $event.preventDefault()"
+                            />
+                            <button
+                              type="button"
+                              class="btn btn-ghost btn-sm"
+                              (click)="onStringListAdd(field, stringListInput)"
+                            >Add</button>
+                          </span>
+                        </div>
+                      }
+
+                      <!-- ── label/int pairs ─────────────────────────── -->
+                      @if (inputKind(field) === 'label-int-pairs') {
+                        <div class="knob-composite">
+                          <div class="knob-pair-grid knob-pair-grid-2">
+                            <div class="knob-pair-head knob-pair-head-label">Label</div>
+                            <div class="knob-pair-head knob-pair-head-value">Value</div>
+                            <div class="knob-pair-head knob-pair-head-actions"></div>
+                            @for (row of asLabelIntPairs(field); track $index) {
+                              <input
+                                type="text"
+                                class="form-input knob-input"
+                                [value]="row.label"
+                                [attr.aria-label]="'Label for row ' + ($index + 1)"
+                                (input)="onLabelIntPairLabel(field, $index, $any($event.target).value)"
+                              />
+                              <input
+                                type="number"
+                                class="form-input knob-input knob-input-numeric"
+                                step="1"
+                                [value]="row.value ?? ''"
+                                [attr.aria-label]="'Value for ' + (row.label || 'row ' + ($index + 1))"
+                                (input)="onLabelIntPairValue(field, $index, $any($event.target).value)"
+                              />
+                              <button
+                                type="button"
+                                class="btn-icon"
+                                [attr.aria-label]="'Remove ' + (row.label || 'row ' + ($index + 1))"
+                                (click)="onLabelIntPairRemove(field, $index)"
+                              >×</button>
+                            }
+                          </div>
+                          <button
+                            type="button"
+                            class="btn btn-ghost btn-sm knob-pair-add"
+                            (click)="onLabelIntPairAdd(field)"
+                          >+ Add row</button>
+                        </div>
+                      }
+
+                      <!-- ── label/range map (dict[str, tuple[int,int]]) ─ -->
+                      @if (inputKind(field) === 'label-range-map') {
+                        <div class="knob-composite">
+                          <div class="knob-pair-grid knob-pair-grid-3">
+                            <div class="knob-pair-head knob-pair-head-label">Label</div>
+                            <div class="knob-pair-head knob-pair-head-value">Start</div>
+                            <div class="knob-pair-head knob-pair-head-value">End</div>
+                            <div class="knob-pair-head knob-pair-head-actions"></div>
+                            @for (row of asLabelRangePairs(field); track $index) {
+                              <input
+                                type="text"
+                                class="form-input knob-input"
+                                [value]="row.label"
+                                [attr.aria-label]="'Label for row ' + ($index + 1)"
+                                (input)="onLabelRangePairLabel(field, $index, $any($event.target).value)"
+                              />
+                              <input
+                                type="number"
+                                class="form-input knob-input knob-input-numeric"
+                                step="1"
+                                [value]="row.start ?? ''"
+                                [attr.aria-label]="'Start for ' + (row.label || 'row ' + ($index + 1))"
+                                (input)="onLabelRangePairStart(field, $index, $any($event.target).value)"
+                              />
+                              <input
+                                type="number"
+                                class="form-input knob-input knob-input-numeric"
+                                step="1"
+                                [value]="row.end ?? ''"
+                                [attr.aria-label]="'End for ' + (row.label || 'row ' + ($index + 1))"
+                                (input)="onLabelRangePairEnd(field, $index, $any($event.target).value)"
+                              />
+                              <button
+                                type="button"
+                                class="btn-icon"
+                                [attr.aria-label]="'Remove ' + (row.label || 'row ' + ($index + 1))"
+                                (click)="onLabelRangePairRemove(field, $index)"
+                              >×</button>
+                            }
+                          </div>
+                          <button
+                            type="button"
+                            class="btn btn-ghost btn-sm knob-pair-add"
+                            (click)="onLabelRangePairAdd(field)"
+                          >+ Add row</button>
+                        </div>
+                      }
+
+                      <!-- ── regex list ──────────────────────────────── -->
+                      @if (inputKind(field) === 'regex-list') {
+                        <div class="knob-composite">
+                          <textarea
+                            class="form-input knob-input knob-input-textarea"
+                            rows="4"
+                            spellcheck="false"
+                            placeholder="One regex per line"
+                            [class.error]="hasFieldError(field)"
+                            [value]="asRegexLines(field)"
+                            [attr.aria-labelledby]="knobLabelId(field)"
+                            [attr.aria-invalid]="hasFieldError(field) || null"
+                            [attr.aria-describedby]="hasFieldError(field) ? knobErrorId(field) : null"
+                            (input)="onRegexLinesInput(field, $any($event.target).value)"
+                          ></textarea>
+                          <span class="form-hint">
+                            Inline flags like
+                            <code>(?i)</code> survive the round-trip.
+                          </span>
+                        </div>
+                      }
+
+                      <!-- ── label/regex pairs ───────────────────────── -->
+                      @if (inputKind(field) === 'label-regex-pairs') {
+                        <div class="knob-composite">
+                          @for (row of asLabelRegexPairs(field); track $index) {
+                            <div class="knob-regex-pair-row">
+                              <input
+                                type="text"
+                                class="form-input knob-input knob-input-narrow"
+                                [value]="row.label"
+                                [attr.aria-label]="'Label for row ' + ($index + 1)"
+                                (input)="onLabelRegexPairLabel(field, $index, $any($event.target).value)"
+                              />
+                              <textarea
+                                class="form-input knob-input knob-input-textarea knob-input-regex"
+                                rows="2"
+                                spellcheck="false"
+                                [value]="row.regex"
+                                [attr.aria-label]="'Regex for ' + (row.label || 'row ' + ($index + 1))"
+                                (input)="onLabelRegexPairPattern(field, $index, $any($event.target).value)"
+                              ></textarea>
+                              <button
+                                type="button"
+                                class="btn-icon"
+                                [attr.aria-label]="'Remove ' + (row.label || 'row ' + ($index + 1))"
+                                (click)="onLabelRegexPairRemove(field, $index)"
+                              >×</button>
+                            </div>
+                          }
+                          <button
+                            type="button"
+                            class="btn btn-ghost btn-sm knob-pair-add"
+                            (click)="onLabelRegexPairAdd(field)"
+                          >+ Add row</button>
+                        </div>
+                      }
+
+                      <!-- ── unsupported (no editor) ─────────────────── -->
+                      @if (inputKind(field) === 'unsupported') {
+                        <span class="knob-unsupported">
+                          read-only ({{ field.type }})
+                        </span>
+                      }
+                    </div>
+
+                    <div class="knob-value-meta">
+                      @if (isFieldOverridden(field)) {
+                        <button
+                          type="button"
+                          class="btn-link knob-reset"
+                          [disabled]="!isFieldPending(field)"
+                          [attr.aria-label]="'Reset ' + humanLabel(field.name) + ' to saved value'"
+                          (click)="resetField(field)"
+                        >Reset</button>
+                      } @else {
+                        <span class="knob-default-tag">default</span>
+                      }
+                    </div>
                   </dd>
+
+                  <!-- Inline 422 error region. The aria-describedby on the
+                       input points here so screen readers announce it. -->
+                  @if (hasFieldError(field)) {
+                    <div
+                      class="knob-error"
+                      role="alert"
+                      aria-live="polite"
+                      [id]="knobErrorId(field)"
+                    >
+                      {{ fieldError()?.error }}
+                    </div>
+                  }
                 </div>
               }
             </dl>

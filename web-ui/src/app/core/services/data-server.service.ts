@@ -176,6 +176,24 @@ export class ProjectNotFoundError extends Error {
   }
 }
 
+/**
+ * Tagged 422 error from the config-overrides PUT endpoint. The server
+ * envelope intentionally diverges from the codebase's plain ``{error}``
+ * shape to give the UI both ``field`` (so the offending input row can be
+ * flagged inline) AND ``error`` (the human-readable explanation).
+ * Documented at the raise sites in
+ * ``data-server/src/config_overrides/router.py``.
+ */
+export class ConfigOverridesValidationError extends Error {
+  constructor(
+    public readonly field: string,
+    message: string,
+  ) {
+    super(message);
+    this.name = 'ConfigOverridesValidationError';
+  }
+}
+
 // ── Components page DTOs ────────────────────────────────────────────────────
 // Mirror the contract locked by data-server B3 (src/server.py around line 1216).
 // owner/status are intentionally absent — the data-server doesn't return them
@@ -713,6 +731,32 @@ export class DataServerService {
     }
   }
 
+  /**
+   * Persist the full overrides dict for the given project. The server
+   * replaces the whole dict on every save (no patch semantics) — the
+   * caller is expected to send the merged ``{ ...current, ...pending }``
+   * payload. Returns the persisted ``{ overrides, updated_at }`` row.
+   *
+   * Throws :class:`ConfigOverridesValidationError` on 422 so the editor
+   * can highlight the offending field; :class:`ProjectNotFoundError` on
+   * 404; a generic :class:`Error` on 500 / network failures.
+   */
+  async putConfigOverrides(
+    projectId: string,
+    overrides: Record<string, unknown>,
+  ): Promise<ConfigOverridesWriteResponse> {
+    try {
+      return await firstValueFrom(
+        this.http.put<ConfigOverridesWriteResponse>(
+          `${this.baseUrl}/projects/${projectId}/config-overrides`,
+          { overrides },
+        ),
+      );
+    } catch (err) {
+      throw this.toConfigOverridesError(err);
+    }
+  }
+
   private toConfigOverridesError(err: unknown): Error {
     if (err instanceof HttpErrorResponse) {
       if (err.status === 0) {
@@ -721,6 +765,16 @@ export class DataServerService {
       if (err.status === 404) {
         const message = err.error?.error || 'Project not found.';
         return new ProjectNotFoundError(message);
+      }
+      if (err.status === 422) {
+        // The router's PUT validator surfaces `{field, error}` — preserve
+        // both so the editor can light up the offending input row inline.
+        const field = typeof err.error?.field === 'string' ? err.error.field : '';
+        const message =
+          typeof err.error?.error === 'string'
+            ? err.error.error
+            : 'Validation failed';
+        return new ConfigOverridesValidationError(field, message);
       }
       const message = err.error?.error || err.error?.detail || err.message;
       return new Error(message || `Config overrides request failed (${err.status})`);
