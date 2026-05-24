@@ -51,6 +51,7 @@ from src.sandbox import (
     issue_commits as _sandbox_issue_commits,
     pr_commits as _sandbox_pr_commits,
 )
+from src.config_overrides.router import config_overrides_router
 from src.filter_rules.router import filter_rules_router
 from src.filter_rules.store import filter_rule_store
 from src.filter_rules.views import FilteredSandboxView
@@ -193,6 +194,7 @@ app.add_middleware(
 )
 
 app.include_router(filter_rules_router)
+app.include_router(config_overrides_router)
 
 
 # =============================================================================

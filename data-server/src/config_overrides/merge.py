@@ -92,15 +92,10 @@ def _coerce_str_tuple(field: str, value: Any) -> tuple[str, ...]:
 def _coerce_issue_age_buckets(field: str, value: Any) -> list[tuple[str, int]]:
     """``list[tuple[str, int]]`` — JSON arrives as ``list[list]`` or ``list[dict]``.
 
-    Accept both: ``[["<1w", 7], ...]`` (compact wire shape) and
-    ``[{"label": "<1w", "max_days": 7}, ...]`` (form-editor shape). The
-    UI sends the dict shape; the wire-shape branch keeps round-trip
-    sanity in tests.
-
-    TODO: normalize-at-router. The router will canonicalise incoming
-    writes to the compact ``[label, max_days]`` shape (matches the
-    catalogue serialiser output). Merge keeps tolerating both as
-    defense in depth for hand-edited JSONB rows.
+    Accept both: ``[["<1w", 7], ...]`` (compact wire shape — what the
+    router persists) and ``[{"label": "<1w", "max_days": 7}, ...]``
+    (form-editor shape — only seen on hand-edited JSONB after the
+    router normaliser was bypassed). Defense in depth.
     """
     if not isinstance(value, list):
         raise OverrideCoercionError(field, f"expected array, got {_bad_type(value)}")
@@ -175,12 +170,11 @@ def _coerce_regex_list(field: str, value: Any) -> list[re.Pattern[str]]:
 
 
 def _coerce_nature_patterns(field: str, value: Any) -> list[tuple[str, re.Pattern[str]]]:
-    """``list[tuple[str, Pattern[str]]]`` — JSON as ``list[{label, regex}]`` or ``list[[label, regex]]``.
+    """``list[tuple[str, Pattern[str]]]`` — JSON as ``list[[label, regex]]`` or ``list[{label, regex}]``.
 
-    TODO: normalize-at-router. Same rationale as
-    :func:`_coerce_issue_age_buckets`: the router will canonicalise
-    incoming writes to ``[label, regex]``; the dict branch here stays
-    as defense in depth.
+    Same rationale as :func:`_coerce_issue_age_buckets`: the router
+    normaliser flattens to ``[label, regex]``; the dict branch here is
+    defense in depth for hand-edited JSONB.
     """
     if not isinstance(value, list):
         raise OverrideCoercionError(field, f"expected array, got {_bad_type(value)}")
