@@ -4,7 +4,7 @@ Port of legacy ``src/enrichment/tagger/anomaly_coupling.py`` (~69 LOC).
 Emits ``anomaly.structuring.PivotFile`` :class:`Trait` rows on files
 whose structural-coupling degree (distinct file peers across the
 ``coupling`` relation kind) is above
-``max(cfg.pivotfile_cochange_degree_min, MANY_PEERS=20)``.
+``cfg.pivotfile_cochange_degree_min`` (default 10).
 
 dx port (PivotFile.java:21–56):
 
@@ -22,6 +22,14 @@ The legacy walked ``CodeReference`` rows directly; v2 reads the
 already-aggregated ``coupling`` relation edges instead — same signal,
 single source of truth, and stays consistent with §5 of the plan's
 "Reuse map" ("relations through ``BUILDERS``; no parallel scans").
+
+Previously this emitter clamped the threshold to ``max(degree_min,
+MANY_PEERS=20)`` while the structuring (cochange) emitter used the knob
+directly. The hard-coded floor silently overrode the user's editor
+input AND created an asymmetry where the same trait name fired under
+different conditions depending on basis. Both emitters now honour the
+same knob with the same interpretation — to recover dx parity (≥20
+peers), dial the knob up in the editor.
 """
 from __future__ import annotations
 
@@ -34,9 +42,6 @@ from src.enrichment.tags import Trait, TraitFamily
 if TYPE_CHECKING:
     from src.common.kernel import Graph
 
-
-# dx's MANY_PEERS constant — coupling pivots only fire above this floor.
-_MANY_PEERS = 20
 
 _DEFAULT_DEGREE_MIN = 10  # cfg.pivotfile_cochange_degree_min legacy default
 _TRAIT_NAME = "anomaly.structuring.PivotFile"
@@ -66,10 +71,12 @@ class AnomalyCouplingMetric(Metric):
         if not coupling_rels:
             return
 
-        degree_min = int(_config_field(
+        # Previously clamped to ``max(degree_min, MANY_PEERS=20)`` — the
+        # hard-coded floor was removed to align with the structuring
+        # (cochange) emitter; both bases now honour the same knob.
+        threshold = int(_config_field(
             config, "pivotfile_cochange_degree_min", _DEFAULT_DEGREE_MIN
         ))
-        threshold = max(degree_min, _MANY_PEERS)
 
         # Build peer set per file. The coupling builder emits one edge per
         # (src_file, tgt_file) — drop self-loops defensively and treat

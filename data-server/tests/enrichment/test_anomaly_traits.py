@@ -199,7 +199,7 @@ def test_dynamicblob_skips_files_without_lizard_metrics():
 # AnomalyCouplingMetric — PivotFile (basis=coupling)
 # ======================================================================
 def test_pivotfile_coupling_fires_above_threshold():
-    """File with 25 distinct coupling peers exceeds default threshold (20)."""
+    """File with 25 distinct coupling peers exceeds default threshold (10)."""
     graph, project = build_v2_graph("pf-pos")
     pivot = make_file("src/pivot.py", project.ref())
     graph.files.add(pivot)
@@ -219,8 +219,8 @@ def test_pivotfile_coupling_fires_above_threshold():
 
     _consume(graph, AnomalyCouplingMetric())
     pivots = graph.traits.of_name("anomaly.structuring.PivotFile")
-    # The pivot fires; each peer has degree 1 (just the pivot) and
-    # does not exceed the 20-peer floor.
+    # The pivot fires; each peer has degree 1 (just the pivot), well
+    # below ``pivotfile_cochange_degree_min`` (default 10).
     pivot_traits = [t for t in pivots if t.target == pivot.ref()]
     peer_traits = [t for t in pivots if t.target != pivot.ref()]
     assert len(pivot_traits) == 1
@@ -232,12 +232,12 @@ def test_pivotfile_coupling_fires_above_threshold():
     assert t.severity == 25.0
 
 
-def test_pivotfile_coupling_does_not_fire_below_floor():
-    """A file with 19 peers (below MANY_PEERS=20) must not fire."""
+def test_pivotfile_coupling_does_not_fire_below_threshold():
+    """A file with 9 peers (below ``degree_min``=10) must not fire."""
     graph, project = build_v2_graph("pf-low")
     hub = make_file("src/hub.py", project.ref())
     graph.files.add(hub)
-    for i in range(19):
+    for i in range(9):
         peer = make_file(f"src/p_{i}.py", project.ref())
         graph.files.add(peer)
         graph.relations.add(Relation(
