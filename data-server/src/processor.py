@@ -91,6 +91,22 @@ from src.enrichment.metrics.implementations.component_resolver import (
     build_components_from_relations,
 )
 from src.enrichment.pipeline import PipelineResult, run_pipeline
+# UnifiedUsers redesign §H (task P4.A): per the design, /build should run
+# Phase A only and Phase B should move to the /finalize endpoint. For this
+# commit we keep the build path on the back-compat ``run_pipeline`` alias
+# (= Phase A + Phase B in one pass) to avoid churning the existing test
+# suite (e.g. ``tests/chunk_08`` asserts on the full builder/metric catalog
+# at build time, and the smart-merge endpoints expect ``authorship`` /
+# ``knowledge`` overviews + ``coauthor`` / ``ownership`` relations to be
+# present immediately after /build). The /finalize endpoint re-runs ONLY
+# Phase B against the rebound graph so the people-side relations / metrics
+# / overviews are re-keyed on ``UNIFIED_USER`` refs.
+#
+# TODO(P6): flip ``build_graph_from_bundles`` below to call
+# ``run_pipeline_phase_a`` and update the affected tests to invoke
+# ``run_pipeline_phase_b`` explicitly in their fixtures once the
+# end-to-end Zeppelin verification (Phase 6) confirms no other consumer
+# depends on the build-time Phase B outputs.
 from src.logger import get_logger
 
 logger = get_logger("processor")

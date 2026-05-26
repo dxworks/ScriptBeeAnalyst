@@ -1,8 +1,10 @@
 import asyncio
 import io
 import sys
+import time
 import traceback
 import logging
+from dataclasses import fields as dataclass_fields, is_dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 from fastapi import FastAPI, Request
@@ -40,11 +42,13 @@ from src.smart_merge.types import (
 # The legacy ``compute_enrichments`` / ``Enrichments`` /
 # ``SupabaseEnrichmentRepository`` stack was deleted in Chunk 10 along
 # with the rest of the pre-refactor enrichment layer.
-from src.enrichment.pipeline import PipelineResult, run_pipeline
+from src.enrichment.pipeline import PipelineResult, run_pipeline, run_pipeline_phase_b
+from src.enrichment.config import DEFAULT_CONFIG, EnrichmentConfig
 from src.graph_store import graph_store
 from src.common.kernel import EntityKind, Graph, MergeState
 from src.common.people import UnifiedUser
 from src.common.pickle_store import PickleStore
+from src.smart_merge.rebind import rebind_account_refs_to_unified
 from src.common.domains.components.resolver import parse_component_mapping
 from src.supabase_client import get_service_client
 from src import processor as v2_processor
@@ -452,6 +456,253 @@ async def build_project(project_id: str):
             "relations_emitted": pipeline_result.relations_emitted,
             "errors": [e.model_dump() for e in pipeline_result.errors],
         },
+    }
+
+
+# ---------------------------------------------------------------------------
+# Finalize endpoint (UnifiedUsers redesign §G / §H / §M — task P4.A)
+# ---------------------------------------------------------------------------
+def _enrichment_config_to_jsonable(config: EnrichmentConfig) -> Dict[str, Any]:
+    """Serialise an :class:`EnrichmentConfig` to a JSONB-safe dict.
+
+    ``EnrichmentConfig`` is a ``@dataclass`` (not a Pydantic model) and
+    carries a handful of fields that aren't natively JSON-serialisable —
+    compiled ``re.Pattern`` objects on the ``*_patterns`` lists, tuple
+    keys in ``daytime_buckets``, etc. We walk the declared fields and
+    project each one into a JSON-friendly shape:
+
+    * ``re.Pattern`` → its ``.pattern`` source string.
+    * ``tuple``      → a list (Postgres JSONB has no tuple type).
+    * ``list[tuple[str, Pattern]]`` (the regex catalogs) → list of
+      ``[name, pattern_source]`` pairs.
+    * primitives / dicts / lists / ``None`` pass through unchanged.
+
+    Snapshotting at finalize time is "remember the exact thresholds the
+    user signed off on" — re-running Phase B after a reload uses this
+    blob (P6 follow-up) so the post-finalize metrics are reproducible
+    regardless of global config drift.
+    """
+    import re
+
+    def _coerce(value: Any) -> Any:
+        if value is None or isinstance(value, (bool, int, float, str)):
+            return value
+        if isinstance(value, re.Pattern):
+            return value.pattern
+        if isinstance(value, dict):
+            return {str(k): _coerce(v) for k, v in value.items()}
+        if isinstance(value, (list, tuple)):
+            return [_coerce(v) for v in value]
+        # Fallback — stringify anything we don't recognise so the write
+        # doesn't crash. The frozen-config column is forward-only (we
+        # only ever read it back for reproducibility / audit).
+        return str(value)
+
+    out: Dict[str, Any] = {}
+    for f in dataclass_fields(config):
+        out[f.name] = _coerce(getattr(config, f.name))
+    return out
+
+
+@app.post("/projects/{project_id}/finalize")
+async def finalize_project(project_id: str):
+    """Transition a project from ``PRE_MERGE`` to ``FINALIZED``.
+
+    UnifiedUsers redesign §G — single transactional unit:
+
+    1. Assert the in-memory :class:`Graph` is ``PRE_MERGE``. Return 409
+       if already ``FINALIZED``; 400 if missing / unexpected state.
+    2. Run :func:`rebind_account_refs_to_unified` — auto-creates
+       singleton :class:`UnifiedUser` entities for orphan accounts and
+       rewrites every role-typed account ref to target a ``UNIFIED_USER``.
+    3. Snapshot the current :class:`EnrichmentConfig` into Supabase
+       (``projects.enrichment_config_frozen`` JSONB column) so any
+       post-finalize re-run is reproducible (§M).
+    4. Run :func:`run_pipeline_phase_b` against the rebound graph — the
+       people-side relations / metrics / overviews are re-keyed on
+       ``UNIFIED_USER`` refs (the kind-aware metric guards installed by
+       P4.B do the right thing now that the rebind has flipped state).
+    5. Re-dump the typed Graph via :meth:`Graph.dump` so the on-disk
+       pickle reflects the new state.
+    6. Persist ``merge_state = 'FINALIZED'`` to the Supabase ``projects``
+       row.
+
+    Half-finalized state contract: if any step AFTER rebind fails (the
+    rebind itself is the only "destructive in-memory" operation), the
+    graph is left FINALIZED in memory while Supabase still reads
+    PRE_MERGE. We log loudly and re-raise so the operator sees it. On
+    the next ``/load`` the Supabase row's ``merge_state`` wins (the row
+    is the source of truth, see §M); since the on-disk pickle would
+    have been re-dumped before the Supabase write in step 6, that load
+    will read whatever was on disk and overwrite ``merge_state`` from
+    Supabase — generally producing a consistent PRE_MERGE state again.
+    The user can re-attempt the call. Re-import is the safest recovery
+    path when half-finalize is suspected (per the plan §G).
+    """
+    graph = graph_store.get(project_id)
+    if graph is None:
+        return JSONResponse(
+            {"error": "Project is not loaded. Load the project first."},
+            status_code=404,
+        )
+
+    # --- state guard ------------------------------------------------------
+    if graph.merge_state == MergeState.FINALIZED:
+        return JSONResponse(
+            {"error": "project_finalized"},
+            status_code=409,
+        )
+    if graph.merge_state != MergeState.PRE_MERGE:
+        return JSONResponse(
+            {
+                "error": (
+                    f"Unexpected merge_state {graph.merge_state!r}; "
+                    "finalize requires PRE_MERGE."
+                )
+            },
+            status_code=400,
+        )
+
+    started = time.monotonic()
+
+    # --- 1. rebind --------------------------------------------------------
+    # The rebind is the only step that mutates the in-memory graph
+    # irreversibly. If it succeeds, the graph is in-memory FINALIZED
+    # regardless of what happens after — see the docstring's
+    # half-finalized contract.
+    try:
+        rebind_stats = await asyncio.to_thread(
+            rebind_account_refs_to_unified, graph
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.exception(f"rebind failed for project {project_id}")
+        return JSONResponse(
+            {"error": f"rebind failed: {exc}"},
+            status_code=500,
+        )
+
+    # --- 2. snapshot the EnrichmentConfig --------------------------------
+    # Source: the default config. The per-project config_overrides ARE
+    # applied at build time (see ``processor._apply_project_overrides``)
+    # but the resulting effective config is not retained on the Graph —
+    # the snapshot here uses ``DEFAULT_CONFIG`` augmented with whatever
+    # overrides the repository currently carries, mirroring the build
+    # path. The repository is best-effort (Supabase failures degrade to
+    # the bare default) so finalize never blocks on snapshotting.
+    try:
+        from src.config_overrides.repository import ConfigOverridesRepository
+        from src.config_overrides.merge import apply_overrides
+
+        overrides = ConfigOverridesRepository().get(project_id).overrides
+        if overrides:
+            effective_config = apply_overrides(DEFAULT_CONFIG, overrides)
+        else:
+            effective_config = DEFAULT_CONFIG
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            f"finalize: config_overrides lookup failed ({exc}); "
+            "snapshotting bare DEFAULT_CONFIG"
+        )
+        effective_config = DEFAULT_CONFIG
+
+    frozen_config = _enrichment_config_to_jsonable(effective_config)
+
+    # --- 3. Run Phase B against the rebound graph ------------------------
+    # The graph is now FINALIZED in memory; the kind-aware metric guards
+    # installed by P4.B treat ``UNIFIED_USER`` refs as the canonical
+    # author principal, so phase B emits author-side relations / metrics
+    # / overviews keyed on the new UU refs.
+    try:
+        phase_b_result: PipelineResult = await asyncio.to_thread(
+            run_pipeline_phase_b, graph, effective_config
+        )
+    except Exception as exc:  # noqa: BLE001
+        # Half-finalized: graph is FINALIZED in memory but Supabase
+        # still says PRE_MERGE. Log loudly + re-raise per the §G
+        # contract.
+        logger.exception(
+            f"finalize: phase_b failed for project {project_id}; "
+            "graph is FINALIZED in memory but merge_state has NOT been "
+            "persisted to Supabase. Next /load will read PRE_MERGE from "
+            "the projects row and overwrite the in-memory state."
+        )
+        return JSONResponse(
+            {
+                "error": (
+                    f"phase_b failed (half-finalized state): {exc}. "
+                    "Re-import the project to reset."
+                )
+            },
+            status_code=500,
+        )
+
+    # --- 4. Re-dump the typed Graph --------------------------------------
+    try:
+        await asyncio.to_thread(v2_processor.save_graph_to_disk, graph)
+    except Exception as exc:  # noqa: BLE001
+        logger.exception(
+            f"finalize: save_graph_to_disk failed for project {project_id}; "
+            "in-memory graph is FINALIZED but on-disk pickle is stale."
+        )
+        return JSONResponse(
+            {
+                "error": (
+                    f"Graph dump failed (half-finalized state): {exc}. "
+                    "Re-import the project to reset."
+                )
+            },
+            status_code=500,
+        )
+
+    # --- 5. Persist merge_state + frozen config to Supabase --------------
+    try:
+        client = get_service_client()
+        await asyncio.to_thread(
+            lambda: client.table("projects")
+            .update({
+                "merge_state": MergeState.FINALIZED.value,
+                "enrichment_config_frozen": frozen_config,
+            })
+            .eq("id", project_id)
+            .execute()
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.exception(
+            f"finalize: Supabase persist failed for project {project_id}; "
+            "graph is FINALIZED in memory + on disk but the projects row "
+            "still reads PRE_MERGE. Next /load will overwrite the in-memory "
+            "state from Supabase, producing a PRE_MERGE graph again."
+        )
+        return JSONResponse(
+            {
+                "error": (
+                    f"Supabase persist failed (half-finalized state): {exc}. "
+                    "Re-import the project to reset."
+                )
+            },
+            status_code=500,
+        )
+
+    duration_ms = int((time.monotonic() - started) * 1000)
+
+    logger.info(
+        f"Finalized project {project_id} in {duration_ms}ms — "
+        f"unified_users_created={rebind_stats.unified_users_created}, "
+        f"refs_rewritten={rebind_stats.refs_rewritten}, "
+        f"phase_b_relations={phase_b_result.relations_emitted}, "
+        f"phase_b_traits={phase_b_result.traits_emitted}, "
+        f"phase_b_classifiers={phase_b_result.classifiers_emitted}"
+    )
+
+    return {
+        "merge_state": MergeState.FINALIZED.value,
+        "unified_users_created": rebind_stats.unified_users_created,
+        "refs_rewritten": rebind_stats.refs_rewritten,
+        "phase_b_relations_built": phase_b_result.relations_emitted,
+        "phase_b_traits_emitted": phase_b_result.traits_emitted,
+        "phase_b_classifiers_emitted": phase_b_result.classifiers_emitted,
+        "phase_b_errors": [e.model_dump() for e in phase_b_result.errors],
+        "duration_ms": duration_ms,
     }
 
 
@@ -1626,6 +1877,11 @@ async def execute_code(request: CodeRequest):
     for commit in commits[:5]:
         print(f'{commit.id[:8]} - {commit.message[:50]}')
     ```
+
+    TODO(P5.A): once :class:`SetupSandboxView` / :class:`QuerySandboxView`
+    land, this endpoint should pick the view class based on
+    ``graph.merge_state`` and refuse calls in PRE_MERGE. For P4.A
+    /execute still accepts both lifecycle stages.
     """
     code = request.code
     stdout = io.StringIO()
@@ -1692,6 +1948,9 @@ async def generate_plot(request: CodeRequest):
     **Available variables:**
     - `graph_data` — :class:`MCPSandboxView` wrapping the loaded typed Graph
     - `plt` — matplotlib.pyplot module
+
+    TODO(P5.A): same state-gating story as ``/execute`` — refuses in
+    PRE_MERGE once the SetupSandboxView/QuerySandboxView split lands.
     """
     code = request.code
     stdout = io.StringIO()
