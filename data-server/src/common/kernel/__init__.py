@@ -53,6 +53,7 @@ from __future__ import annotations
 from .entity import Entity
 from .index import Index, IndexSpec
 from .kinds import EntityKind
+from .merge_state import MergeState
 from .ref import EntityRef
 from .registry import Registry
 from .role_ref import (
@@ -78,6 +79,7 @@ __all__ = [
     "Graph",
     "Index",
     "IndexSpec",
+    "MergeState",
     "Registry",
     "account_role_ref",
     "account_role_refs",

@@ -4,11 +4,23 @@
 create extension if not exists "uuid-ossp";
 
 -- Projects table
+--
+-- UnifiedUsers redesign (see ../../unified_users_change.md §M):
+--   * merge_state — lifecycle phase. 'PRE_MERGE' = setup (today's
+--     default; refs target per-source accounts); 'FINALIZED' = post
+--     rebind pass (refs target UNIFIED_USER). Flipped once by the
+--     /projects/{id}/finalize endpoint.
+--   * enrichment_config_frozen — JSON snapshot of the EnrichmentConfig
+--     captured at finalize time. Used by post-finalize enrichment
+--     re-runs (e.g. after a reload) so behaviour is reproducible
+--     regardless of global config drift. NULL until finalize.
 create table public.projects (
   id uuid primary key default uuid_generate_v4(),
   name text not null,
   description text,
   status text not null default 'draft' check (status in ('draft', 'processing', 'ready', 'idle', 'resuming', 'error')),
+  merge_state text not null default 'PRE_MERGE' check (merge_state in ('PRE_MERGE', 'FINALIZED')),
+  enrichment_config_frozen jsonb,
   created_at timestamp with time zone default now() not null,
   updated_at timestamp with time zone default now() not null
 );

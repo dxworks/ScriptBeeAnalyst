@@ -43,6 +43,7 @@ from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, model_validator
 
 from .entity import Entity
 from .kinds import EntityKind
+from .merge_state import MergeState
 from .ref import EntityRef
 from .registry import Registry
 
@@ -228,6 +229,14 @@ class Graph(BaseModel):
     schema_version: int = SCHEMA_VERSION
     project_id: str
     built_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    # Lifecycle stage for the UnifiedUsers redesign — flipped once by the
+    # finalize endpoint after the rebind pass. See
+    # ``unified_users_change.md`` §M (lifecycle persistence). The truth
+    # for this field lives on the Supabase ``projects`` row; the load
+    # path mirrors it onto the in-memory Graph, and ``dump`` / ``lazy``
+    # round-trip it through ``meta.json`` so a reloaded pickle is
+    # internally consistent even before the load path overwrites it.
+    merge_state: MergeState = Field(default=MergeState.PRE_MERGE)
 
     # --- people ---
     unified_users: UnifiedUserRegistry = Field(default_factory=UnifiedUserRegistry)
@@ -467,6 +476,28 @@ class Graph(BaseModel):
         return reg.add(entity)
 
     # ------------------------------------------------------------------
+    # Index maintenance
+    # ------------------------------------------------------------------
+    def rebuild_indexes(self) -> None:
+        """Rebuild every declared index on every registry field.
+
+        Walks the declared field catalog (:data:`_FIELD_SPECS`) and calls
+        :meth:`Registry.reindex` on each registry. This clears each
+        declared :class:`IndexSpec` and re-populates it from the current
+        entities — the right tool after a bulk mutation that re-keys
+        index sources (e.g. the rebind pass in §D of
+        ``unified_users_change.md``, which rewrites every role-typed
+        ``*_ref`` field to target ``UnifiedUser``).
+
+        ``LazyRegistryProxy`` participates transparently: its
+        ``reindex()`` is a no-op until materialized, so untouched
+        registries don't get pulled into memory.
+        """
+        for fname in _FIELD_TO_DISK.keys():
+            registry: Registry[Any, Any] = getattr(self, fname)
+            registry.reindex()
+
+    # ------------------------------------------------------------------
     # Derived caches
     # ------------------------------------------------------------------
     def ensure_temporal_index(self) -> "TemporalIndex":
@@ -508,6 +539,7 @@ class Graph(BaseModel):
                 "schema_version": self.schema_version,
                 "project_id": self.project_id,
                 "built_at": self.built_at.isoformat(),
+                "merge_state": self.merge_state.value,
                 "registries": sorted(_FIELD_TO_DISK.values()),
             }
         )
@@ -545,6 +577,21 @@ class Graph(BaseModel):
             else datetime.now(timezone.utc)
         )
 
+        # Lifecycle state — defaults to PRE_MERGE when the meta file is
+        # from a pre-UnifiedUsers-redesign build (no ``merge_state`` key)
+        # or carries a value the enum no longer knows about. The load
+        # path in ``server.py`` overwrites this from the Supabase
+        # ``projects`` row, which is the source of truth.
+        merge_state_raw = meta.get("merge_state")
+        try:
+            merge_state = (
+                MergeState(merge_state_raw)
+                if isinstance(merge_state_raw, str)
+                else MergeState.PRE_MERGE
+            )
+        except ValueError:
+            merge_state = MergeState.PRE_MERGE
+
         # Build a kwargs dict: every typed field gets a lazy proxy bound
         # to its on-disk name + registry class. Pydantic accepts the
         # proxy because each ``lazy_proxy_for(RegCls, ...)`` returns an
@@ -553,6 +600,7 @@ class Graph(BaseModel):
         kwargs: Dict[str, Any] = {
             "project_id": project_id,
             "built_at": built_at,
+            "merge_state": merge_state,
         }
         for fname, disk_name in _FIELD_TO_DISK.items():
             reg_cls = _FIELD_TO_CLS[fname]
@@ -619,4 +667,4 @@ def _iter_project_specs() -> Iterable[tuple[str, type[Entity]]]:
 _PROJECT_FIELD_TO_ENTITY_CLS: Dict[str, type[Entity]] = dict(_iter_project_specs())
 
 
-__all__ = ["Graph", "SCHEMA_VERSION"]
+__all__ = ["Graph", "MergeState", "SCHEMA_VERSION"]

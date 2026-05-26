@@ -40,7 +40,7 @@ from src.smart_merge.types import (
 # with the rest of the pre-refactor enrichment layer.
 from src.enrichment.pipeline import PipelineResult, run_pipeline
 from src.graph_store import graph_store
-from src.common.kernel import EntityKind, Graph
+from src.common.kernel import EntityKind, Graph, MergeState
 from src.common.pickle_store import PickleStore
 from src.common.domains.components.resolver import parse_component_mapping
 from src.supabase_client import get_service_client
@@ -319,6 +319,20 @@ async def load_project(project_id: str):
 
         project_name = project["name"]
         project_status = project["status"]
+        # UnifiedUsers redesign (§M): persist the lifecycle stage on
+        # the Supabase row and mirror it onto the in-memory Graph at
+        # load time. Default to PRE_MERGE when the column is absent
+        # (e.g. row pre-dates the migration in a partially-migrated
+        # dev DB) or carries an unknown value.
+        project_merge_state_raw = project.get("merge_state") or MergeState.PRE_MERGE.value
+        try:
+            project_merge_state = MergeState(project_merge_state_raw)
+        except ValueError:
+            logger.warning(
+                f"Project {project_id} has unknown merge_state="
+                f"{project_merge_state_raw!r}; defaulting to PRE_MERGE"
+            )
+            project_merge_state = MergeState.PRE_MERGE
 
         if project_status != "ready":
             return JSONResponse(
@@ -349,6 +363,12 @@ async def load_project(project_id: str):
             )},
             status_code=404,
         )
+
+    # The Supabase ``projects`` row is the source of truth for the
+    # lifecycle stage (§M). Mirror it onto the freshly loaded Graph so
+    # state-gated endpoints / sandbox views can read it without an
+    # extra DB round-trip.
+    graph.merge_state = project_merge_state
 
     graph_store.set(project_id, graph)
     smart_merge_state_store.reset(project_id)
