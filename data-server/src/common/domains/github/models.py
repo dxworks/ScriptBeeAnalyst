@@ -174,8 +174,8 @@ class PullRequest(Entity):
     merged_at: Optional[datetime] = None
     closed_at: Optional[datetime] = None
 
-    author_ref: Optional[EntityRef] = account_role_ref("author")
-    merged_by_ref: Optional[EntityRef] = account_role_ref("merged_by")
+    author_ref: Optional[EntityRef] = account_role_ref("author", optional=True)
+    merged_by_ref: Optional[EntityRef] = account_role_ref("merged_by", optional=True)
     assignee_refs: List[EntityRef] = account_role_refs("assignee")
     requested_reviewer_refs: List[EntityRef] = account_role_refs("requested_reviewer")
     commit_refs: List[EntityRef] = []
@@ -234,7 +234,7 @@ class Review(Entity):
     state: str
     body: str = ""
     submitted_at: Optional[datetime] = None
-    author_ref: Optional[EntityRef] = account_role_ref("author")
+    author_ref: Optional[EntityRef] = account_role_ref("author", optional=True)
     review_comment_refs: List[EntityRef] = []
 
     @staticmethod
@@ -290,7 +290,7 @@ class ReviewComment(Entity):
     body: str
     created_at: datetime
     updated_at: Optional[datetime] = None
-    author_ref: Optional[EntityRef] = account_role_ref("author")
+    author_ref: Optional[EntityRef] = account_role_ref("author", optional=True)
     file_path: Optional[str] = None
     line: Optional[int] = None
 
@@ -341,7 +341,7 @@ class GitHubCommit(Entity):
     date: datetime
     message: str
     changed_files: int = 0
-    author_ref: Optional[EntityRef] = account_role_ref("author")
+    author_ref: Optional[EntityRef] = account_role_ref("author", optional=True)
     url: Optional[str] = None
 
 

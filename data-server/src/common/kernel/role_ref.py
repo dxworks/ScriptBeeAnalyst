@@ -79,35 +79,68 @@ class RoleRefSpec:
         this to know whether to walk a list or replace a single value;
         the reverse-resolver installer doesn't care — both flavours
         produce ``uu.<entities>_as_<role>(g) -> list[Entity]``.
+    optional:
+        ``True`` for singular fields that may legitimately be ``None``
+        at construction time (``Optional[EntityRef] = None`` semantics —
+        e.g. ``PullRequest.merged_by_ref`` for an unmerged PR, or
+        ``Review.author_ref`` for a ghost-user-deleted review). The
+        rebind pass (P3.B) uses this to know whether to tolerate a
+        ``None`` value when iterating field values, and the marker
+        factory uses it to emit ``Field(default=None, ...)`` instead
+        of ``Field(...)``. Meaningless for plural fields (lists always
+        default to ``[]``); always ``False`` for plurals.
     """
 
     owning_cls: type
     field_name: str
     role: str
     plural: bool
+    optional: bool = False
 
 
-def account_role_ref(role: str) -> Any:
+def account_role_ref(role: str, *, optional: bool = False) -> Any:
     """Mark a singular ``EntityRef`` field as a role-typed account ref.
 
-    Returns a Pydantic :class:`FieldInfo` with no default — the field is
-    required, matching the existing ``Commit.author_ref`` /
-    ``Commit.committer_ref`` semantics where every commit has an author.
+    By default returns a Pydantic :class:`FieldInfo` with no default —
+    the field is required, matching the existing ``Commit.author_ref``
+    / ``Commit.committer_ref`` semantics where every commit has an
+    author.
+
+    Pass ``optional=True`` for ``Optional[EntityRef] = None`` fields
+    (e.g. ``PullRequest.merged_by_ref`` for an unmerged PR or
+    ``Review.author_ref`` for a ghost-user-deleted review). In that
+    case the factory emits ``Field(default=None, ...)`` so existing
+    constructor sites that omit the kwarg keep working. The
+    ``optional`` flag is preserved on the registered
+    :class:`RoleRefSpec` so the rebind pass (P3.B) can tolerate a
+    ``None`` value when iterating field values.
 
     Use :func:`account_role_refs` for ``list[EntityRef]`` fields.
     """
-    return Field(..., json_schema_extra={_MARKER_KEY: {"role": role, "plural": False}})
+    payload = {"role": role, "plural": False, "optional": optional}
+    if optional:
+        return Field(default=None, json_schema_extra={_MARKER_KEY: payload})
+    return Field(..., json_schema_extra={_MARKER_KEY: payload})
 
 
-def account_role_refs(role: str) -> Any:
+def account_role_refs(role: str, *, optional: bool = False) -> Any:
     """Mark a ``list[EntityRef]`` field as a role-typed account-ref list.
 
     Default is an empty list (via ``default_factory``) so a field with
     no assignees deserializes cleanly.
+
+    The ``optional`` keyword is accepted for signature symmetry with
+    :func:`account_role_ref` but is meaningless for plural fields — a
+    list field's natural "empty" representation is ``[]``, never
+    ``None``. Passing ``optional=True`` is silently ignored (the
+    registered :class:`RoleRefSpec` will carry ``optional=False`` for
+    plurals).
     """
+    del optional  # plural fields ignore the flag; see docstring
+    payload = {"role": role, "plural": True, "optional": False}
     return Field(
         default_factory=list,
-        json_schema_extra={_MARKER_KEY: {"role": role, "plural": True}},
+        json_schema_extra={_MARKER_KEY: payload},
     )
 
 
@@ -155,6 +188,7 @@ class AccountRoleRegistry:
         field_name: str,
         role: str,
         plural: bool,
+        optional: bool = False,
     ) -> RoleRefSpec:
         """Register one role-typed field. Idempotent on re-registration.
 
@@ -168,6 +202,7 @@ class AccountRoleRegistry:
             field_name=field_name,
             role=role,
             plural=plural,
+            optional=optional,
         )
         cls._entries[(owning_cls.__qualname__, field_name)] = spec
         return spec
@@ -218,6 +253,7 @@ def collect_role_refs(entity_cls: type) -> list[RoleRefSpec]:
             field_name=fname,
             role=payload["role"],
             plural=bool(payload.get("plural", False)),
+            optional=bool(payload.get("optional", False)),
         )
         registered.append(spec)
     return registered

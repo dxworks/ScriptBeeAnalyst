@@ -320,8 +320,8 @@ class Issue(Entity):
 
     status_ref: EntityRef
     type_ref: EntityRef
-    creator_ref: Optional[EntityRef] = account_role_ref("creator")
-    reporter_ref: Optional[EntityRef] = account_role_ref("reporter")
+    creator_ref: Optional[EntityRef] = account_role_ref("creator", optional=True)
+    reporter_ref: Optional[EntityRef] = account_role_ref("reporter", optional=True)
     assignee_refs: List[EntityRef] = account_role_refs("assignee")
     parent_ref: Optional[EntityRef] = None
 
