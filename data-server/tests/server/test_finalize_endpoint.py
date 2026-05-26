@@ -527,3 +527,90 @@ class TestFinalizeRoundTripThroughLoad:
             smart_merge_state_store.delete(project_id)
             server.current_project_id = None
             server.current_project_name = None
+
+
+# ---------------------------------------------------------------------------
+# UU aftermath §Bug 3 — defensive cleanup pass drops leftover
+# Account-keyed relations.
+# ---------------------------------------------------------------------------
+class TestFinalizeCleanupDropsAccountKeyedRelations:
+    """The /finalize handler's defensive cleanup pass — runs before rebind,
+    drops every relation row whose source/target carries an account-kind
+    ref (``GIT_ACCOUNT`` / ``GITHUB_USER`` / ``JIRA_USER``).
+
+    The leak path it guards against: Phase A historically emitting a
+    people-side relation with an Account-kind endpoint (a hypothetical
+    builder misclassification, or a stale on-disk pickle from before
+    the UU redesign landed). Post-rebind those rows would coexist with
+    Phase B's correctly-keyed UNIFIED_USER rows, double-counting any
+    consumer that walks ``graph.relations.of_kind(...)``.
+    """
+
+    def test_pre_seeded_account_keyed_row_is_gone_after_finalize(
+        self, patched_server, project_id, pre_merge_graph
+    ):
+        # Pre-seed a leftover Phase A leak: an ``ownership`` row keyed
+        # on a ``GIT_ACCOUNT`` source (Alice). After finalize the
+        # cleanup pass must drop this row before rebind runs.
+        from src.enrichment.relations import Relation, WindowKind
+        from src.common.domains.git.models import File
+
+        # Reuse the git project the fixture already added so the new
+        # file's ``project_ref`` resolves.
+        git_proj = next(
+            p for p in pre_merge_graph.git_projects.all()
+            if p.name == "demo-git"
+        )
+        file_ = File(
+            id="src/leftover.py",
+            path="src/leftover.py",
+            project_ref=git_proj.ref(),
+            extension="py",
+        )
+        pre_merge_graph.files.add(file_)
+
+        # Reach into ``graph.git_accounts`` for Alice's ref — the
+        # fixture builder above adds her with the standard make_id.
+        alice = next(
+            a for a in pre_merge_graph.git_accounts.all()
+            if a.name == ALICE_NAME
+        )
+        alice_account_ref = alice.ref()
+        assert alice_account_ref.kind == EntityKind.GIT_ACCOUNT
+
+        leftover_id = Relation.canonical_id(
+            alice_account_ref,
+            file_.ref(),
+            "ownership",
+            WindowKind.LIFETIME,
+        )
+        leftover = Relation(
+            id=leftover_id,
+            source=alice_account_ref,
+            target=file_.ref(),
+            relation_kind="ownership",
+            window=WindowKind.LIFETIME,
+            strength=0.5,
+            extras={},
+        )
+        pre_merge_graph.relations.add(leftover)
+        assert pre_merge_graph.relations.get(leftover_id) is not None
+
+        # Finalize.
+        resp = patched_server.post(f"/projects/{project_id}/finalize")
+        assert resp.status_code == 200, resp.text
+
+        # The leftover row is gone — the cleanup pass dropped it before
+        # rebind ran, so it never reached Phase B's emission stage.
+        assert pre_merge_graph.relations.get(leftover_id) is None
+
+        # And: no relation row anywhere in the registry carries an
+        # account-kind endpoint after finalize.
+        account_kinds = {
+            EntityKind.GIT_ACCOUNT,
+            EntityKind.GITHUB_USER,
+            EntityKind.JIRA_USER,
+        }
+        for rel in pre_merge_graph.relations.all():
+            assert rel.source.kind not in account_kinds, rel
+            assert rel.target.kind not in account_kinds, rel

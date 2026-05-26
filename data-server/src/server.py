@@ -42,7 +42,12 @@ from src.smart_merge.types import (
 # The legacy ``compute_enrichments`` / ``Enrichments`` /
 # ``SupabaseEnrichmentRepository`` stack was deleted in Chunk 10 along
 # with the rest of the pre-refactor enrichment layer.
-from src.enrichment.pipeline import PipelineResult, run_pipeline, run_pipeline_phase_b
+from src.enrichment.pipeline import (
+    PipelineResult,
+    phase_b_relation_kinds,
+    run_pipeline,
+    run_pipeline_phase_b,
+)
 from src.enrichment.config import DEFAULT_CONFIG, EnrichmentConfig
 from src.graph_store import graph_store
 from src.common.kernel import EntityKind, Graph, MergeState
@@ -95,6 +100,19 @@ class ApplySuggestionRequest(BaseModel):
 class RejectSuggestionRequest(BaseModel):
     """Request body for rejecting a merge suggestion."""
     identity_keys: List[str]
+
+
+# UU aftermath §Bug 3: account-side ``EntityKind`` values. Post-rebind
+# no relation row may carry one of these on either endpoint — the
+# rebind pass flips every role-typed account ref to a UNIFIED_USER ref,
+# so any leftover Account-kinded relation row is a Phase A leak. The
+# defensive cleanup pass at the top of /finalize drops them before
+# Phase B runs against the rebound graph.
+_ACCOUNT_KINDS: frozenset[EntityKind] = frozenset({
+    EntityKind.GIT_ACCOUNT,
+    EntityKind.GITHUB_USER,
+    EntityKind.JIRA_USER,
+})
 
 
 def load_graph_v2_from_disk(project_id: str) -> Optional[Graph]:
@@ -570,6 +588,49 @@ async def finalize_project(project_id: str):
         )
 
     started = time.monotonic()
+
+    # --- 0. defensive cleanup of leftover Account-keyed relations -------
+    # UU aftermath §Bug 3: the v2 ``Relation.canonical_id`` includes the
+    # source/target kind in the row id, so a per-source-keyed leak (e.g.
+    # an ``ownership`` row authored as ``GIT_ACCOUNT → FILE`` pre-finalize)
+    # would NOT dedup against the post-rebind ``UNIFIED_USER → FILE``
+    # row Phase B emits. The two rows coexist and downstream consumers
+    # double-count.
+    #
+    # Static audit of the seven Phase B builders (coauthor, ownership,
+    # pr.reviewer, cochange.author_*, cochange.file_shared_devs,
+    # cochange.component_shared_devs) shows every one already propagates
+    # the entity's role-ref directly (``commit.author_ref`` etc.), so
+    # the current code emits the right kinds. This cleanup pass is the
+    # universal safety net: walk ``graph.relations`` once, drop every
+    # row whose source/target carries an account-kind ref. Runs O(R)
+    # at finalize — once per project lifecycle.
+    #
+    # Placed BEFORE the rebind so the audit operates on the catalog
+    # exactly as Phase A left it; rebind itself does NOT touch
+    # ``graph.relations`` (it walks ``AccountRoleRegistry`` over Entity
+    # role-refs only), so the only risk it'd introduce by running
+    # first is the (currently empty) class of relations that legitimately
+    # carry account-kind endpoints — none exist, but the explicit
+    # ordering keeps the contract auditable.
+    people_kinds = phase_b_relation_kinds()
+    cleanup_dropped = 0
+    for rel_id in list(graph.relations.ids()):
+        rel = graph.relations.get(rel_id)
+        if rel is None:
+            continue
+        if (
+            rel.source.kind in _ACCOUNT_KINDS
+            or rel.target.kind in _ACCOUNT_KINDS
+        ):
+            graph.relations.remove(rel_id)
+            cleanup_dropped += 1
+    if cleanup_dropped:
+        logger.warning(
+            f"finalize: dropped {cleanup_dropped} Account-keyed relation row(s) "
+            f"from project {project_id} before rebind "
+            f"(people-side relation kinds: {sorted(people_kinds)})"
+        )
 
     # --- 1. rebind --------------------------------------------------------
     # The rebind is the only step that mutates the in-memory graph
