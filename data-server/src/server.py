@@ -220,13 +220,18 @@ current_project_id = None
 current_project_name = None
 
 
-def _stats_for(graph: Optional[Graph], state) -> dict:
+def _stats_for(graph: Optional[Graph]) -> dict:
     """Build the per-project stats block used by /health and /projects/current.
 
     Reads directly off the typed Graph registries; the per-source counts
     are the same shape the legacy ``graph_data``-backed endpoints
-    surfaced. ``unified_users`` counts the in-memory smart-merge
-    :class:`UnifiedUser` list (replayed from Supabase on /load).
+    surfaced. ``unified_users`` counts the typed :class:`UnifiedUser`
+    registry on the Graph — pre-finalize this is the manual-merge
+    population (mirrored from ``state.users`` by ``_apply_merge_to_graph``)
+    and post-finalize it's the rebind output (manual merges + auto-created
+    singletons). The smart-merge ``state.users`` list intentionally does
+    NOT track the rebind's singletons, so reading it post-finalize gave
+    the UI a stale count — see UU aftermath §Bug 2.
     """
     if graph is None:
         return {
@@ -239,7 +244,7 @@ def _stats_for(graph: Optional[Graph], state) -> dict:
         "git_commits": len(graph.commits),
         "jira_issues": len(graph.issues),
         "github_prs": len(graph.pull_requests),
-        "unified_users": len(state.users) if state is not None else 0,
+        "unified_users": len(graph.unified_users),
     }
 
 
@@ -254,17 +259,13 @@ async def health_check():
     graph = (
         graph_store.get(current_project_id) if current_project_id else None
     )
-    state = (
-        smart_merge_state_store.get(current_project_id)
-        if current_project_id else None
-    )
     return {
         "status": "ok",
         "mode": "standalone",
         "data_loaded": graph is not None,
         "current_project_id": current_project_id,
         "loaded_projects": graph_store.get_all_project_ids(),
-        "stats": _stats_for(graph, state),
+        "stats": _stats_for(graph),
     }
 
 
@@ -283,7 +284,6 @@ async def get_current_project():
     )
     if graph is None or not current_project_id:
         return {"loaded": False}
-    state = smart_merge_state_store.get(current_project_id)
     # UnifiedUsers redesign §I (P5.B): surface the lifecycle stage so the
     # MCP layer can state-gate its tools without a second round-trip.
     return {
@@ -291,7 +291,7 @@ async def get_current_project():
         "project_id": current_project_id,
         "project_name": current_project_name,
         "merge_state": str(graph.merge_state),
-        "stats": _stats_for(graph, state),
+        "stats": _stats_for(graph),
     }
 
 
@@ -401,14 +401,13 @@ async def load_project(project_id: str):
     except Exception as e:
         logger.warning(f"Failed to replay user mappings (non-fatal): {e}")
 
-    state = smart_merge_state_store.get(project_id)
     logger.info(f"Project {project_id} loaded into memory")
 
     return {
         "message": "Project loaded successfully",
         "project_id": project_id,
         "project_name": project_name,
-        "stats": _stats_for(graph, state),
+        "stats": _stats_for(graph),
         "replay": replay_result,
     }
 
@@ -846,6 +845,31 @@ def _require_loaded_graph(project_id: str) -> Graph | JSONResponse:
     return graph
 
 
+def _require_pre_merge(graph: Graph) -> JSONResponse | None:
+    """Refuse setup-mutating calls once the project has been finalized.
+
+    UU aftermath §Bug 1: every setup endpoint (apply / apply-batch /
+    reject / delete-user / delete-all-users / replay) used to gate only
+    on "graph loaded?", letting a direct HTTP caller mutate state after
+    finalize. The MCP wrapper had the gate; the data-server underneath
+    did not.
+
+    Returns ``JSONResponse({"error": "project_finalized"}, status_code=409)``
+    when ``graph.merge_state != MergeState.PRE_MERGE``; otherwise
+    ``None``. The error key matches the existing ``/finalize`` 409 so the
+    web UI / MCP layer's existing 409 → 'already finalized' mapping
+    covers this without change. ``/finalize`` keeps its inline check —
+    it must distinguish FINALIZED (409) from other non-PRE_MERGE states
+    (400).
+    """
+    if graph.merge_state != MergeState.PRE_MERGE:
+        return JSONResponse(
+            {"error": "project_finalized"},
+            status_code=409,
+        )
+    return None
+
+
 def _get_activity_counts(graph: Graph) -> dict[str, int]:
     """Compute activity counts for every identity in the loaded graph.
 
@@ -1195,6 +1219,9 @@ async def apply_author_suggestion(project_id: str, request: ApplySuggestionReque
     graph = _require_loaded_graph(project_id)
     if isinstance(graph, JSONResponse):
         return graph
+    err = _require_pre_merge(graph)
+    if err is not None:
+        return err
 
     try:
         state = smart_merge_state_store.get(project_id)
@@ -1291,6 +1318,9 @@ async def apply_author_suggestions_batch(project_id: str):
     graph = _require_loaded_graph(project_id)
     if isinstance(graph, JSONResponse):
         return graph
+    err = _require_pre_merge(graph)
+    if err is not None:
+        return err
 
     state = smart_merge_state_store.get(project_id)
     cache = state.last_suggestions
@@ -1374,6 +1404,9 @@ async def reject_author_suggestion(project_id: str, request: RejectSuggestionReq
     graph = _require_loaded_graph(project_id)
     if isinstance(graph, JSONResponse):
         return graph
+    err = _require_pre_merge(graph)
+    if err is not None:
+        return err
 
     try:
         state = smart_merge_state_store.get(project_id)
@@ -1445,6 +1478,9 @@ async def delete_unified_user(project_id: str, unified_user_id: str):
     graph = _require_loaded_graph(project_id)
     if isinstance(graph, JSONResponse):
         return graph
+    err = _require_pre_merge(graph)
+    if err is not None:
+        return err
 
     try:
         state = smart_merge_state_store.get(project_id)
@@ -1481,6 +1517,9 @@ async def delete_all_unified_users(project_id: str):
     graph = _require_loaded_graph(project_id)
     if isinstance(graph, JSONResponse):
         return graph
+    err = _require_pre_merge(graph)
+    if err is not None:
+        return err
 
     try:
         state = smart_merge_state_store.get(project_id)
@@ -1547,6 +1586,9 @@ async def replay_unified_users(project_id: str):
     graph = _require_loaded_graph(project_id)
     if isinstance(graph, JSONResponse):
         return graph
+    err = _require_pre_merge(graph)
+    if err is not None:
+        return err
 
     try:
         result = _replay_user_mappings(project_id)

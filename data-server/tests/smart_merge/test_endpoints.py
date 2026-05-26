@@ -273,3 +273,104 @@ class TestSaveGraphState:
         graph_store.delete(project_id)
         resp = patched_server.post(f"/projects/{project_id}/save-graph-state")
         assert resp.status_code == 400
+
+
+# ---------------------------------------------------------------------------
+# UU aftermath §Bug 1 — setup-mutating endpoints must refuse post-finalize.
+# ---------------------------------------------------------------------------
+import pytest  # noqa: E402
+
+
+class TestSetupEndpointsRefusePostFinalize:
+    """The six setup-mutating endpoints must return 409
+    ``{"error": "project_finalized"}`` once ``graph.merge_state`` is
+    ``FINALIZED``.
+
+    Before the fix, only the MCP wrapper guarded these calls; a direct
+    HTTP caller (or an agent bypassing MCP) could mutate setup state on
+    a finalized project. The data-server now mirrors the MCP gate via
+    :func:`src.server._require_pre_merge`.
+
+    Read-only ``GET`` endpoints and the no-op ``save-graph-state`` shim
+    intentionally stay ungated.
+    """
+
+    # (label, method, path-suffix, body-or-None)
+    # ``path-suffix`` is interpolated against the ``project_id`` fixture.
+    _ENDPOINTS = [
+        (
+            "apply",
+            "POST",
+            "/projects/{pid}/authors/suggestions/apply",
+            {
+                "suggestion_id": "sid",
+                "selected_identity_keys": ["git:a", "git:b"],
+                "unselected_identity_keys": [],
+                "name": "n",
+                "email": "e@example.com",
+            },
+        ),
+        (
+            "apply-batch",
+            "POST",
+            "/projects/{pid}/authors/suggestions/apply-batch",
+            None,
+        ),
+        (
+            "reject",
+            "POST",
+            "/projects/{pid}/authors/suggestions/reject",
+            {"suggestion_id": "sid", "identity_keys": ["git:a", "git:b"]},
+        ),
+        (
+            "delete-user",
+            "DELETE",
+            "/projects/{pid}/authors/users/some-uu-id",
+            None,
+        ),
+        (
+            "delete-all-users",
+            "DELETE",
+            "/projects/{pid}/authors/users",
+            None,
+        ),
+        (
+            "replay",
+            "POST",
+            "/projects/{pid}/authors/users/replay",
+            None,
+        ),
+    ]
+
+    @pytest.mark.parametrize(
+        "label,method,path_template,body",
+        _ENDPOINTS,
+        ids=[e[0] for e in _ENDPOINTS],
+    )
+    def test_returns_409_project_finalized(
+        self,
+        patched_server,
+        project_id,
+        three_source_graph,
+        label,
+        method,
+        path_template,
+        body,
+    ):
+        from src.common.kernel import MergeState
+
+        # Flip the in-memory graph into FINALIZED; the patched_server
+        # fixture already stashed ``three_source_graph`` in graph_store
+        # so this is the same instance the endpoints will look up.
+        three_source_graph.merge_state = MergeState.FINALIZED
+
+        path = path_template.format(pid=project_id)
+        if method == "POST":
+            resp = patched_server.post(path, json=body)
+        elif method == "DELETE":
+            resp = patched_server.delete(path)
+        else:  # pragma: no cover — defensive
+            raise AssertionError(f"unexpected method {method!r}")
+
+        assert resp.status_code == 409, (label, resp.status_code, resp.text)
+        assert resp.json() == {"error": "project_finalized"}, (label, resp.json())

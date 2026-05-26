@@ -511,6 +511,17 @@ class TestFinalizeRoundTripThroughLoad:
             reloaded = graph_store.get(project_id)
             assert reloaded is not None
             assert reloaded.merge_state == MergeState.FINALIZED
+
+            # UU aftermath §Bug 2: ``/projects/current`` reports the
+            # rebind-populated UU count, not the stale smart-merge
+            # ``state.users`` length. Post-finalize the rebind seeds a
+            # singleton UU per orphan Account, so the count matches
+            # ``len(graph.unified_users.all())`` exactly.
+            current_resp = client.get("/projects/current")
+            assert current_resp.status_code == 200, current_resp.text
+            assert current_resp.json()["stats"]["unified_users"] == len(
+                reloaded.unified_users.all()
+            )
         finally:
             graph_store.delete(project_id)
             smart_merge_state_store.delete(project_id)
