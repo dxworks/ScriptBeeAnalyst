@@ -27,9 +27,7 @@ import {
 import {
   FALLBACK_COMPONENT_COLOR,
   FILE_FILL,
-  FILE_FILL_DIM,
   FILE_STROKE,
-  FOLDER_DIM_GREY,
   FOLDER_STROKE,
 } from '../component-color';
 
@@ -85,9 +83,6 @@ export class ComponentsTreemapComponent {
   readonly files = input.required<ComponentFileDto[]>();
   readonly components = input.required<ComponentSummaryDto[]>();
   readonly componentColors = input<Record<string, string>>({});
-  /** Selected component (driven by the list pane). Currently used to dim
-   *  non-selected buckets; null = no selection / show everything. */
-  readonly selectedComponentName = input<string | null>(null);
 
   // ── Outputs ───────────────────────────────────────────────────────────────
   readonly fileClick = output<TreemapFileClickEvent>();
@@ -127,12 +122,11 @@ export class ComponentsTreemapComponent {
       const f = this.files();
       const c = this.components();
       const colors = this.componentColors();
-      const selected = this.selectedComponentName();
       const { w, h } = this.size();
       if (w <= 0 || h <= 0) {
         return;
       }
-      this.render(f, c, colors, selected, w, h);
+      this.render(f, c, colors, w, h);
     });
 
     // ResizeObserver is attached after the view is initialised so hostRef is
@@ -164,7 +158,6 @@ export class ComponentsTreemapComponent {
     files: ComponentFileDto[],
     components: ComponentSummaryDto[],
     componentColors: Record<string, string>,
-    selectedComponentName: string | null,
     width: number,
     height: number,
   ): void {
@@ -276,12 +269,8 @@ export class ComponentsTreemapComponent {
       .append('rect')
       .attr('width', (d) => Math.max(0.1, d.x1 - d.x0))
       .attr('height', (d) => Math.max(0.1, d.y1 - d.y0))
-      .attr('fill', (d) =>
-        this.fillForNode(d, componentColors, selectedComponentName),
-      )
-      .attr('stroke', (d) =>
-        this.strokeForNode(d, componentColors, selectedComponentName),
-      )
+      .attr('fill', (d) => this.fillForNode(d, componentColors))
+      .attr('stroke', (d) => this.strokeForNode(d, componentColors))
       .attr('stroke-width', (d) => (d.depth === 1 ? 3 : 1))
       .attr('rx', (d) => (d.depth === 1 ? 4 : 2))
       // Right-click handler on every rect (file or folder); component-level
@@ -440,21 +429,16 @@ export class ComponentsTreemapComponent {
   private fillForNode(
     d: d3.HierarchyRectangularNode<HierarchyDatum>,
     componentColors: Record<string, string>,
-    selectedComponentName: string | null,
   ): string {
-    const componentName = this.componentForDescendant(d);
-    const dim =
-      selectedComponentName !== null && componentName !== selectedComponentName;
-
     if (d.data.kind === 'file') {
       // File rects use a near-white neutral; the surrounding folder shading
-      // gives the visual hierarchy. Dim slightly when a different component
-      // is selected.
-      return dim ? FILE_FILL_DIM : FILE_FILL;
+      // gives the visual hierarchy.
+      return FILE_FILL;
     }
 
     // Folder fill: depth-shaded brighter from the component's base colour.
     // Mirrors `colorByDepth` at line 156 of the reference.
+    const componentName = this.componentForDescendant(d);
     const base =
       componentColors[componentName] ?? FALLBACK_COMPONENT_COLOR;
     const c = d3.color(base);
@@ -462,19 +446,12 @@ export class ComponentsTreemapComponent {
     const depthStep = 0.25;
     // Depth 1 = the component rect itself → no brighter shift; deeper folders
     // get progressively brighter so labels stay legible.
-    const shaded = c.brighter(Math.max(0, d.depth - 1) * depthStep).toString();
-    if (dim) {
-      const grey = d3.color(FOLDER_DIM_GREY)?.toString() ?? FOLDER_DIM_GREY;
-      // Blend back toward grey for unselected components.
-      return d3.interpolateRgb(shaded, grey)(0.6);
-    }
-    return shaded;
+    return c.brighter(Math.max(0, d.depth - 1) * depthStep).toString();
   }
 
   private strokeForNode(
     d: d3.HierarchyRectangularNode<HierarchyDatum>,
     componentColors: Record<string, string>,
-    _selectedComponentName: string | null,
   ): string {
     if (d.depth === 1) {
       // Thick coloured border around each component rect.

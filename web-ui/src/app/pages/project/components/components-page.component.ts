@@ -1,5 +1,4 @@
 import { Component, DestroyRef, OnInit, computed, inject, signal } from '@angular/core';
-import { DecimalPipe } from '@angular/common';
 import { ActivatedRoute, Router } from '@angular/router';
 import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
 import {
@@ -40,7 +39,7 @@ interface MappingDraftSpec {
 @Component({
   selector: 'app-components-page',
   standalone: true,
-  imports: [DecimalPipe, ComponentsTreemapComponent, CurationMenuComponent],
+  imports: [ComponentsTreemapComponent, CurationMenuComponent],
   templateUrl: './components-page.component.html',
   styleUrl: './components-page.component.scss',
 })
@@ -151,14 +150,8 @@ export class ComponentsPageComponent implements OnInit {
 
   // ── Page state plumbing ───────────────────────────────────────────────────
   readonly status_ = this.status; // alias kept for template if needed
-  readonly selectedComponentName = signal<string | null>(null);
   readonly projectId = signal<string | null>(null);
   readonly loadedProjectName;
-
-  /** Components sorted by total LOC desc — same shape as before. */
-  readonly sortedComponents = computed(() =>
-    [...this.displayedComponents()].sort((a, b) => b.total_loc - a.total_loc),
-  );
 
   private readonly destroyRef = inject(DestroyRef);
 
@@ -236,12 +229,6 @@ export class ComponentsPageComponent implements OnInit {
       };
     }
     return out;
-  }
-
-  onComponentClick(name: string): void {
-    // Drives treemap focus (dims non-selected buckets) and could later
-    // anchor the inspector panel. Toggle off if the user clicks again.
-    this.selectedComponentName.update((cur) => (cur === name ? null : name));
   }
 
   // ── Treemap event hooks ─────────────────────────────────────────────────

@@ -1,9 +1,13 @@
 .components-page {
   display: flex;
   flex-direction: column;
-  flex: 1;
-  min-height: 0;
   width: 100%;
+  // Bind to the viewport so the treemap never causes the page to scroll on
+  // ≤1920×1080. The two layout tokens come from ``_variables.scss`` — see
+  // ``--app-header-height`` (top navbar) and ``--project-tabs-height`` (the
+  // per-project tabs strip).
+  height: calc(100dvh - var(--app-header-height) - var(--project-tabs-height));
+  overflow: hidden;
 }
 
 .components-header {
@@ -14,6 +18,10 @@
   padding: var(--spacing-lg) var(--spacing-xl);
   border-bottom: 1px solid var(--color-border);
   background-color: var(--color-surface);
+  // Hold the header at its natural height so the "Rebuilding graph…" hint
+  // (which expands the row vertically during a save) eats into the treemap
+  // area rather than pushing it off-screen.
+  flex-shrink: 0;
 }
 
 .components-header-titles {
@@ -133,123 +141,12 @@
   to { transform: rotate(360deg); }
 }
 
-// ── Two-pane layout ───────────────────────────────────────────────────────
-.components-body {
-  display: grid;
-  grid-template-columns: 320px 1fr;
-  gap: 0;
-  flex: 1;
-  min-height: 0;
-}
-
-.components-list {
-  display: flex;
-  flex-direction: column;
-  border-right: 1px solid var(--color-border);
-  background-color: var(--color-surface);
-  overflow: hidden;
-}
-
-.components-list-header {
-  padding: var(--spacing-md) var(--spacing-lg);
-  border-bottom: 1px solid var(--color-border);
-}
-
-.components-list-title {
-  font-size: 0.75rem;
-  font-weight: 600;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-  color: var(--color-text-secondary);
-}
-
-.components-list-empty {
-  padding: var(--spacing-lg);
-  font-size: 0.875rem;
-  text-align: center;
-}
-
-.components-list-items {
-  list-style: none;
-  margin: 0;
-  padding: var(--spacing-xs);
-  overflow-y: auto;
-  flex: 1;
-
-  li + li {
-    margin-top: 2px;
-  }
-}
-
-.component-row {
-  display: flex;
-  align-items: center;
-  gap: var(--spacing-sm);
-  width: 100%;
-  padding: var(--spacing-sm) var(--spacing-md);
-  border: 1px solid transparent;
-  border-radius: var(--radius-md, 6px);
-  background: transparent;
-  text-align: left;
-  color: var(--color-text-primary);
-  cursor: pointer;
-  transition: background-color var(--transition-fast), border-color var(--transition-fast);
-
-  // F1+F2 review carry-over: drop raw rgba(99,102,241,…) literals in favour
-  // of the existing --color-accent-rgb token + --color-surface-hover.
-  &:hover {
-    background-color: var(--color-surface-hover);
-  }
-
-  &.selected {
-    background-color: rgba(var(--color-accent-rgb), 0.08);
-    border-color: var(--color-accent);
-  }
-}
-
-.component-swatch {
-  width: 12px;
-  height: 12px;
-  border-radius: 3px;
-  flex-shrink: 0;
-}
-
-.component-info {
-  display: flex;
-  flex-direction: column;
-  min-width: 0;
-}
-
-.component-name {
-  font-size: 0.875rem;
-  font-weight: 500;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.component-meta {
-  font-size: 0.75rem;
-  color: var(--color-text-secondary);
-}
-
 // ── Main area (treemap host) ──────────────────────────────────────────────
 .components-main {
   display: flex;
   flex-direction: column;
+  flex: 1;
+  min-height: 0;
   padding: var(--spacing-xl);
   overflow: hidden;
-  min-height: 0;
-}
-
-@media (max-width: 768px) {
-  .components-body {
-    grid-template-columns: 1fr;
-  }
-
-  .components-list {
-    max-height: 240px;
-    border-right: none;
-    border-bottom: 1px solid var(--color-border);
-  }
 }

@@ -92,60 +92,15 @@
       </div>
     }
     @case ('ready') {
-      <div class="components-body">
-        <!-- Left: components list. Each row's swatch reads from
-             componentColors() so the list agrees with the treemap. -->
-        <aside class="components-list">
-          <div class="components-list-header">
-            <span class="components-list-title">
-              {{ sortedComponents().length }} component{{ sortedComponents().length === 1 ? '' : 's' }}
-            </span>
-          </div>
-          @if (sortedComponents().length === 0) {
-            <div class="components-list-empty text-secondary">
-              No components resolved for this project yet.
-            </div>
-          } @else {
-            <ul class="components-list-items" role="list">
-              @for (c of sortedComponents(); track c.name) {
-                <li>
-                  <button
-                    type="button"
-                    class="component-row"
-                    [class.selected]="selectedComponentName() === c.name"
-                    (click)="onComponentClick(c.name)"
-                  >
-                    <span
-                      class="component-swatch"
-                      [style.background-color]="componentColors()[c.name]"
-                      aria-hidden="true"
-                    ></span>
-                    <span class="component-info">
-                      <span class="component-name">{{ c.name }}</span>
-                      <span class="component-meta">
-                        {{ c.file_count }} file{{ c.file_count === 1 ? '' : 's' }}
-                        · {{ c.total_loc | number:'1.0-0' }} LOC
-                      </span>
-                    </span>
-                  </button>
-                </li>
-              }
-            </ul>
-          }
-        </aside>
-
-        <!-- Main: the treemap, fed with the displayed (post-draft) views. -->
-        <section class="components-main">
-          <app-components-treemap
-            [files]="displayedFiles()"
-            [components]="displayedComponents()"
-            [componentColors]="componentColors()"
-            [selectedComponentName]="selectedComponentName()"
-            (fileClick)="onFileClick($event)"
-            (contextMenu)="onContextMenu($event)"
-          />
-        </section>
-      </div>
+      <section class="components-main">
+        <app-components-treemap
+          [files]="displayedFiles()"
+          [components]="displayedComponents()"
+          [componentColors]="componentColors()"
+          (fileClick)="onFileClick($event)"
+          (contextMenu)="onContextMenu($event)"
+        />
+      </section>
     }
   }
 

@@ -70,6 +70,12 @@
   // (``enrichment-config.component.scss`` Rerun toolbar). Single source of
   // truth: any change here propagates to both the header and its dependents.
   --app-header-height: 69px;
+  // Height of the per-project tabs strip rendered between the app header and
+  // the active project page (see ``project-tabs`` in the project workspace
+  // layout). Pages that need to bind their body to the viewport (e.g. the
+  // Components treemap, which must never scroll on ≤1920×1080) subtract both
+  // this and ``--app-header-height`` from ``100dvh``.
+  --project-tabs-height: 56px;
 }
 
 // ===== Dark Theme =====
