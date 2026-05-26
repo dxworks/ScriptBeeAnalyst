@@ -284,10 +284,13 @@ async def get_current_project():
     if graph is None or not current_project_id:
         return {"loaded": False}
     state = smart_merge_state_store.get(current_project_id)
+    # UnifiedUsers redesign §I (P5.B): surface the lifecycle stage so the
+    # MCP layer can state-gate its tools without a second round-trip.
     return {
         "loaded": True,
         "project_id": current_project_id,
         "project_name": current_project_name,
+        "merge_state": str(graph.merge_state),
         "stats": _stats_for(graph, state),
     }
 
