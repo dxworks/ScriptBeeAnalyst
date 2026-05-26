@@ -11,6 +11,8 @@ from src.enrichment.pipeline import (
     PipelineHost,
     PipelineResult,
     run_pipeline,
+    run_pipeline_phase_a,
+    run_pipeline_phase_b,
 )
 
 __all__ = [
@@ -18,4 +20,6 @@ __all__ = [
     "PipelineHost",
     "PipelineResult",
     "run_pipeline",
+    "run_pipeline_phase_a",
+    "run_pipeline_phase_b",
 ]
