@@ -34,7 +34,8 @@ from ...kernel import (
     register_value_object_role_refs,
 )
 from ...kernel.entity import with_ref_resolvers
-from ...people import Account, SourceKind
+from ...people.account import Account
+from ...people.source import SourceKind
 from ...projects import Project
 
 if TYPE_CHECKING:  # forward-only — keeps cycles broken

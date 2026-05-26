@@ -53,7 +53,7 @@ from pathlib import Path
 from typing import Any, Dict, Iterable, List, Mapping, Tuple
 
 from ...kernel import EntityKind, EntityRef
-from ...people import SourceKind
+from ...people.source import SourceKind
 from ..git.models import File
 from .models import FileMetric, FunctionMetric, LizardMetricsProject
 

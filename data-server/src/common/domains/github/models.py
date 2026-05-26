@@ -28,7 +28,8 @@ from ...kernel import (
     account_role_ref,
     account_role_refs,
 )
-from ...people import Account, SourceKind
+from ...people.account import Account
+from ...people.source import SourceKind
 from ...projects import Project
 
 if TYPE_CHECKING:  # forward-only — keeps cycles broken

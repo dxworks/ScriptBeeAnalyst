@@ -72,7 +72,7 @@ from pathlib import Path
 from typing import Any, Dict, Iterable, Iterator, List, Mapping, Optional, Tuple
 
 from ...kernel import EntityKind, EntityRef
-from ...people import SourceKind
+from ...people.source import SourceKind
 from ..git.models import File
 from .models import (
     CodeField,

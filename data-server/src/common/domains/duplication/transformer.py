@@ -24,7 +24,7 @@ from __future__ import annotations
 from typing import Any, ClassVar, Mapping
 
 from ...kernel import Entity, EntityKind
-from ...people import SourceKind
+from ...people.source import SourceKind
 from ..transformer import Transformer, TransformResult
 from .models import DuplicationPair, DuplicationProject
 

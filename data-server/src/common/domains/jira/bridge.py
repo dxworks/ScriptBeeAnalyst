@@ -52,7 +52,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Dict, List, Mapping, Optional
 
-from ...people import SourceKind
+from ...people.source import SourceKind
 from ....jira_miner.reader_dto.loader import JiraJsonLoader
 from ....jira_miner.reader_dto.models import (
     Comment as RawComment,

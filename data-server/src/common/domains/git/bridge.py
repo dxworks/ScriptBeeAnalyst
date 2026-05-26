@@ -54,7 +54,7 @@ from src.inspector_git.reader.enums.line_operation import (
 from src.inspector_git.reader.iglog.readers.ig_log_reader import IGLogReader
 from src.inspector_git.utils.constants import parse_commit_date
 
-from ...people import SourceKind
+from ...people.source import SourceKind
 from .models import (
     Change,
     ChangeType,

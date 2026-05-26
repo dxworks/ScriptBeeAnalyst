@@ -49,7 +49,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Mapping, Optional
 
-from ...people import SourceKind
+from ...people.source import SourceKind
 from src.github_miner.reader_dto.loader import GithubJsonLoader
 from src.github_miner.reader_dto.models import (
     CommitGitHubMiner,
