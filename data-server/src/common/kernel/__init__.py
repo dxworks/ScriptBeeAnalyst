@@ -71,6 +71,17 @@ from .role_ref import (
 # module to use the per-submodule import form.
 from .graph import Graph  # noqa: E402
 
+# UnifiedUsers redesign §C — install reverse resolvers on ``UnifiedUser``
+# now that every domain registry has loaded its ``models.py``, populating
+# :class:`AccountRoleRegistry`. The ``unified.py`` module ran an eager
+# install at its own load time too, but the registry was empty back then
+# (``Graph`` imports ``unified.py`` BEFORE the domain registries — see
+# line 57 of ``kernel/graph.py``). Calling it again here flushes the
+# install with the registry now fully populated. Idempotent on re-import.
+from ..people.unified import _install_reverse_resolvers  # noqa: E402
+
+_install_reverse_resolvers()
+
 __all__ = [
     "AccountRoleRegistry",
     "Entity",
