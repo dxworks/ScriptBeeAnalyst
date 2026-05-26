@@ -19,11 +19,13 @@ from supabase import create_client, Client
 from src.config import SUPABASE_URL, SUPABASE_SERVICE_KEY, WORKSPACE_ROOT
 from src.logger import get_logger
 # Chunk 19: smart-merge moved off the legacy ``graph_data: dict`` global.
-# ``SourceIdentity`` + ``UnifiedUser`` now live in ``src.smart_merge.identity``
-# (per D5 — internal smart-merge DTOs), and identities are derived from the
-# typed v2 :class:`Graph` via :mod:`src.smart_merge.identity_extractor`.
+# UnifiedUsers redesign §L (P4.C): :class:`UnifiedUser` is now the canonical
+# graph entity in ``src.common.people.unified``; the former smart-merge DTO
+# was collapsed into it. ``SourceIdentity`` remains an internal smart-merge
+# DTO (D5) and identities are derived from the typed v2 :class:`Graph` via
+# :mod:`src.smart_merge.identity_extractor`.
 from src.smart_merge.engine import AuthorSmartMergeEngine
-from src.smart_merge.identity import SourceIdentity, UnifiedUser
+from src.smart_merge.identity import SourceIdentity
 from src.smart_merge.identity_extractor import extract_all_identities
 from src.smart_merge.state_store import smart_merge_state_store
 from src.smart_merge.supabase_repository import SupabaseSmartMergeRepository
@@ -41,7 +43,7 @@ from src.smart_merge.types import (
 from src.enrichment.pipeline import PipelineResult, run_pipeline
 from src.graph_store import graph_store
 from src.common.kernel import EntityKind, Graph, MergeState
-from src.common.people import UnifiedUser as TypedUnifiedUser
+from src.common.people import UnifiedUser
 from src.common.pickle_store import PickleStore
 from src.common.domains.components.resolver import parse_component_mapping
 from src.supabase_client import get_service_client
@@ -689,12 +691,20 @@ def _apply_merge_to_graph(graph: Graph, uu: UnifiedUser) -> None:
     # when the same merge is replayed (e.g. on /load).
     existing = graph.unified_users.get(uu.id)
     if existing is None:
+        # P4.C: pass through ``uu.identities`` so the typed-graph
+        # ``UnifiedUser`` entity carries the same smart-merge identities
+        # the API-side object did (post-collapse there is one class —
+        # the entity IS the DTO). The ``identities`` field is
+        # ``exclude=True`` on the entity, so this does NOT affect pickle
+        # layout; it just gives the bound instance the data its
+        # ``commit_count`` / ``to_dict`` accessors expect.
         graph.unified_users.add(
-            TypedUnifiedUser(
+            UnifiedUser(
                 id=uu.id,
                 display_name=uu.display_name,
                 primary_email=uu.primary_email,
                 account_refs=[a.ref() for a in resolved_accounts],
+                identities=list(uu.identities),
             )
         )
         return
@@ -709,6 +719,16 @@ def _apply_merge_to_graph(graph: Graph, uu: UnifiedUser) -> None:
     new_refs = [a.ref() for a in resolved_accounts if a.ref() not in existing_refs]
     if new_refs:
         existing.account_refs = list(existing.account_refs) + new_refs
+    # P4.C: extend identities with any new entries (de-dup by
+    # ``source`` + ``source_key``) so re-applying the same merge is
+    # idempotent and folding a second merge into an existing UU widens
+    # the identity set without dropping prior entries.
+    seen_keys = {(i.source, i.source_key) for i in existing.identities}
+    new_idents = [
+        i for i in uu.identities if (i.source, i.source_key) not in seen_keys
+    ]
+    if new_idents:
+        existing.identities = list(existing.identities) + new_idents
     # ``add`` already reindexes on insert; for an in-place mutation of
     # ``account_refs`` we need to refresh the ``by_account`` multi-index
     # so reverse lookups see the new bucket entries.

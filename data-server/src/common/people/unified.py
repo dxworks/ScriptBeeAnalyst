@@ -12,6 +12,18 @@ both directions:
   entry in ``account_refs`` (multi-key fan-out — see Chunk 1's
   ``IndexSpec`` key-fn semantics).
 
+Smart-merge API surface (UnifiedUsers redesign §L)
+--------------------------------------------------
+
+Task P4.C folded the former ``src.smart_merge.identity.UnifiedUser`` DTO
+into this entity — there is now a single ``UnifiedUser`` class. The
+API-shape helpers (``bind_graph``, ``commit_count``, ``pr_count``,
+``issue_count``, ``to_dict``, the per-source ``*_identities`` filters,
+plus the ``all_emails`` / ``all_names`` / ``all_logins`` aggregates) live
+here. The ``identities`` field is a smart-merge in-memory carrier
+(``exclude=True`` so it does NOT serialise through pickle / ``model_dump``)
+and ``_graph`` is a Pydantic ``PrivateAttr`` set by :meth:`bind_graph`.
+
 Auto-generated reverse resolvers (UnifiedUsers redesign §C)
 -----------------------------------------------------------
 
@@ -66,12 +78,16 @@ marker raises :class:`TypeError`.
 from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any, ClassVar, Iterable, List, Optional
+from uuid import uuid4
+
+from pydantic import Field, PrivateAttr
 
 from ..kernel import Entity, EntityKind, EntityRef, IndexSpec, Registry
 
 if TYPE_CHECKING:  # forward-only; we never import the domain Account types
     from ..kernel import Graph
     from .account import Account
+    from src.smart_merge.identity import SourceIdentity
 
 
 class UnifiedUser(Entity):
@@ -91,9 +107,154 @@ class UnifiedUser(Entity):
 
     kind: ClassVar[EntityKind] = EntityKind.UNIFIED_USER
 
+    # Override ``Entity.id`` to default to a fresh UUID — preserves the
+    # behaviour of the former ``smart_merge.identity.UnifiedUser`` DTO
+    # which auto-generated the id when callers omitted it (the smart-merge
+    # ``apply`` / ``apply-batch`` endpoints rely on that — see
+    # ``src/server.py``).
+    id: str = Field(default_factory=lambda: str(uuid4()))
+
     display_name: str
     primary_email: Optional[str] = None
     account_refs: List[EntityRef] = []
+
+    # Smart-merge in-memory carrier. ``exclude=True`` keeps it out of
+    # ``model_dump`` / ``__reduce__`` so the typed-graph pickle layout is
+    # unaffected: the source-of-truth for identities post-restart is
+    # Supabase (``user_identity_mappings``), replayed by
+    # :func:`_replay_user_mappings` in ``src/server.py``.
+    identities: List["SourceIdentity"] = Field(default_factory=list, exclude=True)
+
+    # Bound typed Graph for the per-instance stats accessors
+    # (``commit_count`` / ``pr_count`` / ``issue_count``). Pydantic
+    # ``PrivateAttr`` so it's not validated as a field, not serialised by
+    # ``model_dump``, and not pickled by :class:`Entity`'s ``__reduce__``.
+    # Set via :meth:`bind_graph`. Defaults to ``None`` — unbound instances
+    # report ``0`` for every count (matches the former DTO behaviour).
+    _graph: Optional["Graph"] = PrivateAttr(default=None)
+
+    # ------------------------------------------------------------------
+    # Smart-merge API: graph binding for per-instance stats accessors.
+    # ------------------------------------------------------------------
+    def bind_graph(self, graph: Optional["Graph"]) -> None:
+        """Bind to a typed v2 :class:`Graph` so the per-instance stats
+        accessors (``commit_count`` / ``pr_count`` / ``issue_count``) can
+        resolve through the reverse resolvers. Pass ``None`` to clear."""
+        self._graph = graph
+
+    # ------------------------------------------------------------------
+    # Per-source identity filters (trivial views over ``self.identities``).
+    # ------------------------------------------------------------------
+    @property
+    def git_identities(self) -> List["SourceIdentity"]:
+        return [i for i in self.identities if i.source == "git"]
+
+    @property
+    def github_identities(self) -> List["SourceIdentity"]:
+        return [i for i in self.identities if i.source == "github"]
+
+    @property
+    def jira_identities(self) -> List["SourceIdentity"]:
+        return [i for i in self.identities if i.source == "jira"]
+
+    # ------------------------------------------------------------------
+    # Aggregates over all identities.
+    # ------------------------------------------------------------------
+    @property
+    def all_emails(self) -> List[str]:
+        return list({i.email for i in self.identities if i.email})
+
+    @property
+    def all_names(self) -> List[str]:
+        return list({i.name for i in self.identities})
+
+    @property
+    def all_logins(self) -> List[str]:
+        return list({i.login for i in self.identities if i.login})
+
+    # ------------------------------------------------------------------
+    # Activity counts (resolved through the bound typed Graph via the
+    # reverse resolvers installed at module-bottom; one-liners now).
+    # ------------------------------------------------------------------
+    @property
+    def commit_count(self) -> int:
+        """Commits authored by this user. ``0`` if no graph bound."""
+        if self._graph is None:
+            return 0
+        return len(self.commits_as_author(self._graph))
+
+    @property
+    def pr_count(self) -> int:
+        """Unique PRs touched (authored ∪ merged-by). ``0`` if no graph bound."""
+        if self._graph is None:
+            return 0
+        seen: set[int] = set()
+        count = 0
+        for pr in self.pull_requests_as_author(self._graph):
+            if pr.number not in seen:
+                seen.add(pr.number)
+                count += 1
+        for pr in self.pull_requests_as_merged_by(self._graph):
+            if pr.number not in seen:
+                seen.add(pr.number)
+                count += 1
+        return count
+
+    @property
+    def issue_count(self) -> int:
+        """Unique issues touched (reporter ∪ creator ∪ assignee).
+        ``0`` if no graph bound."""
+        if self._graph is None:
+            return 0
+        seen: set[str] = set()
+        count = 0
+        for role in ("issues_as_reporter", "issues_as_creator", "issues_as_assignee"):
+            resolver = getattr(self, role, None)
+            if resolver is None:
+                continue
+            for issue in resolver(self._graph):
+                if issue.key not in seen:
+                    seen.add(issue.key)
+                    count += 1
+        return count
+
+    # ------------------------------------------------------------------
+    # Serialisation — wire-compatible with the former DTO's ``to_dict``.
+    # ------------------------------------------------------------------
+    def to_dict(self) -> dict:
+        """Serialize to JSON-safe dict for smart-merge API responses.
+
+        Output shape matches the legacy
+        ``src.smart_merge.identity.UnifiedUser.to_dict`` so the web UI
+        consuming ``/projects/{id}/authors/users`` (and the
+        ``apply`` / ``apply-batch`` endpoints) sees an unchanged payload.
+        """
+        return {
+            "id": self.id,
+            "display_name": self.display_name,
+            "primary_email": self.primary_email,
+            "identities": [
+                {
+                    "source": i.source,
+                    "source_key": i.source_key,
+                    "name": i.name,
+                    "email": i.email,
+                    "login": i.login,
+                }
+                for i in self.identities
+            ],
+            "stats": {
+                "commit_count": self.commit_count,
+                "issue_count": self.issue_count,
+                "pr_count": self.pr_count,
+            },
+        }
+
+    def __repr__(self) -> str:
+        return (
+            f"UnifiedUser(id={self.id!r}, name={self.display_name!r}, "
+            f"identities={len(self.identities)})"
+        )
 
     # ------------------------------------------------------------------
     # Generic, domain-free accessors. The auto-installed reverse resolvers
@@ -150,7 +311,14 @@ class UnifiedUser(Entity):
             attr = type(self).__dict__.get(name)
             if attr is not None:
                 return attr.__get__(self, type(self))
-        raise AttributeError(name)
+        # Defer to Pydantic's ``BaseModel.__getattr__`` for everything
+        # else — it handles ``PrivateAttr`` lookup (the ``_graph`` slot
+        # set by :meth:`bind_graph`) by reading
+        # ``self.__pydantic_private__``. Without this delegation, our
+        # ``raise AttributeError(name)`` shadows that lookup and the
+        # ``commit_count`` / ``pr_count`` / ``issue_count`` properties
+        # can't read ``self._graph``.
+        return super().__getattr__(name)
 
 
 def _unified_by_account_keys(u: UnifiedUser) -> Iterable[EntityRef]:
@@ -374,6 +542,19 @@ def _install_reverse_resolvers() -> int:
 # only the three raw-provenance accessors land; the ``__getattr__``
 # fallback completes the install lazily on first instance access.
 _install_reverse_resolvers()
+
+
+# ---------------------------------------------------------------------------
+# Resolve the forward-referenced ``SourceIdentity`` annotation on the
+# ``identities`` field (UnifiedUsers redesign §L). The runtime import
+# lives at module-bottom so the ``smart_merge`` namespace is touched
+# only after :class:`UnifiedUser`'s class body has finished — no
+# circular-import risk (``smart_merge.identity`` is dependency-free —
+# only stdlib + a ``TYPE_CHECKING`` Graph forward ref).
+# ---------------------------------------------------------------------------
+from src.smart_merge.identity import SourceIdentity  # noqa: E402,F401
+
+UnifiedUser.model_rebuild()
 
 
 __all__ = ["UnifiedUser", "UnifiedUserRegistry"]

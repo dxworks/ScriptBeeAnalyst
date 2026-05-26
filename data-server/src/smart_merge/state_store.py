@@ -23,7 +23,7 @@ import threading
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional
 
-from src.smart_merge.identity import UnifiedUser
+from src.common.people.unified import UnifiedUser
 from src.smart_merge.types import SimilaritiesGraph, Suggestion
 
 
