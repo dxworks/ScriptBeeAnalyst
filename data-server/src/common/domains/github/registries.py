@@ -108,6 +108,15 @@ class PullRequestRegistry(Registry[PullRequest, str]):
                          that merged the PR. ``None`` (still open /
                          unmerged) is skipped by the kernel's
                          ``_normalize_keys``.
+    * ``by_assignee`` — fan-out over :pyattr:`PullRequest.assignee_refs`.
+                         Each assignee ref gets a bucket containing every
+                         PR assigned to them. Mirrors
+                         :class:`IssueRegistry.by_assignee`.
+    * ``by_requested_reviewer`` — fan-out over
+                         :pyattr:`PullRequest.requested_reviewer_refs`.
+                         Each reviewer ref gets a bucket containing every
+                         PR they were requested to review. Same plural
+                         shape as ``by_assignee``.
     """
 
     indexes = [
@@ -116,6 +125,8 @@ class PullRequestRegistry(Registry[PullRequest, str]):
         IndexSpec(name="by_state", key_fn=lambda p: p.state, multi=True),
         IndexSpec(name="by_number", key_fn=lambda p: p.number, multi=True),
         IndexSpec(name="by_merged_by", key_fn=lambda p: p.merged_by_ref, multi=True),
+        IndexSpec(name="by_assignee", key_fn=lambda p: p.assignee_refs, multi=True),
+        IndexSpec(name="by_requested_reviewer", key_fn=lambda p: p.requested_reviewer_refs, multi=True),
     ]
 
     def get_id(self, entity: PullRequest) -> str:
