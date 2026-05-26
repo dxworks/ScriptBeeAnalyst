@@ -242,21 +242,12 @@ class UnifiedUser:
         for gu in self.github_users:
             user_ref = gu.ref()
             seen: set[int] = set()
-            for index_name in ("by_author",):
+            for index_name in ("by_author", "by_merged_by"):
                 bucket = getattr(pr_reg, index_name)[user_ref]
                 for pr in bucket:
                     if pr.number not in seen:
                         seen.add(pr.number)
                         count += 1
-            # ``by_merged_by`` isn't a declared index on the v2
-            # PullRequestRegistry (per Chunk 6 / src/common/domains/github/
-            # registries.py — only ``by_author`` / ``by_state`` /
-            # ``by_number`` are declared). Fall back to a scan keyed on
-            # the user's ref for merged_by_ref.
-            for pr in pr_reg.all():
-                if pr.merged_by_ref == user_ref and pr.number not in seen:
-                    seen.add(pr.number)
-                    count += 1
         return count
 
     # ------------------------------------------------------------------

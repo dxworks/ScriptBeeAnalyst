@@ -104,6 +104,10 @@ class PullRequestRegistry(Registry[PullRequest, str]):
     * ``by_number``   — lookup by integer PR number (the natural id
                         people quote). Indexed as an int so the
                         MCP sandbox doesn't have to cast.
+    * ``by_merged_by`` — :class:`EntityRef` to the :class:`GitHubUser`
+                         that merged the PR. ``None`` (still open /
+                         unmerged) is skipped by the kernel's
+                         ``_normalize_keys``.
     """
 
     indexes = [
@@ -111,6 +115,7 @@ class PullRequestRegistry(Registry[PullRequest, str]):
         IndexSpec(name="by_author", key_fn=lambda p: p.author_ref, multi=True),
         IndexSpec(name="by_state", key_fn=lambda p: p.state, multi=True),
         IndexSpec(name="by_number", key_fn=lambda p: p.number, multi=True),
+        IndexSpec(name="by_merged_by", key_fn=lambda p: p.merged_by_ref, multi=True),
     ]
 
     def get_id(self, entity: PullRequest) -> str:
