@@ -24,6 +24,12 @@
     @case ('none') {
       <ul class="curation-menu-list" role="menu">
         <li>
+          <button type="button" class="curation-item" role="menuitem" (click)="copyPath()">
+            Copy path
+          </button>
+        </li>
+        <li class="curation-divider" role="separator" aria-hidden="true"></li>
+        <li>
           <button
             type="button"
             class="curation-item"

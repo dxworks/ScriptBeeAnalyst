@@ -30,6 +30,7 @@ import { FormsModule } from '@angular/forms';
 import {
   ComponentColorService,
 } from '../component-color.service';
+import { ToastService } from '../../../../core/services/toast.service';
 
 /** Anchor + context passed to the menu by the page. */
 export interface CurationMenuAnchor {
@@ -100,6 +101,7 @@ export class CurationMenuComponent {
   panelRef!: ElementRef<HTMLDivElement>;
 
   private readonly colorService = inject(ComponentColorService);
+  private readonly toast = inject(ToastService);
 
   /** Targets minus the current bucket (`null` → '(unassigned)' counts too). */
   readonly availableTargets = computed<ComponentChoice[]>(() => {
@@ -136,6 +138,23 @@ export class CurationMenuComponent {
   });
 
   // ── Actions ─────────────────────────────────────────────────────────────
+
+  /**
+   * Copy the anchor's path (file path / compressed folder label / component
+   * name at depth 1) to the system clipboard and close the menu. Surfaces a
+   * toast either way so the user knows it worked — clipboard access is
+   * gated by browser permissions and can throw on a non-secure origin.
+   */
+  async copyPath(): Promise<void> {
+    const path = this.anchor().path;
+    try {
+      await navigator.clipboard.writeText(path);
+      this.toast.success('Path copied to clipboard.');
+    } catch {
+      this.toast.error('Could not copy path. Clipboard access denied.');
+    }
+    this.close.emit();
+  }
 
   pickMoveTo(name: string): void {
     this.moveToExisting.emit({ targetName: name });
