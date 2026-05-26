@@ -34,6 +34,7 @@ from pydantic import BaseModel, ConfigDict
 
 from .kinds import EntityKind
 from .ref import EntityRef
+from .role_ref import collect_role_refs
 
 
 def _entity_reconstruct(cls: type["Entity"], state: dict[str, Any]) -> "Entity":
@@ -257,6 +258,11 @@ class Entity(BaseModel, ABC):
         if getattr(cls, "__entity_abstract__", False):
             return
         _install_ref_resolvers(cls)
+        # UnifiedUsers redesign (§A): collect role-typed account-ref
+        # markers (``account_role_ref`` / ``account_role_refs``) into
+        # the module-level ``AccountRoleRegistry``. Later phases (P3.A,
+        # rebind pass) consume it; this phase only collects.
+        collect_role_refs(cls)
 
     def ref(self) -> EntityRef:
         """Return a typed pointer to this entity."""

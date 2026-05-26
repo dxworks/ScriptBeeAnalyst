@@ -55,6 +55,11 @@ from .index import Index, IndexSpec
 from .kinds import EntityKind
 from .ref import EntityRef
 from .registry import Registry
+from .role_ref import (
+    AccountRoleRegistry,
+    account_role_ref,
+    account_role_refs,
+)
 
 # ``Graph`` is imported LAST because Chunk-8 wired it to import every typed
 # registry up-front (one per domain). Those domain registries import the
@@ -66,6 +71,7 @@ from .registry import Registry
 from .graph import Graph  # noqa: E402
 
 __all__ = [
+    "AccountRoleRegistry",
     "Entity",
     "EntityKind",
     "EntityRef",
@@ -73,4 +79,6 @@ __all__ = [
     "Index",
     "IndexSpec",
     "Registry",
+    "account_role_ref",
+    "account_role_refs",
 ]
