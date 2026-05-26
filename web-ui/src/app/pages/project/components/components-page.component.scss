@@ -8,100 +8,87 @@
   // per-project tabs strip).
   height: calc(100dvh - var(--app-header-height) - var(--project-tabs-height));
   overflow: hidden;
+  // Anchor the floating actions overlay (absolute child) to this container
+  // rather than the layout root.
+  position: relative;
 }
 
-.components-header {
+// ── Floating pending-changes overlay ─────────────────────────────────────
+// Mounted only while `hasPendingChanges()` is true. Pinned top-right of the
+// page so the treemap underneath stays fully reachable; the curation menu
+// is `position: fixed` so it always overlays this card.
+.components-floating-actions {
+  position: absolute;
+  top: var(--spacing-md);
+  right: var(--spacing-md);
+  z-index: 5;
   display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--spacing-md);
-  padding: var(--spacing-lg) var(--spacing-xl);
-  border-bottom: 1px solid var(--color-border);
+  align-items: flex-start;
+  gap: var(--spacing-sm);
+  padding: var(--spacing-sm) var(--spacing-md);
   background-color: var(--color-surface);
-  // Hold the header at its natural height so the "Rebuilding graph…" hint
-  // (which expands the row vertically during a save) eats into the treemap
-  // area rather than pushing it off-screen.
-  flex-shrink: 0;
-}
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-card);
 
-.components-header-titles {
-  display: flex;
-  align-items: baseline;
-  gap: var(--spacing-md);
-
-  h1 {
-    margin: 0;
-    font-size: 1.25rem;
-    font-weight: 600;
-    color: var(--color-text-primary);
+  .save-pill,
+  .discard-pill {
+    border-radius: 999px;
+    padding: 0.4rem 1rem;
+    font-size: 0.85rem;
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
   }
 
-  .project-name {
-    font-size: 0.875rem;
+  // Wrap around the Save button so the "this can take a while" hint can sit
+  // directly under it without disturbing the surrounding flex row. The wrap
+  // stacks vertically; the button stays the same size.
+  .save-pill-wrap {
+    display: inline-flex;
+    flex-direction: column;
+    align-items: flex-end;
+    gap: 0.25rem;
+  }
+
+  .save-pill-hint {
+    font-size: 0.7rem;
+    color: var(--color-text-secondary);
+    white-space: nowrap;
+  }
+
+  .discard-pill {
+    // The discard action is destructive-ish but lightweight — render in the
+    // ghost tone so it doesn't fight the primary Save pill.
     color: var(--color-text-secondary);
   }
-}
 
-.components-header-actions {
-  display: flex;
-  align-items: center;
-  gap: var(--spacing-sm);
-}
+  // Pending-changes count badge. Sits left of the action pills; align with
+  // the button row so the floating card reads as a single horizontal strip
+  // even when the save hint extends the right-hand column downward.
+  .pending-badge {
+    display: inline-flex;
+    align-items: center;
+    align-self: center;
+    padding: 0.2rem 0.55rem;
+    border-radius: 999px;
+    font-size: 0.72rem;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+    background-color: rgba(var(--color-accent-rgb), 0.12);
+    color: var(--color-accent);
+  }
 
-.save-pill,
-.discard-pill {
-  border-radius: 999px;
-  padding: 0.4rem 1rem;
-  font-size: 0.85rem;
-  display: inline-flex;
-  align-items: center;
-  gap: 0.4rem;
-}
-
-// Wrap around the Save button so the "this can take a while" hint can sit
-// directly under it without disturbing the surrounding flex row. The wrap
-// stacks vertically; the button stays the same size.
-.save-pill-wrap {
-  display: inline-flex;
-  flex-direction: column;
-  align-items: flex-end;
-  gap: 0.25rem;
-}
-
-.save-pill-hint {
-  font-size: 0.7rem;
-  color: var(--color-text-secondary);
-  white-space: nowrap;
-}
-
-.discard-pill {
-  // The discard action is destructive-ish but lightweight — render in the
-  // ghost tone so it doesn't fight the primary Save pill.
-  color: var(--color-text-secondary);
-}
-
-// Pending-changes count badge. Sits left of the action pills.
-.pending-badge {
-  display: inline-flex;
-  align-items: center;
-  padding: 0.2rem 0.55rem;
-  border-radius: 999px;
-  font-size: 0.72rem;
-  font-weight: 600;
-  letter-spacing: 0.02em;
-  background-color: rgba(var(--color-accent-rgb), 0.12);
-  color: var(--color-accent);
-}
-
-// Spinner shown inside the Save button while a save is in flight.
-.spinner-inline {
-  display: inline-block;
-  width: 12px;
-  height: 12px;
-  border: 2px solid rgba(255, 255, 255, 0.4);
-  border-top-color: #ffffff;
-  border-radius: 50%;
-  animation: components-spin 0.7s linear infinite;
+  // Spinner shown inside the Save button while a save is in flight.
+  .spinner-inline {
+    display: inline-block;
+    width: 12px;
+    height: 12px;
+    border: 2px solid rgba(255, 255, 255, 0.4);
+    border-top-color: #ffffff;
+    border-radius: 50%;
+    animation: components-spin 0.7s linear infinite;
+  }
 }
 
 // ── Body states ───────────────────────────────────────────────────────────

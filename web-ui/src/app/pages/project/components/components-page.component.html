@@ -1,59 +1,49 @@
 <div class="components-page">
-  <!-- ── Header ─────────────────────────────────────────────────────────── -->
-  <header class="components-header">
-    <div class="components-header-titles">
-      <h1>Components</h1>
-      @if (loadedProjectName(); as name) {
-        <span class="project-name">{{ name }}</span>
-      }
-    </div>
-    <div class="components-header-actions">
-      <!-- Save + Discard pills: visible together when the draft differs
-           from the baseline. The Save button shows a spinner + disabled
-           state during the in-flight rebuild (B3 carry-over: the rebuild
-           blocks the HTTP request server-side, so we have to give the
-           user visible progress). -->
-      @if (hasPendingChanges()) {
-        <span class="pending-badge" aria-live="polite">
-          {{ pendingChangeCount() }} pending change{{ pendingChangeCount() === 1 ? '' : 's' }}
-        </span>
+  <!-- ── Floating actions overlay ────────────────────────────────────────
+       Only mounted while the draft diverges from the baseline. Anchored
+       top-right of the page so the treemap fills the full chrome-less
+       canvas during idle browsing. -->
+  @if (hasPendingChanges()) {
+    <div class="components-floating-actions" role="group" aria-label="Pending changes">
+      <span class="pending-badge" aria-live="polite">
+        {{ pendingChangeCount() }} pending change{{ pendingChangeCount() === 1 ? '' : 's' }}
+      </span>
+      <button
+        type="button"
+        class="btn btn-ghost discard-pill"
+        [disabled]="saveInProgress()"
+        (click)="onDiscardChanges()"
+      >
+        Discard
+      </button>
+      <!-- The rebuild runs server-side on the request thread, so wait times
+           scale with project size (~17 min on Zeppelin). The label widens
+           during the in-flight state and a small subtext sits below to set
+           the right expectation — without it the user reads "Saving…" as
+           a few seconds and thinks the page has hung. -->
+      <div class="save-pill-wrap">
         <button
           type="button"
-          class="btn btn-ghost discard-pill"
+          class="btn btn-primary save-pill"
+          [class.in-progress]="saveInProgress()"
           [disabled]="saveInProgress()"
-          (click)="onDiscardChanges()"
+          (click)="onSaveChanges()"
         >
-          Discard
-        </button>
-        <!-- The rebuild runs server-side on the request thread, so wait times
-             scale with project size (~17 min on Zeppelin). The label widens
-             during the in-flight state and a small subtext sits below to set
-             the right expectation — without it the user reads "Saving…" as
-             a few seconds and thinks the page has hung. -->
-        <div class="save-pill-wrap">
-          <button
-            type="button"
-            class="btn btn-primary save-pill"
-            [class.in-progress]="saveInProgress()"
-            [disabled]="saveInProgress()"
-            (click)="onSaveChanges()"
-          >
-            @if (saveInProgress()) {
-              <span class="spinner-inline" aria-hidden="true"></span>
-              Rebuilding graph…
-            } @else {
-              Save changes
-            }
-          </button>
           @if (saveInProgress()) {
-            <span class="save-pill-hint" aria-live="polite">
-              This can take several minutes for large projects.
-            </span>
+            <span class="spinner-inline" aria-hidden="true"></span>
+            Rebuilding graph…
+          } @else {
+            Save changes
           }
-        </div>
-      }
+        </button>
+        @if (saveInProgress()) {
+          <span class="save-pill-hint" aria-live="polite">
+            This can take several minutes for large projects.
+          </span>
+        }
+      </div>
     </div>
-  </header>
+  }
 
   <!-- ── Body ───────────────────────────────────────────────────────────── -->
   @switch (status()) {
