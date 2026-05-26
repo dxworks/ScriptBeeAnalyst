@@ -41,6 +41,7 @@ from src.smart_merge.types import (
 from src.enrichment.pipeline import PipelineResult, run_pipeline
 from src.graph_store import graph_store
 from src.common.kernel import EntityKind, Graph, MergeState
+from src.common.people import UnifiedUser as TypedUnifiedUser
 from src.common.pickle_store import PickleStore
 from src.common.domains.components.resolver import parse_component_mapping
 from src.supabase_client import get_service_client
@@ -625,6 +626,95 @@ def _get_activity_counts(graph: Graph) -> dict[str, int]:
     return counts
 
 
+def _apply_merge_to_graph(graph: Graph, uu: UnifiedUser) -> None:
+    """Mirror an accepted smart-merge ``UnifiedUser`` onto the typed Graph.
+
+    UnifiedUsers redesign (``unified_users_change.md`` §F): smart-merge
+    apply / apply-batch / replay endpoints used to write only to Supabase
+    and to the in-memory ``state.users`` list. The typed graph side
+    (per-source ``Account.unified_user_id`` back-pointers + the typed
+    :class:`~src.common.people.UnifiedUser` entity in
+    ``graph.unified_users``) was never populated, leaving the rebind pass
+    (P3) with no data.
+
+    This helper closes that gap. For every :class:`SourceIdentity` carried
+    by ``uu``:
+
+    1. Resolve the typed :class:`Account` in the matching domain registry
+       (``git`` → ``graph.git_accounts``, ``github`` → ``graph.github_users``,
+       ``jira`` → ``graph.jira_users``).
+    2. Set ``account.unified_user_id = uu.id`` so the rebind pass finds
+       a value to map.
+    3. Build the typed ``UnifiedUser`` entity (create-or-update) and
+       extend its ``account_refs`` with the freshly resolved accounts'
+       refs, de-duplicated.
+
+    The helper is idempotent: re-applying the same merge (same
+    ``uu.id``, same identities) leaves the graph unchanged. Per the plan
+    §F this runs during ``PRE_MERGE`` only — we do NOT touch
+    ``graph.merge_state`` (that flips at finalize, P4) and we do NOT
+    auto-create UUs for orphan accounts (that's the rebind pass, P3).
+    Accounts that don't resolve are logged and skipped — never crash.
+    """
+    resolved_accounts: list = []
+    for identity in uu.identities:
+        source = identity.source
+        source_key = identity.source_key
+        if source == "git":
+            account = graph.git_accounts.get(source_key)
+        elif source == "github":
+            account = graph.github_users.get(source_key)
+        elif source == "jira":
+            account = graph.jira_users.get(source_key)
+        else:
+            logger.warning(
+                f"_apply_merge_to_graph: unknown identity source "
+                f"{source!r} for unified_user {uu.id} (source_key={source_key!r})"
+            )
+            continue
+
+        if account is None:
+            logger.warning(
+                f"_apply_merge_to_graph: typed account not found in graph "
+                f"for {source}:{source_key} (unified_user {uu.id})"
+            )
+            continue
+
+        account.unified_user_id = uu.id
+        resolved_accounts.append(account)
+
+    # Create-or-update the typed UnifiedUser entity. Subsequent merges
+    # that fold more accounts into an existing UU extend ``account_refs``
+    # rather than replace it. De-dup on extend keeps idempotency intact
+    # when the same merge is replayed (e.g. on /load).
+    existing = graph.unified_users.get(uu.id)
+    if existing is None:
+        graph.unified_users.add(
+            TypedUnifiedUser(
+                id=uu.id,
+                display_name=uu.display_name,
+                primary_email=uu.primary_email,
+                account_refs=[a.ref() for a in resolved_accounts],
+            )
+        )
+        return
+
+    # Update the existing entity in place. ``display_name`` /
+    # ``primary_email`` adopt the latest values from the merge (a later
+    # apply can rename the UU). ``account_refs`` extends with any refs
+    # not already present so we never duplicate.
+    existing.display_name = uu.display_name
+    existing.primary_email = uu.primary_email
+    existing_refs = set(existing.account_refs)
+    new_refs = [a.ref() for a in resolved_accounts if a.ref() not in existing_refs]
+    if new_refs:
+        existing.account_refs = list(existing.account_refs) + new_refs
+    # ``add`` already reindexes on insert; for an in-place mutation of
+    # ``account_refs`` we need to refresh the ``by_account`` multi-index
+    # so reverse lookups see the new bucket entries.
+    graph.unified_users.add(existing)
+
+
 def _replay_user_mappings(project_id: str) -> dict:
     """Replay persisted Supabase user mappings onto the loaded Graph.
 
@@ -675,6 +765,21 @@ def _replay_user_mappings(project_id: str) -> dict:
         )
         user.bind_graph(graph)
         users.append(user)
+
+        # UnifiedUsers redesign §F: rebuilding smart-merge state from
+        # Supabase on /load must also rebuild the typed-graph side of
+        # the merge (per-source ``Account.unified_user_id`` + a typed
+        # ``UnifiedUser`` entity). Without this, a graph reload would
+        # silently lose the typed-graph half — the rebind pass (P3)
+        # would then see un-marked accounts and synthesise singleton UUs
+        # for already-merged identities.
+        try:
+            _apply_merge_to_graph(graph, user)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                f"_apply_merge_to_graph failed during replay for "
+                f"{user.id}: {exc}"
+            )
 
     state.users = users
     logger.info(
@@ -855,6 +960,19 @@ async def apply_author_suggestion(project_id: str, request: ApplySuggestionReque
         state.users.append(user)
         state.invalidate_cache()
 
+        # UnifiedUsers redesign §F: mirror the merge onto the typed graph
+        # (per-source ``Account.unified_user_id`` back-pointers + a typed
+        # ``UnifiedUser`` entity in ``graph.unified_users``). Wrapped in a
+        # try/except so a graph-side hiccup never invalidates the
+        # already-persisted Supabase mapping above.
+        try:
+            _apply_merge_to_graph(graph, user)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                f"_apply_merge_to_graph failed for {user.id} "
+                f"(Supabase mapping was persisted): {exc}"
+            )
+
         # Handle rejected (unselected) identities
         if request.unselected_identity_keys:
             unselected = [
@@ -936,6 +1054,19 @@ async def apply_author_suggestions_batch(project_id: str):
                 identities=user.identities,
             )
             repo.upsert_user_mapping(mapping, project_id)
+
+            # UnifiedUsers redesign §F: mirror the merge onto the typed
+            # graph (per-source ``Account.unified_user_id`` + typed
+            # ``UnifiedUser`` entity). Same try/except shape as the
+            # single-apply path — a graph-side hiccup must not flip the
+            # already-persisted mapping into the ``failures`` bucket.
+            try:
+                _apply_merge_to_graph(graph, user)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    f"_apply_merge_to_graph failed for {user.id} in batch "
+                    f"(Supabase mapping was persisted): {exc}"
+                )
 
             state.users.append(user)
             created_dtos.append(user.to_dict())
