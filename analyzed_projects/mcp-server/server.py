@@ -17,10 +17,13 @@ import sys
 import json
 import logging
 from datetime import datetime
+from enum import Enum
 from pathlib import Path
 
 import httpx
 from mcp.server.fastmcp import FastMCP
+from mcp.shared.exceptions import McpError
+from mcp.types import ErrorData, INVALID_PARAMS
 
 # Log to stderr only - stdout is reserved for MCP JSON-RPC protocol
 logging.basicConfig(stream=sys.stderr, level=logging.INFO)
@@ -30,18 +33,93 @@ DATA_SERVER_URL = os.getenv("DATA_SERVER_URL", "http://localhost:8001")
 OUTPUTS_DIR = Path(os.getenv("OUTPUTS_DIR", "./outputs"))
 TIMEOUT = 60.0
 
+# Sentinel returned by ``get_project_merge_state`` when the data-server
+# is unreachable or no project is loaded — distinct from the two real
+# lifecycle states so the gating helper can produce a clear error.
+_NO_PROJECT = "NO_PROJECT"
+
 mcp = FastMCP(
     "scriptbee-data",
     instructions=(
-        "ScriptBee Data Server tools for querying software project analytics data. "
-        "Call list_metrics() once per session to discover the live catalog of "
-        "classifiers, traits, relations, and overview tables — the catalog reflects "
-        "the source code, so every metric (including newly-added ones) is listed. "
-        "Use execute_code to run Python against the loaded project graph. "
-        "Use generate_plot for matplotlib visualizations. "
-        "Always check get_project_status first to see if a project is loaded."
+        "ScriptBee Data Server. Projects have two lifecycle stages: "
+        "PRE_MERGE (setup — author matching, enrichment thresholds, filter rules) "
+        "and FINALIZED (query — code execution, plots, metrics, overviews). "
+        "Always call get_project_status FIRST to learn the current stage; "
+        "the tool surface differs per stage. See instructions/setup.md for "
+        "PRE_MERGE guidance and instructions/compass.md for FINALIZED."
     ),
 )
+
+
+# ---------------------------------------------------------------------------
+# Lifecycle-state gating (UnifiedUsers redesign §I / task P5.B)
+#
+# Every tool below declares which stage it is callable in. The gate is
+# checked at the top of the tool body by calling ``_require_state``. We
+# deliberately refetch the merge_state per call (no caching) — the cost
+# is one cheap GET against ``/projects/current`` and the explicit
+# refresh avoids stale-state foot-guns when the agent finalises mid-run.
+# ---------------------------------------------------------------------------
+
+
+class _Stage(str, Enum):
+    PRE_MERGE = "PRE_MERGE"
+    FINALIZED = "FINALIZED"
+
+
+async def get_project_merge_state() -> str:
+    """Fetch the current project's ``merge_state`` from the data-server.
+
+    Returns one of ``"PRE_MERGE"`` / ``"FINALIZED"`` / ``"NO_PROJECT"``.
+    A transport failure also surfaces as ``"NO_PROJECT"`` so the gating
+    helper can produce a single, uniform "load a project first" message
+    rather than a stack trace.
+    """
+    async with httpx.AsyncClient(timeout=TIMEOUT) as client:
+        try:
+            resp = await client.get(f"{DATA_SERVER_URL}/projects/current")
+        except httpx.ConnectError:
+            return _NO_PROJECT
+    if resp.status_code != 200:
+        return _NO_PROJECT
+    body = resp.json()
+    if not body.get("loaded"):
+        return _NO_PROJECT
+    # The data-server surfaces ``merge_state`` on the loaded body (P5.B
+    # change). Fall through to ``PRE_MERGE`` if an older data-server
+    # build is talking back — keeps the MCP forward-compatible.
+    return body.get("merge_state") or _Stage.PRE_MERGE.value
+
+
+def _recovery_hint(current: str, expected: _Stage) -> str:
+    if current == _NO_PROJECT:
+        return "Load a project first with load_project(project_id=...)."
+    if current == _Stage.PRE_MERGE.value and expected == _Stage.FINALIZED:
+        return "Call finalize_project() to switch the project into query mode."
+    if current == _Stage.FINALIZED.value and expected == _Stage.PRE_MERGE:
+        return "The project is finalized; re-import to redo setup."
+    return ""
+
+
+async def _require_state(expected: _Stage) -> None:
+    """Refuse the call if the current project's ``merge_state`` doesn't match.
+
+    Raises :class:`McpError` with a recovery-hint message the LLM can
+    use to decide its next tool call (load_project / finalize_project /
+    re-import).
+    """
+    current = await get_project_merge_state()
+    if current != expected.value:
+        raise McpError(
+            ErrorData(
+                code=INVALID_PARAMS,
+                message=(
+                    f"This tool requires merge_state={expected.value}, "
+                    f"but the project is in {current}. "
+                    f"{_recovery_hint(current, expected)}"
+                ).strip(),
+            )
+        )
 
 
 @mcp.tool()
@@ -79,6 +157,7 @@ async def execute_code(code: str) -> str:
     Returns:
         The stdout output from execution, or an error message with traceback.
     """
+    await _require_state(_Stage.FINALIZED)
     async with httpx.AsyncClient(timeout=TIMEOUT) as client:
         try:
             resp = await client.post(
@@ -115,6 +194,7 @@ async def generate_plot(code: str) -> str:
     Returns:
         Path to the saved JPEG image, or an error message.
     """
+    await _require_state(_Stage.FINALIZED)
     async with httpx.AsyncClient(timeout=TIMEOUT) as client:
         try:
             resp = await client.post(
@@ -153,9 +233,15 @@ async def get_project_status() -> str:
 
     if resp.status_code == 200:
         data = resp.json()
+        # ``/projects/current`` always returns 200; the no-load case is
+        # ``loaded=False`` in the body (per data-server behaviour).
+        if not data.get("loaded"):
+            return "No project currently loaded. Use load_project with a project UUID."
         stats = data.get("stats", {})
+        merge_state = data.get("merge_state", "PRE_MERGE")
         return (
             f"Project loaded: {data.get('project_id')}\n"
+            f"  merge_state: {merge_state}\n"
             f"  Git commits: {stats.get('git_commits', 0)}\n"
             f"  JIRA issues: {stats.get('jira_issues', 0)}\n"
             f"  GitHub PRs:  {stats.get('github_prs', 0)}"
@@ -186,6 +272,7 @@ async def list_anomalies(
         list with an `error` key on failure. Each tag has `entity_kind`,
         `entity_id`, `classifiers`, and `traits`.
     """
+    await _require_state(_Stage.FINALIZED)
     params: dict = {}
     if trait_name is not None:
         params["trait"] = trait_name
@@ -227,6 +314,7 @@ async def get_overview_table(name: str) -> dict:
         Dict with `name`, `columns` (logical column names from the header), and
         `rows` (list of row dicts). Returns `{"error": ...}` on failure.
     """
+    await _require_state(_Stage.FINALIZED)
     async with httpx.AsyncClient(timeout=TIMEOUT) as client:
         try:
             resp = await client.get(f"{DATA_SERVER_URL}/enrichments/overviews/{name}.csv")
@@ -285,6 +373,7 @@ async def get_relation_edges(
         List of `{"source": str, "target": str, "strength": float}`, capped at
         `limit`. Returns `[{"error": ...}]` on failure.
     """
+    await _require_state(_Stage.FINALIZED)
     async with httpx.AsyncClient(timeout=TIMEOUT) as client:
         try:
             resp = await client.get(
@@ -357,6 +446,7 @@ async def list_metrics() -> dict:
       - `overviews`: [name, ...] — every registered overview table.
       - `counts`: per-category totals.
     """
+    await _require_state(_Stage.FINALIZED)
     snippet = (
         "import json; "
         "print(json.dumps({"
@@ -393,6 +483,7 @@ async def list_file_metrics(min_loc: float = 0.0, limit: int = 100) -> dict:
         (list of {file_path, source, sum_nloc, max_ccn, avg_ccn,
         function_count, longest_function_nloc}).
     """
+    await _require_state(_Stage.FINALIZED)
     snippet = (
         f"import json; "
         f"print(json.dumps("
@@ -418,6 +509,7 @@ async def get_code_structure_summary() -> dict:
     to discover whether structural relations (calls.file-file,
     coupling.file-file, etc.) are available before querying them.
     """
+    await _require_state(_Stage.FINALIZED)
     snippet = "import json; print(json.dumps(graph_data.code_structure_summary()))"
     output = await _execute_helper(snippet)
     if output.startswith("__ERROR__:"):
@@ -438,6 +530,7 @@ async def get_duplication_summary() -> dict:
     whether duplication relations (`duplication.file-file.external`,
     `.sibling`, `.internal-summary`) are available before querying them.
     """
+    await _require_state(_Stage.FINALIZED)
     snippet = "import json; print(json.dumps(graph_data.duplication_summary()))"
     output = await _execute_helper(snippet)
     if output.startswith("__ERROR__:"):
@@ -461,6 +554,7 @@ async def get_quality_issues_summary() -> dict:
     occurrence count (Insider's `value`); the `category_breakdown` field
     rolls those counts up by rule family (Inheritance / Traceability / ...).
     """
+    await _require_state(_Stage.FINALIZED)
     async with httpx.AsyncClient(timeout=TIMEOUT) as client:
         try:
             resp = await client.get(
@@ -634,6 +728,366 @@ async def load_project(project_id: str) -> str:
         return f"Error: {error}"
     else:
         return f"Unexpected response ({resp.status_code}): {resp.text}"
+
+
+# ---------------------------------------------------------------------------
+# PRE_MERGE-only tools (UnifiedUsers redesign §I, task P5.B).
+#
+# Thin wrappers around existing data-server endpoints. Each gate refuses
+# the call if the project is already FINALIZED — re-import is the only
+# way back into setup. Tools whose data-server endpoint does NOT exist
+# yet are stubbed with a precise error message naming the missing route;
+# they are flagged for the P6 follow-up.
+# ---------------------------------------------------------------------------
+
+
+@mcp.tool()
+async def list_author_suggestions(min_score: float = 0.0) -> list[dict]:
+    """List smart-merge author suggestions for the loaded project.
+
+    Wraps ``GET /projects/{id}/authors/suggestions`` on the data-server.
+    Each suggestion clusters identities (GitAccount / JiraUser /
+    GitHubUser) that are likely the same person; apply them with
+    ``apply_author_merge`` or reject with ``reject_author_pair``.
+
+    Args:
+        min_score: Filter out suggestions with a confidence below this
+            threshold (the data-server scoring is in [0.0, 1.0]).
+
+    Returns:
+        List of suggestion dicts as returned by the data-server (each
+        with ``suggestion_id``, ``identities``, ``confidence``, ...).
+        Returns ``[{"error": ...}]`` on transport / server failure.
+    """
+    await _require_state(_Stage.PRE_MERGE)
+
+    pid = await _resolve_current_project_id()
+    if pid.startswith("__ERROR__:"):
+        return [{"error": pid[len("__ERROR__:"):]}]
+
+    async with httpx.AsyncClient(timeout=TIMEOUT) as client:
+        try:
+            resp = await client.get(
+                f"{DATA_SERVER_URL}/projects/{pid}/authors/suggestions",
+            )
+        except httpx.ConnectError:
+            return [{"error": f"Cannot connect to data-server at {DATA_SERVER_URL}"}]
+
+    if resp.status_code != 200:
+        return [{"error": f"HTTP {resp.status_code}: {resp.text}"}]
+
+    body = resp.json()
+    suggestions = body.get("suggestions", [])
+    if min_score > 0.0:
+        suggestions = [
+            s for s in suggestions
+            if float(s.get("confidence", 0.0)) >= min_score
+        ]
+    return suggestions
+
+
+@mcp.tool()
+async def apply_author_merge(
+    suggestion_id: str,
+    display_name: str,
+    primary_email: str | None = None,
+) -> dict:
+    """Apply a smart-merge author suggestion.
+
+    Wraps ``POST /projects/{id}/authors/suggestions/apply``. Creates a
+    UnifiedUser from EVERY identity in the suggestion (no per-identity
+    deselection — call ``list_author_suggestions`` again afterwards to
+    see what's left). To do partial merges, use the web UI.
+
+    Args:
+        suggestion_id: id returned by ``list_author_suggestions``.
+        display_name: Canonical name to attach to the new UnifiedUser.
+        primary_email: Optional canonical email (None falls through to
+            the suggestion's default).
+
+    Returns:
+        The created UnifiedUser dict on success, or ``{"error": ...}``.
+    """
+    await _require_state(_Stage.PRE_MERGE)
+
+    pid = await _resolve_current_project_id()
+    if pid.startswith("__ERROR__:"):
+        return {"error": pid[len("__ERROR__:"):]}
+
+    # We have to re-fetch the suggestion to know which identity keys it
+    # contains, because the server's /apply endpoint expects the keys
+    # explicitly. The suggestions cache is keyed by suggestion_id on
+    # the server side.
+    async with httpx.AsyncClient(timeout=TIMEOUT) as client:
+        try:
+            list_resp = await client.get(
+                f"{DATA_SERVER_URL}/projects/{pid}/authors/suggestions",
+            )
+        except httpx.ConnectError:
+            return {"error": f"Cannot connect to data-server at {DATA_SERVER_URL}"}
+    if list_resp.status_code != 200:
+        return {"error": f"Could not refresh suggestions (HTTP {list_resp.status_code})"}
+    suggestions = list_resp.json().get("suggestions", [])
+    target = next(
+        (s for s in suggestions if s.get("suggestion_id") == suggestion_id),
+        None,
+    )
+    if target is None:
+        return {"error": f"Suggestion {suggestion_id!r} not found in current cache."}
+
+    # Identity dicts ship `source` + `source_key`; the globally-unique
+    # key the server's apply endpoint expects is "<source>:<source_key>"
+    # (see SourceIdentity.key on the data-server).
+    selected_keys = [
+        f"{i.get('source')}:{i.get('source_key')}"
+        for i in target.get("identities", [])
+        if i.get("source") and i.get("source_key")
+    ]
+    if len(selected_keys) < 2:
+        return {"error": "Suggestion has fewer than 2 identities; nothing to merge."}
+
+    payload = {
+        "suggestion_id": suggestion_id,
+        "selected_identity_keys": selected_keys,
+        "unselected_identity_keys": [],
+        "name": display_name,
+        "email": primary_email or "unknown@unknown",
+    }
+
+    async with httpx.AsyncClient(timeout=TIMEOUT) as client:
+        try:
+            resp = await client.post(
+                f"{DATA_SERVER_URL}/projects/{pid}/authors/suggestions/apply",
+                json=payload,
+            )
+        except httpx.ConnectError:
+            return {"error": f"Cannot connect to data-server at {DATA_SERVER_URL}"}
+
+    if resp.status_code != 200:
+        return {"error": f"HTTP {resp.status_code}: {resp.text}"}
+    return resp.json()
+
+
+@mcp.tool()
+async def reject_author_pair(pair_id: str) -> dict:
+    """Reject a smart-merge author suggestion.
+
+    Wraps ``POST /projects/{id}/authors/suggestions/reject``. ``pair_id``
+    is the suggestion_id from ``list_author_suggestions`` — every
+    pairwise combination of identities in that suggestion is recorded
+    as rejected so the suggestion does not reappear on future scans.
+
+    Returns:
+        The data-server response dict, or ``{"error": ...}``.
+    """
+    await _require_state(_Stage.PRE_MERGE)
+
+    pid = await _resolve_current_project_id()
+    if pid.startswith("__ERROR__:"):
+        return {"error": pid[len("__ERROR__:"):]}
+
+    # Re-fetch to extract identity_keys; the reject endpoint expects them.
+    async with httpx.AsyncClient(timeout=TIMEOUT) as client:
+        try:
+            list_resp = await client.get(
+                f"{DATA_SERVER_URL}/projects/{pid}/authors/suggestions",
+            )
+        except httpx.ConnectError:
+            return {"error": f"Cannot connect to data-server at {DATA_SERVER_URL}"}
+    if list_resp.status_code != 200:
+        return {"error": f"Could not refresh suggestions (HTTP {list_resp.status_code})"}
+    suggestions = list_resp.json().get("suggestions", [])
+    target = next(
+        (s for s in suggestions if s.get("suggestion_id") == pair_id),
+        None,
+    )
+    if target is None:
+        return {"error": f"Suggestion {pair_id!r} not found in current cache."}
+
+    identity_keys = [
+        f"{i.get('source')}:{i.get('source_key')}"
+        for i in target.get("identities", [])
+        if i.get("source") and i.get("source_key")
+    ]
+    if len(identity_keys) < 2:
+        return {"error": "Suggestion has fewer than 2 identities; nothing to reject."}
+
+    async with httpx.AsyncClient(timeout=TIMEOUT) as client:
+        try:
+            resp = await client.post(
+                f"{DATA_SERVER_URL}/projects/{pid}/authors/suggestions/reject",
+                json={"identity_keys": identity_keys},
+            )
+        except httpx.ConnectError:
+            return {"error": f"Cannot connect to data-server at {DATA_SERVER_URL}"}
+
+    if resp.status_code != 200:
+        return {"error": f"HTTP {resp.status_code}: {resp.text}"}
+    return resp.json()
+
+
+@mcp.tool()
+async def unmerge(unified_user_id: str) -> dict:
+    """Undo a smart-merge by deleting a UnifiedUser.
+
+    STUB — the MCP wrapper is in place but the dedicated unmerge
+    endpoint does NOT exist yet. The closest data-server route is
+    ``DELETE /projects/{id}/authors/users/{unified_user_id}`` which
+    deletes the user mapping outright; calling it from the MCP layer
+    today would leave the surrounding state in an inconsistent shape
+    (the graph-side mirror, rejected-pair history, etc. are not
+    handled). Flagged for P6.
+
+    Recovery in the meantime: from the web UI, the operator can call
+    ``DELETE /projects/{id}/authors/users`` (delete-all) and re-run
+    author matching, or re-import the project.
+
+    Args:
+        unified_user_id: The UU id to unmerge.
+
+    Returns:
+        Always an error dict — this tool never succeeds in P5.B.
+    """
+    await _require_state(_Stage.PRE_MERGE)
+    return {
+        "error": (
+            "unmerge is not yet implemented in the MCP layer. The "
+            "data-server has a delete endpoint at "
+            "DELETE /projects/{id}/authors/users/{unified_user_id} but it "
+            "does not yet handle the full unmerge contract (rejected-pair "
+            "history, graph mirror cleanup). Reset author matching from the "
+            "web UI or re-import the project. Flagged for task P6."
+        )
+    }
+
+
+@mcp.tool()
+async def get_enrichment_config() -> dict:
+    """Read the per-project enrichment-config overrides.
+
+    Wraps ``GET /projects/{id}/config-overrides`` on the data-server.
+    Returns the bundled catalogue (every editable field with its
+    default + current effective value) and the persisted overrides
+    dict. Use ``set_enrichment_threshold`` to change a single value.
+
+    Returns:
+        Dict with ``catalogue``, ``overrides``, and ``updated_at``; or
+        ``{"error": ...}`` on failure.
+    """
+    await _require_state(_Stage.PRE_MERGE)
+
+    pid = await _resolve_current_project_id()
+    if pid.startswith("__ERROR__:"):
+        return {"error": pid[len("__ERROR__:"):]}
+
+    async with httpx.AsyncClient(timeout=TIMEOUT) as client:
+        try:
+            resp = await client.get(
+                f"{DATA_SERVER_URL}/projects/{pid}/config-overrides",
+            )
+        except httpx.ConnectError:
+            return {"error": f"Cannot connect to data-server at {DATA_SERVER_URL}"}
+
+    if resp.status_code != 200:
+        return {"error": f"HTTP {resp.status_code}: {resp.text}"}
+    return resp.json()
+
+
+@mcp.tool()
+async def set_enrichment_threshold(key: str, value) -> dict:  # noqa: ANN001
+    """Set a single per-project enrichment-config override.
+
+    Wraps ``PUT /projects/{id}/config-overrides``. The PUT endpoint
+    REPLACES the entire overrides dict, so this tool reads the existing
+    overrides first, sets / overrides ``key``, then writes back.
+
+    Args:
+        key: An editable EnrichmentConfig field name (see
+            ``get_enrichment_config().catalogue`` for the live list).
+        value: The new value. Scalars (int / float / str / bool) are
+            sent as-is. Composite shapes (lists of buckets, regex maps)
+            must already be in the catalogue's storage shape.
+
+    Returns:
+        The updated row envelope (``{"overrides": ..., "updated_at": ...}``)
+        on success, or ``{"error": ...}``.
+    """
+    await _require_state(_Stage.PRE_MERGE)
+
+    pid = await _resolve_current_project_id()
+    if pid.startswith("__ERROR__:"):
+        return {"error": pid[len("__ERROR__:"):]}
+
+    async with httpx.AsyncClient(timeout=TIMEOUT) as client:
+        try:
+            get_resp = await client.get(
+                f"{DATA_SERVER_URL}/projects/{pid}/config-overrides",
+            )
+        except httpx.ConnectError:
+            return {"error": f"Cannot connect to data-server at {DATA_SERVER_URL}"}
+    if get_resp.status_code != 200:
+        return {"error": f"Could not read current overrides (HTTP {get_resp.status_code})"}
+
+    overrides = dict(get_resp.json().get("overrides") or {})
+    overrides[key] = value
+
+    async with httpx.AsyncClient(timeout=TIMEOUT) as client:
+        try:
+            put_resp = await client.put(
+                f"{DATA_SERVER_URL}/projects/{pid}/config-overrides",
+                json={"overrides": overrides},
+            )
+        except httpx.ConnectError:
+            return {"error": f"Cannot connect to data-server at {DATA_SERVER_URL}"}
+
+    if put_resp.status_code != 200:
+        return {"error": f"HTTP {put_resp.status_code}: {put_resp.text}"}
+    return put_resp.json()
+
+
+@mcp.tool()
+async def finalize_project() -> dict:
+    """Finalize the loaded project: PRE_MERGE → FINALIZED.
+
+    Wraps ``POST /projects/{id}/finalize``. One-way transition:
+    auto-creates singleton UnifiedUsers for orphan accounts, rewrites
+    every role-typed account ref to target UNIFIED_USER, re-runs the
+    people-side enrichment phase, and persists the new state. After
+    this call, the PRE_MERGE-only tools (author matching, enrichment
+    config, finalize itself) are refused, and the FINALIZED-only
+    exploration tools (execute_code, generate_plot, list_metrics, ...)
+    become available.
+
+    To redo author matching or enrichment thresholds after finalize,
+    re-import the project — there is no inverse.
+
+    Returns:
+        The data-server's finalize summary on success
+        (``merge_state``, ``unified_users_created``, ``refs_rewritten``,
+        ``phase_b_relations_built``, ``duration_ms``, ...), or
+        ``{"error": ...}``.
+    """
+    await _require_state(_Stage.PRE_MERGE)
+
+    pid = await _resolve_current_project_id()
+    if pid.startswith("__ERROR__:"):
+        return {"error": pid[len("__ERROR__:"):]}
+
+    async with httpx.AsyncClient(timeout=TIMEOUT) as client:
+        try:
+            resp = await client.post(
+                f"{DATA_SERVER_URL}/projects/{pid}/finalize",
+            )
+        except httpx.ConnectError:
+            return {"error": f"Cannot connect to data-server at {DATA_SERVER_URL}"}
+
+    if resp.status_code != 200:
+        try:
+            payload = resp.json()
+        except Exception:  # noqa: BLE001
+            payload = {"error": resp.text}
+        return {"error": f"HTTP {resp.status_code}: {json.dumps(payload)}"}
+    return resp.json()
 
 
 if __name__ == "__main__":
