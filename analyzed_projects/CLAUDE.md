@@ -6,15 +6,12 @@ all linked together in an in-memory graph structure.
 
 ## MCP Tools Available
 
-The available tools depend on the project's lifecycle stage (SETUP vs
-QUERY). See `instructions/setup.md` and `instructions/compass.md`.
-
 You have 12 tools from the `scriptbee-data` MCP server. The four
 `list_metrics` / `list_file_metrics` / `get_code_structure_summary` /
-`get_duplication_summary` tools route through `/execute` against the
-sandbox view (per the Chunk 20 rewrite — the legacy
+`get_duplication_summary` tools route through `/execute` against
+`MCPSandboxView` (per the Chunk 20 rewrite — the legacy
 `/enrichments/*` REST endpoints were deleted in Chunk 10 and are NOT
-restored). Every tool below is live in its applicable stage.
+restored). Every tool below is live.
 
 | Tool | Purpose |
 |------|---------|
@@ -48,14 +45,10 @@ All 11 overviews can be fetched via `get_overview_table(name)` or
 4. **Query data**: write Python code using `graph_data` dict and call `execute_code`
 5. **Visualize**: write matplotlib code and call `generate_plot`
 
-## Quick Reference (Query stage)
-
-The examples below assume the project is finalized
-(`merge_state=FINALIZED`) — see `instructions/setup.md` for the
-setup-stage surface.
+## Quick Reference
 
 ```python
-# `graph_data` is a single QuerySandboxView over the typed v2 Graph.
+# `graph_data` is a single MCPSandboxView over the typed v2 Graph.
 # The four main entity surfaces are exposed directly as registries —
 # no more dict-of-projects.
 
@@ -68,28 +61,6 @@ commit = graph_data.commits.get("abc123")
 issue  = graph_data.issues.get("PROJ-42")
 pr     = graph_data.pull_requests.get("17")     # PR ids are strings in v2
 file   = graph_data.files.get("src/app.py")
-
-# People — every role-typed ref targets a UnifiedUser after finalize.
-# Reverse resolvers on UnifiedUser use verbose `<plural>_as_<role>`
-# naming and read O(1) off the registry indexes.
-for uu in graph_data.unified_users.all():
-    commits = uu.commits_as_author(graph_data)
-    prs_authored = uu.pull_requests_as_author(graph_data)
-    prs_merged   = uu.pull_requests_as_merged_by(graph_data)
-    issues       = uu.issues_as_reporter(graph_data)
-    print(uu.display_name, len(commits), len(prs_authored), len(prs_merged))
-
-# Forward resolvers — entity -> person
-author   = commit.author(graph_data)          # UnifiedUser | None
-merger   = pr.merged_by(graph_data)           # UnifiedUser | None
-reporter = issue.reporter(graph_data)         # UnifiedUser | None
-assignees = pr.assignees(graph_data)          # list[UnifiedUser]
-
-# Raw provenance — only when the user explicitly asks about a platform
-# (e.g. "how many distinct GitHub logins?"). Otherwise use the verbose
-# reverse resolvers above and ignore per-source accounts.
-gh_logins  = [gh.login for gh in uu.github_users(graph_data)]
-git_emails = [g.email for g in uu.git_accounts(graph_data)]
 
 # Cross-entity navigation — entities are sealed data models, so the
 # legacy `commit.issues` shape moved to free helper functions that
@@ -140,11 +111,8 @@ this file. Use `list_metrics` to discover what exists, then `Read` the
 
 See the `instructions/` folder for the entry-point and pattern recipes:
 
-- `setup.md` — setup-stage briefing (filter rules, author matching,
-  enrichment thresholds, finalize). Read this first when
-  `merge_state=PRE_MERGE`.
-- `compass.md` — query-stage briefing (UnifiedUser API, exploration
-  sandbox). Read this first when `merge_state=FINALIZED`.
+- `compass.md` — what kind of agent you are, where things live, how to answer
+  metric questions. Read this first.
 - `query-examples.txt` — worked-example queries against the graph and
   enrichment layer.
 - `plot-patterns.txt` — matplotlib visualization patterns.
