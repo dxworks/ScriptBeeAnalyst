@@ -354,3 +354,165 @@ class TestFinalizeErrorPaths:
         response = patched_server.post(f"/projects/{project_id}/finalize")
         assert response.status_code == 404
         assert "not loaded" in response.json()["error"].lower()
+
+
+# ---------------------------------------------------------------------------
+# Round-trip through /load — confirms §M persistence contract
+# ---------------------------------------------------------------------------
+class _RoundTripExec:
+    def __init__(self, recorder: list, payload, eq_filter: tuple) -> None:
+        self._recorder = recorder
+        self._payload = payload
+        self._eq_filter = eq_filter
+
+    def execute(self):
+        self._recorder.append({
+            "filter": self._eq_filter,
+            "payload": dict(self._payload) if self._payload is not None else None,
+        })
+        class _Resp:
+            data: list = []
+        return _Resp()
+
+
+class _RoundTripUpdate:
+    def __init__(self, recorder: list, payload: dict) -> None:
+        self._recorder = recorder
+        self._payload = payload
+
+    def eq(self, col: str, val):
+        return _RoundTripExec(self._recorder, self._payload, (col, val))
+
+
+class _RoundTripSelect:
+    """Mimics ``.select(...).eq(col, val).single().execute()`` returning a
+    row dict the load path expects.
+    """
+
+    def __init__(self, recorder: list, row: dict) -> None:
+        self._recorder = recorder
+        self._row = row
+        self._eq_filter: tuple = ()
+
+    def eq(self, col: str, val):
+        self._eq_filter = (col, val)
+        return self
+
+    def single(self):
+        return self
+
+    def execute(self):
+        self._recorder.append({"filter": self._eq_filter, "select": True})
+
+        class _Resp:
+            pass
+
+        r = _Resp()
+        r.data = self._row
+        return r
+
+
+class _RoundTripTable:
+    def __init__(self, recorder: list, row_store: dict, name: str) -> None:
+        self._recorder = recorder
+        self._row_store = row_store
+        self._name = name
+
+    def update(self, payload: dict) -> _RoundTripUpdate:
+        # Mirror the update onto the shared row store so a subsequent
+        # select picks the new ``merge_state`` up.
+        for k, v in payload.items():
+            self._row_store[k] = v
+        return _RoundTripUpdate(self._recorder, payload)
+
+    def select(self, _cols: str) -> _RoundTripSelect:
+        return _RoundTripSelect(self._recorder, dict(self._row_store))
+
+
+class _RoundTripSupabaseClient:
+    """Stub that round-trips ``merge_state`` between /finalize's update
+    and /load's select against an in-process row dict.
+    """
+
+    def __init__(self, project_id: str, name: str = "test-finalize") -> None:
+        self.writes: list = []
+        self.row: dict = {
+            "id": project_id,
+            "name": name,
+            "status": "ready",
+            "merge_state": MergeState.PRE_MERGE.value,
+        }
+
+    def table(self, name: str) -> _RoundTripTable:
+        return _RoundTripTable(self.writes, self.row, name)
+
+
+class TestFinalizeRoundTripThroughLoad:
+    """End-to-end §M check: /finalize writes ``merge_state=FINALIZED`` to
+    Supabase, then /load reads it back onto a fresh in-memory Graph.
+    """
+
+    def test_finalize_then_load_restores_finalized_state(
+        self, monkeypatch, pre_merge_graph, project_id, tmp_path
+    ):
+        from fastapi.testclient import TestClient
+        from src import server
+        from src import processor as v2_processor
+        from src.graph_store import graph_store
+        from src.smart_merge.state_store import smart_merge_state_store
+
+        # Shared stub Supabase client — patches BOTH the
+        # ``get_service_client`` factory (used by /finalize) AND the
+        # direct ``create_client`` call (used by /load).
+        stub = _RoundTripSupabaseClient(project_id)
+        monkeypatch.setattr(server, "get_service_client", lambda: stub)
+        monkeypatch.setattr(server, "create_client", lambda *_a, **_kw: stub)
+
+        # Redirect pickle dumps + reads to a tmp dir so /finalize's
+        # ``save_graph_to_disk`` and /load's ``load_graph_v2_from_disk``
+        # share the same on-disk location.
+        pickle_dir = tmp_path / "pickles"
+        pickle_dir.mkdir()
+        monkeypatch.setattr(
+            v2_processor,
+            "_project_pickle_dir",
+            lambda pid: pickle_dir / pid,
+        )
+
+        graph_store.set(project_id, pre_merge_graph)
+        smart_merge_state_store.reset(project_id)
+        server.current_project_id = project_id
+        server.current_project_name = "test-finalize"
+
+        try:
+            client = TestClient(server.app)
+
+            # ----- 1. Finalize -----
+            fin_resp = client.post(f"/projects/{project_id}/finalize")
+            assert fin_resp.status_code == 200, fin_resp.text
+            assert fin_resp.json()["merge_state"] == MergeState.FINALIZED.value
+
+            # Supabase row reflects FINALIZED + carries a frozen config.
+            assert stub.row["merge_state"] == MergeState.FINALIZED.value
+            assert isinstance(stub.row.get("enrichment_config_frozen"), dict)
+
+            # The on-disk pickle directory was re-dumped.
+            assert (pickle_dir / project_id).exists()
+
+            # ----- 2. Drop the in-memory graph + load fresh -----
+            graph_store.delete(project_id)
+            smart_merge_state_store.delete(project_id)
+
+            load_resp = client.post(f"/projects/{project_id}/load")
+            assert load_resp.status_code == 200, load_resp.text
+
+            # The freshly loaded Graph carries FINALIZED state from
+            # Supabase (the row is the source of truth per §M).
+            reloaded = graph_store.get(project_id)
+            assert reloaded is not None
+            assert reloaded.merge_state == MergeState.FINALIZED
+        finally:
+            graph_store.delete(project_id)
+            smart_merge_state_store.delete(project_id)
+            server.current_project_id = None
+            server.current_project_name = None

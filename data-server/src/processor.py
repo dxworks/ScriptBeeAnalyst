@@ -90,23 +90,18 @@ from src.supabase_client import get_service_client
 from src.enrichment.metrics.implementations.component_resolver import (
     build_components_from_relations,
 )
-from src.enrichment.pipeline import PipelineResult, run_pipeline
-# UnifiedUsers redesign §H (task P4.A): per the design, /build should run
-# Phase A only and Phase B should move to the /finalize endpoint. For this
-# commit we keep the build path on the back-compat ``run_pipeline`` alias
-# (= Phase A + Phase B in one pass) to avoid churning the existing test
-# suite (e.g. ``tests/chunk_08`` asserts on the full builder/metric catalog
-# at build time, and the smart-merge endpoints expect ``authorship`` /
-# ``knowledge`` overviews + ``coauthor`` / ``ownership`` relations to be
-# present immediately after /build). The /finalize endpoint re-runs ONLY
-# Phase B against the rebound graph so the people-side relations / metrics
-# / overviews are re-keyed on ``UNIFIED_USER`` refs.
-#
-# TODO(P6): flip ``build_graph_from_bundles`` below to call
-# ``run_pipeline_phase_a`` and update the affected tests to invoke
-# ``run_pipeline_phase_b`` explicitly in their fixtures once the
-# end-to-end Zeppelin verification (Phase 6) confirms no other consumer
-# depends on the build-time Phase B outputs.
+from src.enrichment.pipeline import PipelineResult, run_pipeline_phase_a
+# UnifiedUsers redesign §H (task P4.A): /build runs Phase A only —
+# Phase B is the /finalize endpoint's job. Running Phase B at build
+# would emit relations / classifiers / traits keyed on GIT_ACCOUNT refs;
+# /finalize would then re-run Phase B against the rebound graph and emit
+# the same items keyed on UNIFIED_USER refs. Because
+# ``Relation.canonical_id`` (and the Classifier / Trait id mints)
+# include the source / target ``kind`` in the hash, both copies would
+# survive in the registries — agent queries post-finalize would see
+# duplicate edges keyed on stale per-source accounts and stale
+# UU-keyed ones. Skipping Phase B at build avoids the duplication and
+# matches the strict §H end-state.
 from src.logger import get_logger
 
 logger = get_logger("processor")
@@ -253,7 +248,11 @@ def build_graph_from_bundles(
             result = transformer.transform(bundle)
             apply_transform_result(graph, result)
 
-    pipeline_result = run_pipeline(graph, config)
+    # UnifiedUsers redesign §H — Phase A only at build. Phase B runs in
+    # ``POST /projects/{id}/finalize`` after ``rebind_account_refs_to_unified``
+    # has flipped role-typed refs to UNIFIED_USER kind. See the module-level
+    # import comment for the duplicate-id rationale.
+    pipeline_result = run_pipeline_phase_a(graph, config)
     # Populate graph.components from the component_membership relations
     # emitted by ComponentResolverMetric. Must run AFTER run_pipeline:
     # the Metric ABC's purity contract forbids registry mutations from

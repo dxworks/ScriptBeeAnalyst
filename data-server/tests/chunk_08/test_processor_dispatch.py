@@ -255,11 +255,18 @@ def test_dispatch_multiple_sources_share_one_graph():
 # ---------------------------------------------------------------------------
 
 
-def test_build_graph_from_bundles_runs_pipeline_with_full_catalog():
+def test_build_graph_from_bundles_runs_phase_a_only():
     """End-to-end: feed a multi-source bundle to
-    :func:`build_graph_from_bundles` and assert the pipeline attempted
-    every registered builder + metric (≥25 + ≥14, per the Chunk-7
-    autoload contract).
+    :func:`build_graph_from_bundles` and assert the Phase-A half of the
+    pipeline attempted every non-people builder + metric.
+
+    UnifiedUsers redesign §H (task P4.A): /build runs Phase A only.
+    Phase B (people-side: ``coauthor`` / ``ownership`` / ``pr.reviewer``
+    / cochange-author-* / ``author.classifiers`` / ``anomaly.knowledge``
+    / ``anomaly.cohesion`` / ``anomaly.structuring``) moves to the
+    /finalize endpoint where it runs against the rebound graph. The
+    expected attempted counts here are the Phase A half of the catalog
+    (≥18 builders + ≥11 metrics out of the full 25 + 15).
     """
     graph, result = build_graph_from_bundles(
         "smoke",
@@ -277,8 +284,8 @@ def test_build_graph_from_bundles_runs_pipeline_with_full_catalog():
     assert len(graph.issues) == 1
     assert len(graph.pull_requests) == 1
 
-    # Pipeline attempted every registered step. Successful runs + errors
-    # together cover the whole catalog (Chunk 7 deferred stubs raise
+    # Pipeline attempted every Phase-A step. Successful runs + errors
+    # together cover the Phase-A subset (Chunk 7 deferred stubs raise
     # NotImplementedError, which the pipeline catches into ``errors``).
     builders_attempted = len(result.builders_run) + sum(
         1 for e in result.errors if e.step == "builder"
@@ -286,11 +293,34 @@ def test_build_graph_from_bundles_runs_pipeline_with_full_catalog():
     metrics_attempted = len(result.metrics_run) + sum(
         1 for e in result.errors if e.step == "metric"
     )
-    assert builders_attempted >= 25, (
-        f"Expected ≥25 builders attempted, got {builders_attempted}"
+    assert builders_attempted >= 18, (
+        f"Expected ≥18 Phase-A builders attempted, got {builders_attempted}"
     )
-    assert metrics_attempted >= 14, (
-        f"Expected ≥14 metrics attempted, got {metrics_attempted}"
+    assert metrics_attempted >= 11, (
+        f"Expected ≥11 Phase-A metrics attempted, got {metrics_attempted}"
+    )
+
+    # And none of the Phase-B steps fired at build time.
+    from src.enrichment.pipeline import (
+        phase_b_metric_names,
+        phase_b_relation_kinds,
+    )
+
+    phase_b_builders = phase_b_relation_kinds()
+    phase_b_metrics = phase_b_metric_names()
+    fired_builder_names = set(result.builders_run) | {
+        e.name for e in result.errors if e.step == "builder"
+    }
+    fired_metric_names = set(result.metrics_run) | {
+        e.name for e in result.errors if e.step == "metric"
+    }
+    assert not (fired_builder_names & phase_b_builders), (
+        f"Phase-B builders leaked into /build: "
+        f"{fired_builder_names & phase_b_builders}"
+    )
+    assert not (fired_metric_names & phase_b_metrics), (
+        f"Phase-B metrics leaked into /build: "
+        f"{fired_metric_names & phase_b_metrics}"
     )
 
 
