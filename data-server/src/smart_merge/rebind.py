@@ -42,13 +42,15 @@ Edge cases
   fields, set to ``None`` for optional singular fields, and raises for
   required singular fields. Logged as a warning in either case.
 * Nested value objects (``IssueTransition`` / ``Comment`` — Jira's
-  ``user_ref`` / ``author_ref`` / ``updated_by_ref``) are NOT touched
-  by this pass. The ``account_role_ref`` marker is not applied to
-  fields on nested :class:`BaseModel` value objects today (the
-  collector only walks ``Entity`` subclasses). A separate hook is
-  planned; until then those refs continue to target per-source
-  accounts even after finalize. Documented as a TODO on the affected
-  fields in ``src/common/domains/jira/models.py``.
+  ``user_ref`` / ``author_ref`` / ``updated_by_ref``) ARE rewritten
+  by this pass since P3.C. They register via the explicit
+  :func:`register_value_object_role_refs` helper (kernel/role_ref.py)
+  and the rebind pass walks them via the parent Entity's list field
+  using the local :data:`_VALUE_OBJECT_PARENTS` map below. Because
+  ``Comment`` and ``IssueTransition`` carry ``model_config =
+  ConfigDict(frozen=True)``, the rewriter rebuilds each instance with
+  :meth:`BaseModel.model_copy` and replaces the entry in the parent's
+  list.
 """
 from __future__ import annotations
 
@@ -173,9 +175,22 @@ def _rewrite_role_refs(graph: "Graph") -> int:
 
     Returns the number of individual ref values that were replaced
     (counts each list entry separately).
+
+    Two dispatch paths:
+
+    * Entity-owned specs (``spec.value_object == False``): look up the
+      Graph registry via :func:`_registry_for_spec` and rewrite each
+      field on each entity in place.
+    * Value-object specs (``spec.value_object == True`` — e.g. the
+      Jira ``IssueTransition`` / ``Comment`` ones): there is no
+      registry slot of their own, so we navigate through a parent
+      Entity's list field per :data:`_VALUE_OBJECT_PARENTS`.
     """
     rewritten = 0
     for spec in AccountRoleRegistry.all():
+        if spec.value_object:
+            rewritten += _rewrite_value_object_spec(graph, spec)
+            continue
         registry = _registry_for_spec(graph, spec)
         if registry is None:
             # Unknown kind — should be impossible (the role-ref collector
@@ -275,6 +290,121 @@ def _rewrite_singular_field(graph: "Graph", entity, spec: RoleRefSpec) -> int:
         )
     setattr(entity, spec.field_name, uu_ref)
     return 1
+
+
+# ---------------------------------------------------------------------------
+# Step 3 (cont) — nested value-object specs
+# ---------------------------------------------------------------------------
+
+
+def _value_object_parents_map() -> dict[type, tuple[str, str]]:
+    """Return the value-object-class → (graph_field, parent_list_attr) map.
+
+    Built lazily inside a function (rather than at module import) so this
+    module's eager imports stay free of the Jira domain models — the
+    rebind module sits one layer above the domains in the dependency
+    graph. Kept local: the map is private to this pass and intentionally
+    NOT exposed as a graph-level mapping (per P3.C scope: "do not add as
+    a global graph mapping").
+
+    Today the only nested-value-object specs live on the Jira domain:
+
+    * :class:`IssueTransition` reached via ``graph.issues`` →
+      ``issue.transitions: List[IssueTransition]``.
+    * :class:`Comment` reached via ``graph.issues`` →
+      ``issue.comments: List[Comment]``.
+    """
+    from ..common.domains.jira.models import Comment, IssueTransition
+
+    return {
+        IssueTransition: ("issues", "transitions"),
+        Comment: ("issues", "comments"),
+    }
+
+
+def _rewrite_value_object_spec(graph: "Graph", spec: RoleRefSpec) -> int:
+    """Rewrite one value-object spec by walking the parent Entity's list.
+
+    Both registered value objects (``IssueTransition`` / ``Comment``)
+    declare ``model_config = ConfigDict(frozen=True)``, so a plain
+    ``setattr`` would raise. We rebuild each affected instance via
+    :meth:`BaseModel.model_copy` and replace the entry in the parent's
+    list. The parent (``Issue``) is NOT frozen, so we can ``setattr``
+    a fresh list back onto it.
+    """
+    parents_map = _value_object_parents_map()
+    coords = parents_map.get(spec.owning_cls)
+    if coords is None:
+        logger.warning(
+            "rebind: value-object spec %s.%s has no entry in "
+            "_VALUE_OBJECT_PARENTS; skipping",
+            spec.owning_cls.__name__,
+            spec.field_name,
+        )
+        return 0
+    graph_field, list_attr = coords
+    parent_registry = getattr(graph, graph_field, None)
+    if parent_registry is None:
+        logger.warning(
+            "rebind: graph has no field %r for value-object spec %s.%s; "
+            "skipping",
+            graph_field,
+            spec.owning_cls.__name__,
+            spec.field_name,
+        )
+        return 0
+
+    rewritten = 0
+    for parent in parent_registry.all():
+        current_list = getattr(parent, list_attr, None) or []
+        new_list: list = []
+        list_changed = False
+        for vo in current_list:
+            # Only rewrite instances of the exact owning_cls — a parent
+            # may legitimately carry multiple value-object types in
+            # sibling fields, and our spec is field-specific anyway.
+            if not isinstance(vo, spec.owning_cls):
+                new_list.append(vo)
+                continue
+            current_ref: Optional[EntityRef] = getattr(vo, spec.field_name)
+            if current_ref is None:
+                if spec.optional:
+                    new_list.append(vo)
+                    continue
+                raise ValueError(
+                    f"rebind: required role-ref {spec.owning_cls.__name__}."
+                    f"{spec.field_name} is None on value object inside "
+                    f"{type(parent).__name__} id={getattr(parent, 'id', '?')!r}"
+                )
+            if current_ref.kind == EntityKind.UNIFIED_USER:
+                # Defensive: already rewritten.
+                new_list.append(vo)
+                continue
+            uu_ref = _account_ref_to_unified_user_ref(
+                graph, current_ref, spec, parent
+            )
+            if uu_ref is None:
+                if spec.optional:
+                    # Drop the ref by None-ing it via model_copy.
+                    new_vo = vo.model_copy(update={spec.field_name: None})
+                    new_list.append(new_vo)
+                    rewritten += 1
+                    list_changed = True
+                    continue
+                raise ValueError(
+                    f"rebind: required role-ref {spec.owning_cls.__name__}."
+                    f"{spec.field_name} on value object inside "
+                    f"{type(parent).__name__} id="
+                    f"{getattr(parent, 'id', '?')!r} points at "
+                    f"{current_ref!r} which does not resolve"
+                )
+            new_vo = vo.model_copy(update={spec.field_name: uu_ref})
+            new_list.append(new_vo)
+            rewritten += 1
+            list_changed = True
+        if list_changed:
+            setattr(parent, list_attr, new_list)
+    return rewritten
 
 
 def _account_ref_to_unified_user_ref(

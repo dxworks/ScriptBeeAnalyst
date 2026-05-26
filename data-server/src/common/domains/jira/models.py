@@ -31,6 +31,7 @@ from ...kernel import (
     EntityRef,
     account_role_ref,
     account_role_refs,
+    register_value_object_role_refs,
 )
 from ...kernel.entity import with_ref_resolvers
 from ...people import Account, SourceKind
@@ -88,9 +89,12 @@ class IssueTransition(BaseModel):
     created: datetime
     changed_fields: List[str] = []
     items: List[TransitionItem] = []
-    # TODO(P2.A): nested BaseModel not yet picked up by AccountRoleRegistry
-    # — needs a separate hook in P3 (role: "user").
-    user_ref: Optional[EntityRef] = None
+    # The JIRA user who performed the transition. Optional because some
+    # transitions are automatic (workflow rules, bulk operations).
+    # Registered as a value-object role-ref at module bottom (P3.C);
+    # the rebind pass rewrites this via parent-list traversal of
+    # ``Issue.transitions``.
+    user_ref: Optional[EntityRef] = account_role_ref("transitioner", optional=True)
 
 
 @with_ref_resolvers
@@ -112,10 +116,16 @@ class Comment(BaseModel):
     body: str
     created: datetime
     updated: datetime
-    # TODO(P2.A): nested BaseModel not yet picked up by AccountRoleRegistry
-    # — needs a separate hook in P3 (roles: "author", "updated_by").
-    author_ref: Optional[EntityRef] = None
-    updated_by_ref: Optional[EntityRef] = None
+    # Comment author / last-editor. Both optional defensively (Jira
+    # exports occasionally drop the author on ghost-user-deleted
+    # comments and ``updated_by`` is unset until the comment is
+    # edited). Registered as value-object role-refs at module bottom
+    # (P3.C); the rebind pass rewrites these via parent-list
+    # traversal of ``Issue.comments``.
+    author_ref: Optional[EntityRef] = account_role_ref("author", optional=True)
+    updated_by_ref: Optional[EntityRef] = account_role_ref(
+        "updated_by", optional=True
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -333,6 +343,17 @@ class Issue(Entity):
 
     comments: List[Comment] = []
     transitions: List[IssueTransition] = []
+
+
+# UnifiedUsers redesign (P3.C): explicit registration of value-object
+# role-refs. The kernel's automatic ``__pydantic_init_subclass__`` hook
+# (kernel/entity.py) only fires on :class:`Entity` subclasses, so the
+# nested ``BaseModel`` value objects below need an explicit nudge. The
+# rebind pass (smart_merge/rebind.py) walks these specs via the parent
+# Entity's list field, and the reverse-resolver installer skips them
+# (see ``register_value_object_role_refs`` docs).
+register_value_object_role_refs(IssueTransition)
+register_value_object_role_refs(Comment)
 
 
 __all__ = [

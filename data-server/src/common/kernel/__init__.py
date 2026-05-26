@@ -60,6 +60,7 @@ from .role_ref import (
     AccountRoleRegistry,
     account_role_ref,
     account_role_refs,
+    register_value_object_role_refs,
 )
 
 # ``Graph`` is imported LAST because Chunk-8 wired it to import every typed
@@ -94,4 +95,5 @@ __all__ = [
     "Registry",
     "account_role_ref",
     "account_role_refs",
+    "register_value_object_role_refs",
 ]

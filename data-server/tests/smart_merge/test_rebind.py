@@ -39,13 +39,21 @@ from src.common.domains.github.models import (  # noqa: E402
     PullRequest,
 )
 from src.common.domains.jira.models import (  # noqa: E402
+    Comment,
     Issue,
     IssueStatus,
+    IssueTransition,
     IssueType,
     JiraProject,
     JiraUser,
 )
-from src.common.kernel import EntityKind, EntityRef, Graph, MergeState  # noqa: E402
+from src.common.kernel import (  # noqa: E402
+    AccountRoleRegistry,
+    EntityKind,
+    EntityRef,
+    Graph,
+    MergeState,
+)
 from src.common.people import SourceKind  # noqa: E402
 from src.common.people.unified import UnifiedUser  # noqa: E402
 from src.smart_merge.rebind import (  # noqa: E402
@@ -207,6 +215,35 @@ def _build_fixture_graph() -> tuple[Graph, dict]:
     )
     graph.issue_types.add(itype)
 
+    # Value-object payloads (P3.C):
+    # - One IssueTransition with a populated ``user_ref`` (Carol — the
+    #   orphan jira user). Exercises the parent-list rewrite path.
+    # - One Comment with both ``author_ref`` and ``updated_by_ref``
+    #   populated (Carol again). Exercises model_copy on a frozen
+    #   value object with two fields rewritten in two passes.
+    # - One Comment with ``updated_by_ref=None`` to confirm optional
+    #   None values survive the rewrite untouched.
+    transition_1 = IssueTransition(
+        id=1,
+        created=now,
+        changed_fields=["status"],
+        user_ref=carol_jira.ref(),
+    )
+    comment_full = Comment(
+        body="comment body",
+        created=now,
+        updated=now,
+        author_ref=carol_jira.ref(),
+        updated_by_ref=carol_jira.ref(),
+    )
+    comment_partial = Comment(
+        body="never edited",
+        created=now,
+        updated=now,
+        author_ref=carol_jira.ref(),
+        updated_by_ref=None,  # remains None after rebind
+    )
+
     issue = Issue(
         id="PROJ-1",
         project_ref=jira_proj.ref(),
@@ -219,6 +256,8 @@ def _build_fixture_graph() -> tuple[Graph, dict]:
         creator_ref=carol_jira.ref(),
         reporter_ref=carol_jira.ref(),
         assignee_refs=[carol_jira.ref()],
+        comments=[comment_full, comment_partial],
+        transitions=[transition_1],
     )
     graph.issues.add(issue)
 
@@ -263,8 +302,12 @@ def test_rebind_rewrites_every_role_ref_and_flips_state() -> None:
     #   commit_2 — author + committer = 2
     #   pull_request — author + merged_by + 2 assignees + 1 reviewer = 5
     #   issue — creator + reporter + 1 assignee = 3
-    # Total = 12.
-    assert stats.refs_rewritten == 12
+    #   transitions (P3.C) — 1 transition.user_ref = 1
+    #   comments (P3.C) — comment_full.author + comment_full.updated_by
+    #                     + comment_partial.author = 3
+    #                     (comment_partial.updated_by_ref is None — skipped)
+    # Total = 16.
+    assert stats.refs_rewritten == 16
     assert isinstance(stats, RebindStats)
 
     # --- accounts all carry a unified_user_id ---------------------------
@@ -355,3 +398,143 @@ def test_rebind_indexes_are_keyed_on_unified_user_refs() -> None:
     )
     by_reporter_carol = graph.issues.by_reporter[carol_uu_ref]
     assert h["issue"] in by_reporter_carol
+
+
+# ---------------------------------------------------------------------------
+# P3.C — nested value-object specs (IssueTransition / Comment)
+# ---------------------------------------------------------------------------
+_PRODUCTION_OWNING_CLASS_NAMES = {
+    # Entity-side specs registered automatically by
+    # ``Entity.__pydantic_init_subclass__`` when the domain models load.
+    "Commit",
+    "PullRequest",
+    "Review",
+    "ReviewComment",
+    "GitHubCommit",
+    "Issue",
+    # Value-object specs registered explicitly via
+    # ``register_value_object_role_refs`` (P3.C).
+    "IssueTransition",
+    "Comment",
+}
+
+
+def test_account_role_registry_includes_value_object_specs() -> None:
+    """After domain-model import, the registry holds 12 Entity-side specs
+    plus the 3 new value-object specs (``IssueTransition.user_ref``,
+    ``Comment.author_ref``, ``Comment.updated_by_ref``) — 15 production
+    specs total.
+
+    Filters out any synthetic ``Entity`` subclasses other tests may
+    register (the inline classes in ``test_role_ref.py`` survive across
+    test collection because the registry is process-wide).
+    """
+    production_specs = [
+        s
+        for s in AccountRoleRegistry.all()
+        if s.owning_cls.__name__ in _PRODUCTION_OWNING_CLASS_NAMES
+    ]
+    assert len(production_specs) == 15, (
+        f"expected 12 Entity-side + 3 value-object specs = 15, got "
+        f"{len(production_specs)}: "
+        f"{[(s.owning_cls.__name__, s.field_name) for s in production_specs]}"
+    )
+    value_object_specs = [s for s in production_specs if s.value_object]
+    assert len(value_object_specs) == 3
+    by_key = {
+        (s.owning_cls.__name__, s.field_name): s for s in value_object_specs
+    }
+    assert ("IssueTransition", "user_ref") in by_key
+    assert by_key[("IssueTransition", "user_ref")].role == "transitioner"
+    assert by_key[("IssueTransition", "user_ref")].optional is True
+    assert ("Comment", "author_ref") in by_key
+    assert by_key[("Comment", "author_ref")].role == "author"
+    assert ("Comment", "updated_by_ref") in by_key
+    assert by_key[("Comment", "updated_by_ref")].role == "updated_by"
+
+
+def test_rebind_rewrites_issue_transition_user_ref() -> None:
+    """Each :class:`IssueTransition` inside ``issue.transitions`` must
+    have its ``user_ref`` flipped to a ``UNIFIED_USER``-kind ref after
+    rebind.
+    """
+    graph, h = _build_fixture_graph()
+    rebind_account_refs_to_unified(graph)
+
+    issue = h["issue"]
+    assert len(issue.transitions) == 1
+    transition = issue.transitions[0]
+    assert transition.user_ref is not None
+    assert transition.user_ref.kind == EntityKind.UNIFIED_USER
+    # And it points at Carol's singleton UU.
+    carol_uu_id = h["carol_jira"].unified_user_id
+    assert transition.user_ref.id == carol_uu_id
+
+
+def test_rebind_rewrites_comment_author_and_updated_by() -> None:
+    """Each :class:`Comment` must have both ``author_ref`` and
+    ``updated_by_ref`` rewritten when populated. Frozen value objects
+    are replaced via ``model_copy(update=...)`` and re-set on the
+    parent's ``comments`` list.
+    """
+    graph, h = _build_fixture_graph()
+    rebind_account_refs_to_unified(graph)
+
+    issue = h["issue"]
+    carol_uu_id = h["carol_jira"].unified_user_id
+    assert len(issue.comments) == 2
+    full_comment = issue.comments[0]
+    assert full_comment.author_ref is not None
+    assert full_comment.author_ref.kind == EntityKind.UNIFIED_USER
+    assert full_comment.author_ref.id == carol_uu_id
+    assert full_comment.updated_by_ref is not None
+    assert full_comment.updated_by_ref.kind == EntityKind.UNIFIED_USER
+    assert full_comment.updated_by_ref.id == carol_uu_id
+
+
+def test_rebind_preserves_none_on_optional_value_object_refs() -> None:
+    """A :class:`Comment` whose ``updated_by_ref`` is ``None`` keeps that
+    ``None`` through the rebind — optional value-object refs are
+    tolerated identically to the Entity-side optional refs.
+    """
+    graph, h = _build_fixture_graph()
+
+    # Sanity: the partial comment carried updated_by_ref=None pre-rebind.
+    issue = h["issue"]
+    partial_comment_pre = issue.comments[1]
+    assert partial_comment_pre.updated_by_ref is None
+
+    rebind_account_refs_to_unified(graph)
+
+    issue = h["issue"]
+    partial_comment = issue.comments[1]
+    # author_ref still got rewritten (it was populated).
+    assert partial_comment.author_ref is not None
+    assert partial_comment.author_ref.kind == EntityKind.UNIFIED_USER
+    # updated_by_ref stayed None.
+    assert partial_comment.updated_by_ref is None
+
+
+def test_rebind_does_not_install_value_object_reverse_resolvers() -> None:
+    """Value-object specs must NOT produce ``UnifiedUser.<plural>_as_<role>``
+    methods — they're queryable via parent-Entity traversal
+    (``issue.transitions`` / ``issue.comments``), not via UU reverse
+    resolvers. Guards the constraint from P3.C.
+    """
+    from src.common.people.unified import UnifiedUser
+
+    # The naming convention for IssueTransition/Comment would have been
+    # something like ``issue_transitions_as_transitioner``,
+    # ``comments_as_author`` — none of these may exist on UnifiedUser.
+    forbidden_names = {
+        "issue_transitions_as_transitioner",
+        "issuetransitions_as_transitioner",
+        "transitions_as_transitioner",
+        "comments_as_author",
+        "comments_as_updated_by",
+    }
+    for name in forbidden_names:
+        assert not hasattr(UnifiedUser, name), (
+            f"UnifiedUser.{name} must NOT be auto-installed for "
+            f"value-object specs (see P3.C constraint)."
+        )

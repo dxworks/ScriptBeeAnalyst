@@ -519,6 +519,13 @@ def _install_reverse_resolvers() -> int:
     # being non-empty — install them whenever this function runs.
     installed = 0
     for spec in specs:
+        # Value-object specs (e.g. IssueTransition / Comment, registered
+        # via ``register_value_object_role_refs``) do NOT get a reverse
+        # resolver — they have no Graph registry slot of their own and
+        # no ``by_<role>`` index; query via parent-Entity traversal
+        # (``issue.transitions`` / ``issue.comments``) instead.
+        if spec.value_object:
+            continue
         plural = _entity_plural_name(spec.owning_cls)
         method_name = f"{plural}_as_{spec.role}"
         _set_resolver(method_name, _make_reverse_resolver(plural, spec.role))

@@ -57,14 +57,16 @@ _MARKER_KEY = "_account_role"
 
 @dataclass(frozen=True)
 class RoleRefSpec:
-    """One role-typed account-ref field on a domain entity.
+    """One role-typed account-ref field on a domain entity or value object.
 
     Attributes
     ----------
     owning_cls:
-        The ``Entity`` subclass that declares the field. Stored as the
-        class itself so the rebind pass can navigate to its registry
-        through the graph.
+        The ``Entity`` subclass (or value-object :class:`BaseModel`)
+        that declares the field. Stored as the class itself so the
+        rebind pass can navigate to its registry through the graph
+        (Entities) or to its parent Entity's list field (value objects;
+        see :data:`_VALUE_OBJECT_PARENTS` in ``smart_merge/rebind.py``).
     field_name:
         The Pydantic field name on ``owning_cls`` (e.g. ``"author_ref"``
         or ``"assignee_refs"``).
@@ -89,6 +91,16 @@ class RoleRefSpec:
         factory uses it to emit ``Field(default=None, ...)`` instead
         of ``Field(...)``. Meaningless for plural fields (lists always
         default to ``[]``); always ``False`` for plurals.
+    value_object:
+        ``True`` when ``owning_cls`` is a nested value-object
+        :class:`BaseModel` (no ``kind`` ClassVar, no Graph registry
+        slot), reached only via a parent Entity's list field. The
+        rebind pass (P3.C) uses this to switch from registry-walking
+        to parent-list traversal, and the reverse-resolver installer
+        skips these specs (value-object refs are queryable via Issue
+        traversal, not via ``UnifiedUser.<plural>_as_<role>``).
+        Set by :func:`register_value_object_role_refs`; ``False`` for
+        the Entity-side collector path (:func:`collect_role_refs`).
     """
 
     owning_cls: type
@@ -96,6 +108,7 @@ class RoleRefSpec:
     role: str
     plural: bool
     optional: bool = False
+    value_object: bool = False
 
 
 def account_role_ref(role: str, *, optional: bool = False) -> Any:
@@ -189,6 +202,7 @@ class AccountRoleRegistry:
         role: str,
         plural: bool,
         optional: bool = False,
+        value_object: bool = False,
     ) -> RoleRefSpec:
         """Register one role-typed field. Idempotent on re-registration.
 
@@ -196,6 +210,10 @@ class AccountRoleRegistry:
         idempotency contract as ``_install_ref_resolvers`` in
         ``kernel/entity.py``, where re-importing a module silently
         replaces the previous generator install.
+
+        ``value_object=True`` flags a nested-BaseModel owning_cls
+        (e.g. ``IssueTransition`` / ``Comment``). See the field doc on
+        :class:`RoleRefSpec` for the semantics.
         """
         spec = RoleRefSpec(
             owning_cls=owning_cls,
@@ -203,6 +221,7 @@ class AccountRoleRegistry:
             role=role,
             plural=plural,
             optional=optional,
+            value_object=value_object,
         )
         cls._entries[(owning_cls.__qualname__, field_name)] = spec
         return spec
@@ -259,10 +278,64 @@ def collect_role_refs(entity_cls: type) -> list[RoleRefSpec]:
     return registered
 
 
+def register_value_object_role_refs(model_cls: type) -> list[RoleRefSpec]:
+    """Explicit registration helper for nested value-object ``BaseModel``s.
+
+    The kernel's automatic ``__pydantic_init_subclass__`` hook (see
+    ``kernel/entity.py``) fires only on :class:`Entity` subclasses, so
+    role-typed refs declared on a nested value object (a plain
+    :class:`BaseModel` reached via a parent Entity's list field — e.g.
+    ``IssueTransition`` inside ``Issue.transitions``, ``Comment`` inside
+    ``Issue.comments``) are NOT picked up automatically. Domain modules
+    that mark such fields must call this helper at module-import time
+    once per value-object class. Example::
+
+        from src.common.kernel.role_ref import (
+            account_role_ref,
+            register_value_object_role_refs,
+        )
+
+        class Comment(BaseModel):
+            author_ref: Optional[EntityRef] = account_role_ref(
+                "author", optional=True
+            )
+
+        register_value_object_role_refs(Comment)
+
+    Specs registered through this helper carry ``value_object=True``;
+    the rebind pass switches to parent-list traversal for them and the
+    :class:`UnifiedUser` reverse-resolver installer skips them entirely
+    (value-object refs are queryable via parent-Entity traversal, not
+    via a ``UnifiedUser.<plural>_as_<role>`` reverse method).
+
+    Idempotent on re-import. Returns the specs registered for this
+    class — useful for tests; production callers don't read it.
+    """
+    model_fields = getattr(model_cls, "model_fields", None)
+    if not model_fields:
+        return []
+    registered: list[RoleRefSpec] = []
+    for fname, finfo in model_fields.items():
+        payload = _extract_role_metadata(finfo)
+        if payload is None:
+            continue
+        spec = AccountRoleRegistry.register(
+            owning_cls=model_cls,
+            field_name=fname,
+            role=payload["role"],
+            plural=bool(payload.get("plural", False)),
+            optional=bool(payload.get("optional", False)),
+            value_object=True,
+        )
+        registered.append(spec)
+    return registered
+
+
 __all__ = [
     "AccountRoleRegistry",
     "RoleRefSpec",
     "account_role_ref",
     "account_role_refs",
     "collect_role_refs",
+    "register_value_object_role_refs",
 ]
