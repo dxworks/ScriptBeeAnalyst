@@ -21,7 +21,12 @@ from typing import TYPE_CHECKING, ClassVar, List, Optional
 
 from pydantic import BaseModel, ConfigDict
 
-from ...kernel import Entity, EntityKind, EntityRef
+from ...kernel import (
+    Entity,
+    EntityKind,
+    EntityRef,
+    account_role_ref,
+)
 from ...kernel.entity import with_ref_resolvers
 from ...people import Account, SourceKind
 from ...projects import Project
@@ -209,8 +214,8 @@ class Commit(Entity):
     message: str
     author_date: datetime
     committer_date: datetime
-    author_ref: EntityRef
-    committer_ref: EntityRef
+    author_ref: EntityRef = account_role_ref("author")
+    committer_ref: EntityRef = account_role_ref("committer")
     parent_refs: List[EntityRef] = []
     branch_id: int = 0
     repo_size: int = 0

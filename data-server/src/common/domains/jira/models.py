@@ -25,7 +25,13 @@ from typing import TYPE_CHECKING, ClassVar, List, Optional
 
 from pydantic import BaseModel, ConfigDict
 
-from ...kernel import Entity, EntityKind, EntityRef
+from ...kernel import (
+    Entity,
+    EntityKind,
+    EntityRef,
+    account_role_ref,
+    account_role_refs,
+)
 from ...kernel.entity import with_ref_resolvers
 from ...people import Account, SourceKind
 from ...projects import Project
@@ -82,6 +88,8 @@ class IssueTransition(BaseModel):
     created: datetime
     changed_fields: List[str] = []
     items: List[TransitionItem] = []
+    # TODO(P2.A): nested BaseModel not yet picked up by AccountRoleRegistry
+    # — needs a separate hook in P3 (role: "user").
     user_ref: Optional[EntityRef] = None
 
 
@@ -104,6 +112,8 @@ class Comment(BaseModel):
     body: str
     created: datetime
     updated: datetime
+    # TODO(P2.A): nested BaseModel not yet picked up by AccountRoleRegistry
+    # — needs a separate hook in P3 (roles: "author", "updated_by").
     author_ref: Optional[EntityRef] = None
     updated_by_ref: Optional[EntityRef] = None
 
@@ -310,9 +320,9 @@ class Issue(Entity):
 
     status_ref: EntityRef
     type_ref: EntityRef
-    creator_ref: Optional[EntityRef] = None
-    reporter_ref: Optional[EntityRef] = None
-    assignee_refs: List[EntityRef] = []
+    creator_ref: Optional[EntityRef] = account_role_ref("creator")
+    reporter_ref: Optional[EntityRef] = account_role_ref("reporter")
+    assignee_refs: List[EntityRef] = account_role_refs("assignee")
     parent_ref: Optional[EntityRef] = None
 
     priority: Optional[str] = None

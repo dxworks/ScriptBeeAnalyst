@@ -21,7 +21,13 @@ from __future__ import annotations
 from datetime import datetime
 from typing import TYPE_CHECKING, ClassVar, List, Optional
 
-from ...kernel import Entity, EntityKind, EntityRef
+from ...kernel import (
+    Entity,
+    EntityKind,
+    EntityRef,
+    account_role_ref,
+    account_role_refs,
+)
 from ...people import Account, SourceKind
 from ...projects import Project
 
@@ -168,10 +174,10 @@ class PullRequest(Entity):
     merged_at: Optional[datetime] = None
     closed_at: Optional[datetime] = None
 
-    author_ref: Optional[EntityRef] = None
-    merged_by_ref: Optional[EntityRef] = None
-    assignee_refs: List[EntityRef] = []
-    requested_reviewer_refs: List[EntityRef] = []
+    author_ref: Optional[EntityRef] = account_role_ref("author")
+    merged_by_ref: Optional[EntityRef] = account_role_ref("merged_by")
+    assignee_refs: List[EntityRef] = account_role_refs("assignee")
+    requested_reviewer_refs: List[EntityRef] = account_role_refs("requested_reviewer")
     commit_refs: List[EntityRef] = []
     review_refs: List[EntityRef] = []
     review_comment_refs: List[EntityRef] = []
@@ -228,7 +234,7 @@ class Review(Entity):
     state: str
     body: str = ""
     submitted_at: Optional[datetime] = None
-    author_ref: Optional[EntityRef] = None
+    author_ref: Optional[EntityRef] = account_role_ref("author")
     review_comment_refs: List[EntityRef] = []
 
     @staticmethod
@@ -284,7 +290,7 @@ class ReviewComment(Entity):
     body: str
     created_at: datetime
     updated_at: Optional[datetime] = None
-    author_ref: Optional[EntityRef] = None
+    author_ref: Optional[EntityRef] = account_role_ref("author")
     file_path: Optional[str] = None
     line: Optional[int] = None
 
@@ -335,7 +341,7 @@ class GitHubCommit(Entity):
     date: datetime
     message: str
     changed_files: int = 0
-    author_ref: Optional[EntityRef] = None
+    author_ref: Optional[EntityRef] = account_role_ref("author")
     url: Optional[str] = None
 
 
