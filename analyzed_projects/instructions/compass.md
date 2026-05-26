@@ -185,7 +185,6 @@ survives finalize). Tools:
 
 - `list_filter_rules()` — active rules. Call before adding a near-duplicate.
 - `create_filter_rule(name, nl_description, entity_kind, predicate)` — add one.
-- `delete_filter_rule(rule_id)` — remove one.
 
 ### Creating a rule
 

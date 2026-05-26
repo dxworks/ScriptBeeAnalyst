@@ -44,7 +44,6 @@ are the one piece of setup that stays editable in query stage.
 
 - `list_filter_rules()` — active rules.
 - `create_filter_rule(name, nl_description, entity_kind, predicate)` — add one.
-- `delete_filter_rule(rule_id)` — remove one.
 
 Pick exactly **one** entity_kind (lowercase `EntityKind` value): `file`,
 `commit`, `issue`, `pull_request`. Pick exactly **one** field paired with
