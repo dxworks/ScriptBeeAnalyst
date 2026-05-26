@@ -58,10 +58,6 @@ class AuthorClassifierMetric(Metric):
     ]
 
     def compute(self, graph: "Graph", config: Any) -> Iterable[Classifier]:
-        accounts = _safe_iter(getattr(graph, "git_accounts", None))
-        if not accounts:
-            return
-
         commits_reg = getattr(graph, "commits", None)
         if commits_reg is None:
             return
@@ -84,9 +80,25 @@ class AuthorClassifierMetric(Metric):
             config, "senior_max_days", _DEFAULT_SENIOR_MAX_DAYS
         )
 
-        for account in accounts:
-            account_ref = account.ref()
-            commits = _commits_for_author(commits_reg, by_author, account_ref)
+        # Post-finalize (UnifiedUsers redesign §H) the author target IS
+        # the UnifiedUser. Phase B runs this metric *after*
+        # ``rebind_account_refs_to_unified``, so ``commits.by_author`` is
+        # re-keyed on UU refs. Iterate ``graph.unified_users`` so every
+        # emitted classifier target is ``EntityKind.UNIFIED_USER`` —
+        # matching the kind-check expectations in ``anomaly_knowledge``,
+        # ``authorship_table``, ``knowledge_table``, and
+        # ``file_trait_utils.active_author_churn``.
+        #
+        # Pre-finalize behaviour is preserved: iterate per-source git
+        # accounts and emit GIT_ACCOUNT-keyed classifiers (today's
+        # behaviour, exercised by ``tests/enrichment/test_author_classifiers.py``).
+        principals = _resolve_author_principals(graph)
+        if not principals:
+            return
+
+        for principal in principals:
+            principal_ref = principal.ref()
+            commits = _commits_for_author(commits_reg, by_author, principal_ref)
             dates: list[datetime] = []
             for c in commits:
                 d = ensure_aware(getattr(c, "author_date", None))
@@ -103,8 +115,8 @@ class AuthorClassifierMetric(Metric):
             else:
                 activity_value = "idle"
             yield Classifier(
-                id=f"activity:{account_ref.kind.value}/{account.id}",
-                target=account_ref,
+                id=f"activity:{principal_ref.kind.value}/{principal.id}",
+                target=principal_ref,
                 dimension="activity",
                 value=activity_value,
             )
@@ -115,8 +127,8 @@ class AuthorClassifierMetric(Metric):
                 span_days, newcomer_max, established_max, senior_max
             )
             yield Classifier(
-                id=f"seniority:{account_ref.kind.value}/{account.id}",
-                target=account_ref,
+                id=f"seniority:{principal_ref.kind.value}/{principal.id}",
+                target=principal_ref,
                 dimension="seniority",
                 value=seniority_value,
             )
@@ -132,6 +144,32 @@ def _safe_iter(reg: Any) -> list[Any]:
         return list(reg)
     except TypeError:
         return []
+
+
+def _resolve_author_principals(graph: Any) -> list[Any]:
+    """Return the entities to classify, switching on ``graph.merge_state``.
+
+    * Pre-finalize (PRE_MERGE, the historical contract) — per-source
+      ``GitAccount`` entities. Targets carry ``EntityKind.GIT_ACCOUNT``.
+    * Post-finalize (FINALIZED) — :class:`UnifiedUser` entities, after
+      :func:`src.smart_merge.rebind.rebind_account_refs_to_unified` has
+      re-keyed ``commits.by_author`` on UU refs. Targets carry
+      ``EntityKind.UNIFIED_USER`` so the downstream people-side
+      consumers (`anomaly_knowledge`, `authorship_table`,
+      `knowledge_table`, `file_trait_utils.active_author_churn`) match.
+
+    When the graph carries no ``merge_state`` attribute (e.g. ad-hoc
+    test stubs), fall back to today's git-account behaviour.
+    """
+    try:
+        from src.common.kernel.merge_state import MergeState
+    except Exception:  # pragma: no cover — defensive: keep tests importable
+        MergeState = None  # type: ignore[assignment]
+
+    state = getattr(graph, "merge_state", None)
+    if MergeState is not None and state == MergeState.FINALIZED:
+        return _safe_iter(getattr(graph, "unified_users", None))
+    return _safe_iter(getattr(graph, "git_accounts", None))
 
 
 def _commits_for_author(commits_reg: Any, by_author: Any, account_ref: Any) -> list[Any]:

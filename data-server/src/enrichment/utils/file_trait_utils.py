@@ -49,6 +49,30 @@ if TYPE_CHECKING:
 
 
 # ----------------------------------------------------------------------
+# Author-target kind switch (UnifiedUsers redesign §H)
+# ----------------------------------------------------------------------
+def _author_target_kind(graph: "Graph") -> EntityKind:
+    """Return the kind of author refs on this graph.
+
+    Pre-finalize (PRE_MERGE) — ``GIT_ACCOUNT``. Post-finalize
+    (FINALIZED, after :func:`src.smart_merge.rebind.rebind_account_refs_to_unified`)
+    — ``UNIFIED_USER``.
+
+    Used by :func:`active_author_churn` to build the classifier-lookup
+    ref with a kind that matches what phase B's
+    :class:`AuthorClassifierMetric` actually emitted.
+    """
+    try:
+        from src.common.kernel.merge_state import MergeState
+    except Exception:  # pragma: no cover — defensive
+        return EntityKind.UNIFIED_USER
+    state = getattr(graph, "merge_state", None)
+    if state == MergeState.FINALIZED:
+        return EntityKind.UNIFIED_USER
+    return EntityKind.GIT_ACCOUNT
+
+
+# ----------------------------------------------------------------------
 # Internal index accessors
 # ----------------------------------------------------------------------
 def _changes_for_file(graph: "Graph", file_ref: EntityRef) -> tuple:
@@ -176,9 +200,16 @@ def active_author_churn(
     classifiers = getattr(graph, "classifiers", None)
     if classifiers is None:
         return {}
+    # Post-finalize (UnifiedUsers redesign §H), ``commit.author_ref``
+    # already targets a UnifiedUser, so ``author_id`` carries a UU id
+    # and the classifier lookup must build a UU-kinded ref to match
+    # the targets emitted by phase B's ``author.classifiers``. Pre-
+    # finalize, both ``commit.author_ref`` and the classifier targets
+    # still carry ``GIT_ACCOUNT``.
+    expected_kind = _author_target_kind(graph)
     out: dict[str, int] = {}
     for author_id, amount in recent.items():
-        author_ref = EntityRef(kind=EntityKind.GIT_ACCOUNT, id=author_id)
+        author_ref = EntityRef(kind=expected_kind, id=author_id)
         on_author = classifiers.for_target(author_ref) if hasattr(classifiers, "for_target") else {}
         activity = on_author.get("activity") if on_author else None
         if activity is not None and activity.value == "active":

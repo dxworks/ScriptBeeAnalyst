@@ -564,22 +564,53 @@ def _entropy(values: Iterable[int], total: int) -> float:
     return h
 
 
+def _author_target_kind(graph: Any) -> EntityKind:
+    """The ``EntityKind`` author-side classifier targets carry on this graph.
+
+    Pre-finalize (PRE_MERGE) — ``EntityKind.GIT_ACCOUNT`` (today's
+    behaviour). Post-finalize (FINALIZED) — ``EntityKind.UNIFIED_USER``,
+    after :func:`src.smart_merge.rebind.rebind_account_refs_to_unified`
+    has rebound every role-typed account ref and phase B's
+    :class:`AuthorClassifierMetric` has emitted classifiers keyed on UU
+    refs (see ``_resolve_author_principals`` in
+    ``author_classifiers.py``).
+
+    The kind check is state-aware so the single-shot
+    :func:`run_pipeline` alias (still used by the chunk-7 trait tests
+    against PRE_MERGE graphs) keeps working alongside the post-finalize
+    phase B path.
+    """
+    try:
+        from src.common.kernel.merge_state import MergeState
+    except Exception:  # pragma: no cover — defensive
+        return EntityKind.UNIFIED_USER
+
+    state = getattr(graph, "merge_state", None)
+    if state == MergeState.FINALIZED:
+        return EntityKind.UNIFIED_USER
+    return EntityKind.GIT_ACCOUNT
+
+
 def _build_activity_lookup(graph: Any) -> dict[str, str]:
     """Read author activity classifiers from ``graph.classifiers``.
 
-    The locked Chunk-11 contract is
-    ``Classifier(dimension="activity", value="active"|"idle")`` keyed on
-    a ``GitAccount`` ref. Returns ``{account_id: "active"|"idle"}`` so
-    the per-file Solitaire emitter does a single dict lookup per author
-    instead of N classifier-registry round-trips.
+    Post-finalize (UnifiedUsers redesign §H) the activity classifier is
+    keyed on a :class:`UnifiedUser` ref — phase B's
+    :class:`AuthorClassifierMetric` runs after the role-ref rebind, so
+    every author target is ``EntityKind.UNIFIED_USER``. Pre-finalize the
+    targets are still ``GIT_ACCOUNT`` refs (today's contract). Returns
+    ``{principal_id: "active"|"idle"}`` so the per-file Solitaire
+    emitter does a single dict lookup per author instead of N
+    classifier-registry round-trips.
     """
     classifiers = getattr(graph, "classifiers", None)
     if classifiers is None or not hasattr(classifiers, "of_dimension"):
         return {}
+    expected_kind = _author_target_kind(graph)
     out: dict[str, str] = {}
     for cls_obj in classifiers.of_dimension("activity"):
         target = getattr(cls_obj, "target", None)
-        if target is None or target.kind != EntityKind.GIT_ACCOUNT:
+        if target is None or target.kind != expected_kind:
             continue
         out[target.id] = cls_obj.value
     return out
@@ -590,11 +621,12 @@ def _active_author_total(graph: Any) -> int:
     classifiers = getattr(graph, "classifiers", None)
     if classifiers is None or not hasattr(classifiers, "with_value"):
         return 0
+    expected_kind = _author_target_kind(graph)
     rows = classifiers.with_value("activity", "active")
     return sum(
         1 for row in rows
         if getattr(row, "target", None) is not None
-        and row.target.kind == EntityKind.GIT_ACCOUNT
+        and row.target.kind == expected_kind
     )
 
 

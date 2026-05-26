@@ -207,13 +207,35 @@ def _seniority_by_account_id(graph: Any) -> dict[str, str]:
     of_dimension = getattr(classifiers, "of_dimension", None)
     if of_dimension is None:
         return {}
+    expected_kind = _author_target_kind(graph)
     out: dict[str, str] = {}
     for cls_obj in of_dimension(_SENIORITY_DIM):
         target: EntityRef = cls_obj.target
-        if target.kind != EntityKind.GIT_ACCOUNT:
+        # Post-finalize (UnifiedUsers redesign §H) the seniority
+        # classifier is keyed on a UnifiedUser ref — phase B's
+        # ``author.classifiers`` metric runs after the role-ref rebind.
+        # Pre-finalize the targets are still ``GIT_ACCOUNT``.
+        if target.kind != expected_kind:
             continue
         out[target.id] = cls_obj.value
     return out
+
+
+def _author_target_kind(graph: Any) -> EntityKind:
+    """Author-side classifier-target kind for this graph's lifecycle phase.
+
+    Mirrors :func:`anomaly_knowledge._author_target_kind` so the
+    state-aware kind check is consistent across the people-side
+    enrichment surface.
+    """
+    try:
+        from src.common.kernel.merge_state import MergeState
+    except Exception:  # pragma: no cover — defensive
+        return EntityKind.UNIFIED_USER
+    state = getattr(graph, "merge_state", None)
+    if state == MergeState.FINALIZED:
+        return EntityKind.UNIFIED_USER
+    return EntityKind.GIT_ACCOUNT
 
 
 def _bus_factor_file_ids(graph: Any) -> set[str]:
