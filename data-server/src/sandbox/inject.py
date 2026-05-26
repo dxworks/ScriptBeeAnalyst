@@ -1,26 +1,51 @@
-"""MCP sandbox façade — adapt the typed v2 :class:`Graph` to the legacy
-agent-facing names.
+"""MCP sandbox façades — adapt the typed v2 :class:`Graph` to the
+agent-facing names, with one façade per lifecycle stage.
+
+Two views live here:
+
+* :class:`SetupSandboxView` — the **PRE_MERGE / setup-stage** surface.
+  Exposes only the raw per-source registries (``git_accounts`` /
+  ``jira_users`` / ``github_users``), the four primary entity surfaces
+  (``commits`` / ``files`` / ``issues`` / ``pull_requests``), and the
+  three per-domain count helpers (``git_summary()`` /
+  ``github_summary()`` / ``jira_summary()``). Intended for diagnostics
+  during setup — "did the JIRA project load correctly?" — NOT for
+  analytics queries. Hides every post-finalize attribute (no
+  ``unified_users`` aggregates, no ``traits`` / ``classifiers`` /
+  ``relations`` / ``components`` / ``file_metrics``, no overviews, no
+  people-aware helpers).
+* :class:`QuerySandboxView` — the **POST_FINALIZE / query-stage**
+  surface. Full v2 read façade: unified_users aggregations, people-
+  aware overviews, every helper from the mapping table at plan §11
+  lines 712–723. Renamed from ``MCPSandboxView``; a backwards-compat
+  alias remains at the bottom of the module.
 
 See §11 of ``architectural_changes.md`` (lines 690–740). The MCP server
-sends Python code to ``POST /execute``; the sandbox today injects a
-single object called ``graph_data``. After the v2 refactor the loaded
-project is a typed :class:`Graph`, not a dict-of-projects, so the
-injection layer becomes::
+sends Python code to ``POST /execute``; the sandbox injects a single
+object called ``graph_data``. After the v2 refactor the loaded project
+is a typed :class:`Graph`, not a dict-of-projects, so the injection
+layer becomes::
 
-    graph_data = MCPSandboxView(graph)
+    # PRE_MERGE
+    graph_data = SetupSandboxView(graph)
+    # FINALIZED
+    graph_data = QuerySandboxView(graph)
 
-:class:`MCPSandboxView` is a thin read-side façade that exposes the
+The view class is chosen by ``/execute`` / ``/plot`` from
+``graph.merge_state`` (see ``src/server.py``).
+
+:class:`QuerySandboxView` is a thin read-side façade that exposes the
 names the agent code (and the documented examples in
 ``analyzed_projects/instructions/*``) expects, mapped onto the new
 typed :class:`Graph` registries. The mapping table at plan §11 lines
 712–723 is the spec — every "Today" expression on the left works as-is
-on a :class:`MCPSandboxView` instance, and produces the right thing
+on a :class:`QuerySandboxView` instance, and produces the right thing
 via the "After" expression on the right.
 
 Design notes
 ------------
 
-* :class:`MCPSandboxView` is **not** a Pydantic model — it's a thin
+* :class:`QuerySandboxView` is **not** a Pydantic model — it's a thin
   Python class wrapping a single :class:`Graph` reference. Pydantic
   models stay pydantic; the view does not mutate them.
 * Read-through ``__getattr__`` falls back to the underlying graph for
@@ -68,7 +93,7 @@ if TYPE_CHECKING:
     from src.common.kernel import Entity, Graph
 
 
-# Map EntityKind -> the MCPSandboxView property that owns the registry.
+# Map EntityKind -> the QuerySandboxView property that owns the registry.
 # Used by ``_resolve`` so the view-level override (filter-rules layer)
 # takes precedence over a direct ``graph.resolve(ref)`` call.
 _KIND_TO_VIEW_PROPERTY: dict[EntityKind, str] = {
@@ -84,19 +109,28 @@ _KIND_TO_VIEW_PROPERTY: dict[EntityKind, str] = {
 }
 
 
-class MCPSandboxView:
-    """Read-side façade for the typed v2 :class:`Graph`.
+class QuerySandboxView:
+    """Read-side façade for the typed v2 :class:`Graph` — the
+    POST-FINALIZE surface.
 
-    Wraps a single :class:`Graph` reference and exposes the legacy
-    agent-facing surface (``graph_data.commits.all()``,
-    ``graph_data.tags_for(ref)``, etc.) on top of the v2 typed
-    registries. See module docstring for the mapping spec.
+    Wraps a single :class:`Graph` reference and exposes the agent-facing
+    surface (``graph_data.commits.all()``, ``graph_data.tags_for(ref)``,
+    ``graph_data.unified_users``, etc.) on top of the v2 typed
+    registries. Includes the unified_users aggregations, people-aware
+    overviews, and every helper from the §11 mapping spec — i.e. the
+    full toolset that becomes available **after** the smart-merge
+    finalize step has rebound role refs and populated enrichment
+    outputs. See module docstring for the mapping spec.
 
     Construction::
 
-        view = MCPSandboxView(graph)
-        # then in the /execute sandbox:
+        view = QuerySandboxView(graph)
+        # then in the /execute sandbox (FINALIZED state):
         exec_globals = {"graph_data": view, ...}
+
+    For the PRE_MERGE / setup-stage surface, see
+    :class:`SetupSandboxView` (narrower; no unified_users, no traits,
+    no enrichment-derived helpers).
     """
 
     __slots__ = ("_graph", "_commit_issue_link_cache")
@@ -1076,7 +1110,7 @@ class MCPSandboxView:
     def __repr__(self) -> str:
         graph = self._graph
         return (
-            f"MCPSandboxView(project_id={graph.project_id!r}, "
+            f"{type(self).__name__}(project_id={graph.project_id!r}, "
             f"commits={len(graph.commits)}, "
             f"files={len(graph.files)}, "
             f"issues={len(graph.issues)}, "
@@ -1093,4 +1127,180 @@ class MCPSandboxView:
         return iter(("commits", "files", "issues", "pull_requests"))
 
 
-__all__ = ["MCPSandboxView"]
+class SetupSandboxView:
+    """Read-side façade for the typed v2 :class:`Graph` — the PRE_MERGE
+    / setup-stage surface.
+
+    Intentionally narrower than :class:`QuerySandboxView`. The setup
+    stage is the period **before** smart-merge finalize has run, so
+    none of the post-finalize aggregates exist yet (no
+    :class:`UnifiedUser` records, no role-ref rebinding, no enrichment
+    relations / traits / classifiers / components / file_metrics, no
+    overviews). Code that touches those attributes would either crash
+    or — worse — return stale / zero values; instead this view refuses
+    to expose them altogether so the agent gets a clean
+    :class:`AttributeError` and can react.
+
+    The surface this view DOES expose is what a "did the data load
+    correctly?" diagnostic snippet would want:
+
+    * Per-source registries — ``git_accounts`` / ``jira_users`` /
+      ``github_users`` (inspect raw accounts before any merging).
+    * Primary entity surfaces — ``commits`` / ``files`` / ``issues`` /
+      ``pull_requests`` (verify counts, spot-check ids).
+    * Per-domain summaries — :meth:`git_summary` / :meth:`github_summary`
+      / :meth:`jira_summary` (per-project counts, useful for "did the
+      JIRA project I uploaded actually show up?" checks). These reuse
+      the same implementations exposed by :class:`QuerySandboxView`.
+
+    Construction::
+
+        view = SetupSandboxView(graph)
+        # then in the /execute sandbox (PRE_MERGE state):
+        exec_globals = {"graph_data": view, ...}
+
+    For the POST_FINALIZE / query-stage surface, see
+    :class:`QuerySandboxView`.
+    """
+
+    __slots__ = ("_graph",)
+
+    def __init__(self, graph: "Graph") -> None:
+        self._graph = graph
+
+    # ------------------------------------------------------------------
+    # Per-source account registries (setup-stage diagnostics)
+    # ------------------------------------------------------------------
+    @property
+    def git_accounts(self):
+        """The :class:`GitAccountRegistry` of the underlying graph.
+
+        Setup-stage diagnostic: inspect raw git accounts before any
+        unified-user merging.
+        """
+        return self._graph.git_accounts
+
+    @property
+    def jira_users(self):
+        """The :class:`JiraUserRegistry` of the underlying graph.
+
+        Setup-stage diagnostic: inspect raw JIRA users before any
+        unified-user merging.
+        """
+        return self._graph.jira_users
+
+    @property
+    def github_users(self):
+        """The :class:`GitHubUserRegistry` of the underlying graph.
+
+        Setup-stage diagnostic: inspect raw GitHub users before any
+        unified-user merging.
+        """
+        return self._graph.github_users
+
+    # ------------------------------------------------------------------
+    # Primary entity surfaces (basic graph exploration)
+    # ------------------------------------------------------------------
+    @property
+    def commits(self) -> "CommitRegistry":
+        """The :class:`CommitRegistry` of the underlying graph.
+
+        Supports ``.all()``, ``.get(id)``, iteration. Use this to
+        spot-check that commits loaded correctly.
+        """
+        return self._graph.commits
+
+    @property
+    def files(self) -> "FileRegistry":
+        """The :class:`FileRegistry` of the underlying graph.
+
+        Supports ``.all()``, ``.get(id)``, iteration. Use this to
+        spot-check that files loaded correctly.
+        """
+        return self._graph.files
+
+    @property
+    def issues(self) -> "IssueRegistry":
+        """The :class:`IssueRegistry` of the underlying graph.
+
+        Supports ``.all()``, ``.get(id)``, iteration. Use this to
+        spot-check that JIRA issues loaded correctly.
+        """
+        return self._graph.issues
+
+    @property
+    def pull_requests(self) -> "PullRequestRegistry":
+        """The :class:`PullRequestRegistry` of the underlying graph.
+
+        Supports ``.all()``, ``.get(id)``, iteration. Use this to
+        spot-check that GitHub PRs loaded correctly.
+        """
+        return self._graph.pull_requests
+
+    # ------------------------------------------------------------------
+    # Per-domain summaries — delegate to the QuerySandboxView
+    # implementations against the same underlying :class:`Graph`. The
+    # summary methods read several registries (``git_projects`` /
+    # ``changes`` / ``reviews`` / ``issue_statuses`` / …) that the
+    # SetupSandboxView surface does NOT expose directly — to keep that
+    # surface narrow, we build a transient :class:`QuerySandboxView`
+    # over ``self._graph`` and invoke its summary method. The transient
+    # view never leaks out of this method; only the dict result does.
+    # ------------------------------------------------------------------
+    def git_summary(self) -> dict[str, object]:
+        """Per-project counts of git commits, files, changes, accounts.
+
+        Same shape as :meth:`QuerySandboxView.git_summary`. Useful at
+        setup time to confirm "the git side of project X is loaded
+        and has the expected number of commits".
+        """
+        return QuerySandboxView(self._graph).git_summary()
+
+    def github_summary(self) -> dict[str, object]:
+        """Per-project counts of GitHub PRs, reviews, comments, commits.
+
+        Same shape as :meth:`QuerySandboxView.github_summary`. Useful
+        at setup time to confirm "the GitHub side of project X is
+        loaded and has the expected number of PRs".
+        """
+        return QuerySandboxView(self._graph).github_summary()
+
+    def jira_summary(self) -> dict[str, object]:
+        """Per-project counts of JIRA issues, users, statuses, types.
+
+        Same shape as :meth:`QuerySandboxView.jira_summary`. Useful at
+        setup time to confirm "the JIRA side of project X is loaded
+        and has the expected number of issues".
+        """
+        return QuerySandboxView(self._graph).jira_summary()
+
+    # ------------------------------------------------------------------
+    # Repr / iteration
+    # ------------------------------------------------------------------
+    def __repr__(self) -> str:
+        graph = self._graph
+        return (
+            f"SetupSandboxView(project_id={graph.project_id!r}, "
+            f"commits={len(graph.commits)}, "
+            f"files={len(graph.files)}, "
+            f"issues={len(graph.issues)}, "
+            f"pull_requests={len(graph.pull_requests)})"
+        )
+
+    def __iter__(self) -> Iterator[str]:
+        """Iterate the curated setup-stage entity-surface names."""
+        return iter(("commits", "files", "issues", "pull_requests"))
+
+
+# Backwards-compat alias. The class was renamed from ``MCPSandboxView``
+# to :class:`QuerySandboxView` as part of the UnifiedUsers redesign
+# (task P5.A) — the new name reflects the lifecycle stage the view
+# represents (POST_FINALIZE / query stage), parallel to
+# :class:`SetupSandboxView`. The alias keeps older imports and any
+# external callers working.
+#
+# Deprecated: prefer ``QuerySandboxView`` for new code.
+MCPSandboxView = QuerySandboxView
+
+
+__all__ = ["MCPSandboxView", "QuerySandboxView", "SetupSandboxView"]

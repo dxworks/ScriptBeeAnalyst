@@ -1,5 +1,10 @@
-"""Filter-rules layer: a subclass of :class:`MCPSandboxView` whose
+"""Filter-rules layer: a subclass of :class:`QuerySandboxView` whose
 registry properties hide excluded entities.
+
+Filter rules apply at the **query stage** only (per the unified-users
+redesign §J decision: filter rules stay editable in the query stage,
+not setup). So this view subclasses the post-finalize
+:class:`QuerySandboxView`, never :class:`SetupSandboxView`.
 
 Two layers:
 
@@ -7,8 +12,8 @@ Two layers:
 * :class:`FilteredTagRegistry`      — :class:`TraitRegistry`, :class:`ClassifierRegistry`.
 * :class:`FilteredRelationRegistry` — :class:`RelationRegistry` (dual source/target check).
 
-:class:`FilteredSandboxView` inherits from :class:`MCPSandboxView` and
-overrides only the registry properties (``commits`` / ``files`` /
+:class:`FilteredSandboxView` inherits from :class:`QuerySandboxView`
+and overrides only the registry properties (``commits`` / ``files`` /
 ``issues`` / ``pull_requests`` / ``traits`` / ``classifiers`` /
 ``relations`` / ``components`` / ``file_metrics``). Helpers on the base
 view (``tags_for``, ``find_files_with_trait``, ``cochange_neighbors``,
@@ -24,7 +29,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any, Dict, Iterator, List, Optional, Set
 
 from src.common.kernel import EntityKind, EntityRef
-from src.sandbox.inject import MCPSandboxView
+from src.sandbox.inject import QuerySandboxView
 
 if TYPE_CHECKING:
     from src.common.kernel.graph import Graph
@@ -439,16 +444,16 @@ _FILTERED_PROPERTIES: Dict[str, EntityKind] = {
 }
 
 
-class FilteredSandboxView(MCPSandboxView):
-    """A :class:`MCPSandboxView` whose registry properties hide excluded entities.
+class FilteredSandboxView(QuerySandboxView):
+    """A :class:`QuerySandboxView` whose registry properties hide excluded entities.
 
     Subclassing buys us automatic helper filtering: every helper on
-    :class:`MCPSandboxView` reads through ``self.<registry>``, so an
+    :class:`QuerySandboxView` reads through ``self.<registry>``, so an
     override of ``self.commits`` etc. transparently filters the helper's
     output.
     """
 
-    # MCPSandboxView declares __slots__; we add our own.
+    # QuerySandboxView declares __slots__; we add our own.
     __slots__ = ("_excluded",)
 
     def __init__(
@@ -523,7 +528,7 @@ class FilteredSandboxView(MCPSandboxView):
         return attr
 
     # ------------------------------------------------------------------
-    # Overview-row filtering hook (called by MCPSandboxView.overview_as_dict).
+    # Overview-row filtering hook (called by QuerySandboxView.overview_as_dict).
     # ------------------------------------------------------------------
     def _keep_overview_row(self, entity_kind: str, entity_id: str) -> bool:
         kind = _OVERVIEW_KIND_TO_ENTITY_KIND.get(entity_kind)

@@ -377,7 +377,10 @@ def test_attribute_error_on_unknown(view: MCPSandboxView):
 # ----------------------------------------------------------------------
 def test_repr_summarises_view(view: MCPSandboxView):
     r = repr(view)
-    assert "MCPSandboxView" in r
+    # The class was renamed to QuerySandboxView in P5.A; the
+    # ``MCPSandboxView`` alias points at the new name, so the repr
+    # prints the canonical class name.
+    assert "QuerySandboxView" in r
     assert "sb-test" in r
     assert "commits=1" in r
 

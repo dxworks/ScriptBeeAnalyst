@@ -53,7 +53,8 @@ from src.common.domains.components.resolver import parse_component_mapping
 from src.supabase_client import get_service_client
 from src import processor as v2_processor
 from src.sandbox import (
-    MCPSandboxView,
+    QuerySandboxView,
+    SetupSandboxView,
     commit_issues as _sandbox_commit_issues,
     issue_commits as _sandbox_issue_commits,
     pr_commits as _sandbox_pr_commits,
@@ -160,8 +161,11 @@ exposes query endpoints over them.
 ## Graph Data Structure
 
 The `graph_data` variable available in /execute and /plot endpoints is
-an :class:`MCPSandboxView` wrapping the loaded typed :class:`Graph`. Read
-typed registries directly:
+a sandbox view wrapping the loaded typed :class:`Graph`. The exact
+class depends on the project's ``merge_state``:
+:class:`SetupSandboxView` for PRE_MERGE projects (narrower surface;
+diagnostics only), :class:`QuerySandboxView` for FINALIZED projects
+(full query-stage surface). Read typed registries directly:
 
 ```python
 print(len(graph_data.commits))
@@ -1867,7 +1871,12 @@ async def execute_code(request: CodeRequest):
     """Execute arbitrary Python code against the loaded project graph.
 
     **Available variables:**
-    - `graph_data` — :class:`MCPSandboxView` wrapping the loaded typed Graph
+    - `graph_data` — sandbox view wrapping the loaded typed Graph.
+      :class:`SetupSandboxView` when ``graph.merge_state`` is
+      ``PRE_MERGE`` (narrow setup-stage surface — per-source registries,
+      primary entity surfaces, per-domain summaries; no unified_users
+      aggregates, no enrichment helpers); :class:`QuerySandboxView`
+      when ``FINALIZED`` (full query-stage surface).
 
     **Example code:**
     ```python
@@ -1877,11 +1886,6 @@ async def execute_code(request: CodeRequest):
     for commit in commits[:5]:
         print(f'{commit.id[:8]} - {commit.message[:50]}')
     ```
-
-    TODO(P5.A): once :class:`SetupSandboxView` / :class:`QuerySandboxView`
-    land, this endpoint should pick the view class based on
-    ``graph.merge_state`` and refuse calls in PRE_MERGE. For P4.A
-    /execute still accepts both lifecycle stages.
     """
     code = request.code
     stdout = io.StringIO()
@@ -1890,25 +1894,41 @@ async def execute_code(request: CodeRequest):
         sys_stdout = sys.stdout
         sys.stdout = stdout
 
-        # Execute code with limited scope. Chunk 9: ``graph_data`` is
-        # now the :class:`MCPSandboxView` wrapping the typed v2 Graph.
+        # Pick the sandbox-view class from the project's lifecycle
+        # state. P5.A: SetupSandboxView (PRE_MERGE) hides post-finalize
+        # attrs (unified_users, traits, classifiers, relations,
+        # components, file_metrics, overviews, people-aware helpers);
+        # QuerySandboxView (FINALIZED) exposes the full v2 surface.
+        # Filter rules apply at the query stage only (see
+        # ``src/filter_rules/views.py``), so the filtered wrapper is
+        # layered on top of the Query view only.
         v2_graph: Optional[Graph] = (
             graph_store.get(current_project_id) if current_project_id else None
         )
-        raw_view: Optional[MCPSandboxView] = (
-            MCPSandboxView(v2_graph) if v2_graph is not None else None
-        )
-        if v2_graph is not None and current_project_id:
-            excluded = filter_rule_store.excluded_ids_for(current_project_id)
-            filtered_view: Any = (
-                FilteredSandboxView(v2_graph, excluded) if excluded else raw_view
-            )
+        if v2_graph is None:
+            raw_view: Any = None
+            filtered_view: Any = None
         else:
-            filtered_view = raw_view
+            view_cls = (
+                SetupSandboxView
+                if v2_graph.merge_state == MergeState.PRE_MERGE
+                else QuerySandboxView
+            )
+            raw_view = view_cls(v2_graph)
+            if view_cls is QuerySandboxView and current_project_id:
+                excluded = filter_rule_store.excluded_ids_for(current_project_id)
+                filtered_view = (
+                    FilteredSandboxView(v2_graph, excluded) if excluded else raw_view
+                )
+            else:
+                filtered_view = raw_view
         # ``graph_data_full`` is the documented unfiltered escape hatch for
         # "across the entire history" prompts. The bare ``graph`` global is
         # the lower-level raw Graph — a deliberate third hatch for power
-        # users who want to bypass the MCPSandboxView surface entirely.
+        # users who want to bypass the sandbox-view surface entirely.
+        # The enrichment-aware helpers (``find_files_with_trait`` etc.)
+        # live on QuerySandboxView only — on a SetupSandboxView the
+        # ``getattr(..., None)`` falls through to a no-op binding.
         exec_globals = {
             "graph_data": filtered_view,
             "graph_data_full": raw_view,
@@ -1920,13 +1940,16 @@ async def execute_code(request: CodeRequest):
             # callables so legacy snippets calling ``find_files_with_trait("x")``
             # without going through ``graph_data.`` still inherit filtering.
             "find_files_with_trait": (
-                filtered_view.find_files_with_trait if filtered_view else lambda *_a, **_k: []
+                getattr(filtered_view, "find_files_with_trait", None)
+                or (lambda *_a, **_k: [])
             ),
             "cochange_neighbors": (
-                filtered_view.cochange_neighbors if filtered_view else lambda *_a, **_k: []
+                getattr(filtered_view, "cochange_neighbors", None)
+                or (lambda *_a, **_k: [])
             ),
             "overview_as_dict": (
-                filtered_view.overview_as_dict if filtered_view else lambda *_a, **_k: None
+                getattr(filtered_view, "overview_as_dict", None)
+                or (lambda *_a, **_k: None)
             ),
         }
         exec(code, exec_globals)
@@ -1946,11 +1969,12 @@ async def generate_plot(request: CodeRequest):
     it as a JPEG image.
 
     **Available variables:**
-    - `graph_data` — :class:`MCPSandboxView` wrapping the loaded typed Graph
+    - `graph_data` — sandbox view wrapping the loaded typed Graph.
+      :class:`SetupSandboxView` for PRE_MERGE projects (narrow
+      setup-stage surface), :class:`QuerySandboxView` for FINALIZED
+      projects (full query-stage surface). Same selection rule as
+      ``/execute``.
     - `plt` — matplotlib.pyplot module
-
-    TODO(P5.A): same state-gating story as ``/execute`` — refuses in
-    PRE_MERGE once the SetupSandboxView/QuerySandboxView split lands.
     """
     code = request.code
     stdout = io.StringIO()
@@ -1959,19 +1983,28 @@ async def generate_plot(request: CodeRequest):
         sys_stdout = sys.stdout
         sys.stdout = stdout
 
+        # State-driven view selection — mirrors /execute. See that
+        # endpoint for the rationale.
         v2_graph: Optional[Graph] = (
             graph_store.get(current_project_id) if current_project_id else None
         )
-        raw_view: Optional[MCPSandboxView] = (
-            MCPSandboxView(v2_graph) if v2_graph is not None else None
-        )
-        if v2_graph is not None and current_project_id:
-            excluded = filter_rule_store.excluded_ids_for(current_project_id)
-            filtered_view: Any = (
-                FilteredSandboxView(v2_graph, excluded) if excluded else raw_view
-            )
+        if v2_graph is None:
+            raw_view: Any = None
+            filtered_view: Any = None
         else:
-            filtered_view = raw_view
+            view_cls = (
+                SetupSandboxView
+                if v2_graph.merge_state == MergeState.PRE_MERGE
+                else QuerySandboxView
+            )
+            raw_view = view_cls(v2_graph)
+            if view_cls is QuerySandboxView and current_project_id:
+                excluded = filter_rule_store.excluded_ids_for(current_project_id)
+                filtered_view = (
+                    FilteredSandboxView(v2_graph, excluded) if excluded else raw_view
+                )
+            else:
+                filtered_view = raw_view
         # See /execute for the three-hatch rationale (graph_data / graph_data_full / graph).
         exec_globals = {
             "graph_data": filtered_view,
