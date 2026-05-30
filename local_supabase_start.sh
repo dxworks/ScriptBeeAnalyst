@@ -12,14 +12,7 @@ NC='\033[0m'
 
 echo -e "${BLUE}=== Starting Local Supabase ===${NC}"
 
-# Ensure env-switch is set to local
-if [ -f "$SCRIPT_DIR/.env.supabase" ]; then
-  TARGET=$(grep '^SUPABASE_TARGET=' "$SCRIPT_DIR/.env.supabase" | cut -d'=' -f2)
-  if [ "$TARGET" != "local" ]; then
-    echo -e "${YELLOW}SUPABASE_TARGET is '$TARGET', switching to 'local'...${NC}"
-    "$SCRIPT_DIR/env-switch.sh" local
-  fi
-else
+if [ ! -f "$SCRIPT_DIR/.env.supabase" ]; then
   echo -e "${RED}Error: .env.supabase not found. Run: cp .env.supabase.example .env.supabase${NC}"
   exit 1
 fi

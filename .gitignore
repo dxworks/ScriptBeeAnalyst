@@ -62,10 +62,11 @@ chat-ui/oracle_response.pkl
 
 .claude
 
-# Ignore all markdown files except README.md
+# Ignore all markdown files except README.md and the deployment guide
 *.md
 !README.md
 !**/README.md
+!local_supabase_deployment_guide.md
 
 TODO
 DONE
