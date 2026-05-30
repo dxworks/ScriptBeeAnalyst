@@ -68,10 +68,13 @@ echo -e "  URL:    ${GREEN}$SUPABASE_URL${NC}"
 
 # Step 1: Update root .env
 if [ -f "$ROOT_ENV" ]; then
-  sed -i "s|^SUPABASE_URL=.*|SUPABASE_URL=$SUPABASE_URL|" "$ROOT_ENV"
-  sed -i "s|^SUPABASE_URL_DOCKER=.*|SUPABASE_URL_DOCKER=$URL_DOCKER|" "$ROOT_ENV"
-  sed -i "s|^API_EXTERNAL_URL=.*|API_EXTERNAL_URL=$API_EXTERNAL_URL|" "$ROOT_ENV"
-  sed -i "s|^SUPABASE_PUBLIC_URL=.*|SUPABASE_PUBLIC_URL=$SUPABASE_PUBLIC_URL|" "$ROOT_ENV"
+  # Portable in-place edit: GNU sed needs `-i`, BSD/macOS sed needs `-i ''`.
+  # `-i.bak` + cleanup works on both.
+  sed -i.bak "s|^SUPABASE_URL=.*|SUPABASE_URL=$SUPABASE_URL|" "$ROOT_ENV"
+  sed -i.bak "s|^SUPABASE_URL_DOCKER=.*|SUPABASE_URL_DOCKER=$URL_DOCKER|" "$ROOT_ENV"
+  sed -i.bak "s|^API_EXTERNAL_URL=.*|API_EXTERNAL_URL=$API_EXTERNAL_URL|" "$ROOT_ENV"
+  sed -i.bak "s|^SUPABASE_PUBLIC_URL=.*|SUPABASE_PUBLIC_URL=$SUPABASE_PUBLIC_URL|" "$ROOT_ENV"
+  rm -f "$ROOT_ENV.bak"
   echo -e "  ${GREEN}.env updated${NC}"
 else
   echo -e "  ${YELLOW}Warning: .env not found, skipping${NC}"
