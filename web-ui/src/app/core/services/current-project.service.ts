@@ -1,5 +1,6 @@
 import { Injectable, signal, computed } from '@angular/core';
-import { DataServerService, CurrentProjectResponse } from './data-server.service';
+import { DataServerService, CurrentProjectResponse, FinalizeResult } from './data-server.service';
+import { MergeState } from '../models/project.model';
 
 const POLL_INTERVAL_MS = 5000;
 
@@ -14,6 +15,10 @@ export class CurrentProjectService {
   >(null);
   private readonly connectedSignal = signal<boolean>(true);
   private readonly loadingSignal = signal<boolean>(false);
+  // Lifecycle stage of the loaded graph, polled off /projects/current.
+  // `null` when nothing is loaded.
+  private readonly mergeStateSignal = signal<MergeState | null>(null);
+  private readonly finalizingSignal = signal<boolean>(false);
 
   readonly loadedProjectId = this.loadedProjectIdSignal.asReadonly();
   readonly loadedProjectName = this.loadedProjectNameSignal.asReadonly();
@@ -21,6 +26,12 @@ export class CurrentProjectService {
   readonly connected = this.connectedSignal.asReadonly();
   readonly loading = this.loadingSignal.asReadonly();
   readonly hasLoadedProject = computed(() => this.loadedProjectIdSignal() !== null);
+  /** Lifecycle stage of the loaded project (`null` when none loaded). */
+  readonly mergeState = this.mergeStateSignal.asReadonly();
+  /** True only when a project is loaded AND its graph is FINALIZED. */
+  readonly isFinalized = computed(() => this.mergeStateSignal() === 'FINALIZED');
+  /** True while a finalize call is in flight (drives the CTA spinner). */
+  readonly finalizing = this.finalizingSignal.asReadonly();
 
   private pollingInterval: ReturnType<typeof setInterval> | null = null;
 
@@ -53,6 +64,7 @@ export class CurrentProjectService {
           this.loadedProjectIdSignal.set(current.project_id);
           this.loadedProjectNameSignal.set(current.project_name ?? null);
           this.loadedProjectStatsSignal.set(current.stats);
+          this.mergeStateSignal.set(current.merge_state);
           this.connectedSignal.set(true);
           return;
         }
@@ -65,6 +77,7 @@ export class CurrentProjectService {
         this.loadedProjectIdSignal.set(null);
         this.loadedProjectNameSignal.set(null);
         this.loadedProjectStatsSignal.set(null);
+        this.mergeStateSignal.set(null);
         this.connectedSignal.set(true);
         return;
       } catch (err) {
@@ -108,10 +121,40 @@ export class CurrentProjectService {
       this.loadedProjectIdSignal.set(null);
       this.loadedProjectNameSignal.set(null);
       this.loadedProjectStatsSignal.set(null);
+      this.mergeStateSignal.set(null);
     }
     await this.refresh();
     this.loadingSignal.set(false);
     return ok;
+  }
+
+  /**
+   * Finalize the given project (PRE_MERGE → FINALIZED). Blocking — Phase B
+   * can take ~150s — so callers should drive UI off the `finalizing` signal.
+   * On success (or a benign "already finalized" 409) the local state is
+   * refreshed so `mergeState`/`isFinalized` flip without waiting for the
+   * 5s poll. Returns the raw `FinalizeResult` for metric/error display.
+   */
+  async finalize(projectId: string): Promise<FinalizeResult> {
+    if (this.finalizingSignal()) {
+      return { success: false, error: 'A finalize is already in progress' };
+    }
+    this.finalizingSignal.set(true);
+    try {
+      const result = await this.dataServer.finalizeProject(projectId);
+      if (result.success) {
+        // Reflect the new stage immediately; the poll will reconcile too.
+        this.mergeStateSignal.set('FINALIZED');
+      } else if (result.alreadyFinalized) {
+        this.mergeStateSignal.set('FINALIZED');
+      }
+      // Reconcile against the server regardless (cheap, and covers the
+      // half-finalized contract where the server may still read PRE_MERGE).
+      await this.refresh();
+      return result;
+    } finally {
+      this.finalizingSignal.set(false);
+    }
   }
 
   isLoaded(projectId: string): boolean {

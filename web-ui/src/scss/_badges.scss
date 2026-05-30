@@ -40,6 +40,28 @@
   color: var(--color-text-secondary);
 }
 
+// Lifecycle (merge_state) badges — distinct from the pipeline status badge
+// above. `setup` = PRE_MERGE, `ready` = FINALIZED. The thin border keeps the
+// pair visually separate from the solid status badge sitting next to them.
+.lifecycle-badge {
+  gap: 4px;
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+  border: 1px solid transparent;
+
+  &.lifecycle-ready {
+    background-color: rgba(var(--color-success-rgb), 0.1);
+    color: var(--color-success);
+    border-color: rgba(var(--color-success-rgb), 0.4);
+  }
+
+  &.lifecycle-setup {
+    background-color: var(--color-surface);
+    color: var(--color-text-secondary);
+    border-color: var(--color-border);
+  }
+}
+
 // Filter tag / pill style
 .tag {
   display: inline-flex;

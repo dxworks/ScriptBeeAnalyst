@@ -6,6 +6,12 @@
         <h3 class="project-name">{{ project().name }}</h3>
         <div class="project-meta">
           <span class="badge" [class]="getStatusClass()">{{ getStatusLabel() }}</span>
+          <span
+            class="badge lifecycle-badge"
+            [class.lifecycle-ready]="isFinalized()"
+            [class.lifecycle-setup]="!isFinalized()"
+            [title]="isFinalized() ? 'Finalized — in the query stage' : 'Setup stage — not yet finalized'"
+          >{{ getLifecycleLabel() }}</span>
           @if (isLoaded()) {
             <span class="loaded-tag" title="Currently loaded in data server">
               <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round">

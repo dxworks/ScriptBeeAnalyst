@@ -54,6 +54,13 @@ export const routes: Routes = [
                     './pages/project/setup/enrichment-config/enrichment-config.component'
                   ).then(m => m.EnrichmentConfigComponent),
               },
+              {
+                path: 'analysis',
+                loadComponent: () =>
+                  import('./pages/project/setup/analysis/analysis.component').then(
+                    m => m.AnalysisComponent,
+                  ),
+              },
             ],
           },
           {

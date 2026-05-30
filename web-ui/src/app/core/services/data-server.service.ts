@@ -10,6 +10,7 @@ import {
   UnifiedUserDto,
   UnifiedUsersResponse,
 } from '../models/author-merge.model';
+import { MergeState } from '../models/project.model';
 
 export interface BuildResult {
   success: boolean;
@@ -46,6 +47,12 @@ export interface HealthResponse {
 export interface CurrentProjectResponse {
   project_id: string;
   project_name?: string;
+  /**
+   * Lifecycle stage of the loaded graph. The data-server surfaces this on
+   * `/projects/current` (UnifiedUsers redesign §I). Optional/defaulted to
+   * `PRE_MERGE` so callers that predate the field keep compiling.
+   */
+  merge_state: MergeState;
   stats: {
     git_commits: number;
     jira_issues: number;
@@ -60,11 +67,36 @@ interface CurrentProjectResponseRaw {
   loaded: boolean;
   project_id?: string;
   project_name?: string;
+  merge_state?: string;
   stats?: {
     git_commits: number;
     jira_issues: number;
     github_prs: number;
   };
+}
+
+/**
+ * Result of `POST /projects/{id}/finalize`. Mirrors the JSON body the
+ * data-server returns on success (server.py `finalize_project`). `success`
+ * is synthesised client-side; everything else is verbatim from the server.
+ */
+export interface FinalizeResult {
+  success: boolean;
+  error?: string;
+  /**
+   * True when the server reported the project was *already* finalized (409).
+   * Callers treat this as a benign no-op rather than a hard failure.
+   */
+  alreadyFinalized?: boolean;
+  merge_state?: MergeState;
+  unified_users_created?: number;
+  refs_rewritten?: number;
+  account_refs_repaired?: number;
+  phase_b_relations_built?: number;
+  phase_b_traits_emitted?: number;
+  phase_b_classifiers_emitted?: number;
+  phase_b_errors?: unknown[];
+  duration_ms?: number;
 }
 
 // ── Filter rules DTOs ───────────────────────────────────────────────────────
@@ -339,6 +371,62 @@ export class DataServerService {
   }
 
   /**
+   * Finalize a project: transition its loaded graph from PRE_MERGE to
+   * FINALIZED. Runs the rebind + Phase B re-key on the data-server — a
+   * blocking call that takes ~150s on large projects (Phase B), so callers
+   * must show a spinner. One-way: re-import is the only documented recovery.
+   *
+   * The project MUST be loaded into the data-server first (the endpoint
+   * 404s otherwise) — callers should ensure `loadProject` ran.
+   *
+   * Distinguishes three outcomes:
+   *  - success → `{ success: true, ...metrics }`
+   *  - already finalized (409) → `{ success: false, alreadyFinalized: true }`
+   *  - anything else → `{ success: false, error }`
+   */
+  async finalizeProject(projectId: string): Promise<FinalizeResult> {
+    try {
+      const response = await firstValueFrom(
+        this.http.post<Omit<FinalizeResult, 'success'>>(
+          `${this.baseUrl}/projects/${projectId}/finalize`,
+          {},
+        )
+      );
+      return { success: true, ...response };
+    } catch (err) {
+      if (err instanceof HttpErrorResponse) {
+        if (err.status === 0) {
+          return {
+            success: false,
+            error: `Unable to connect to data server. Please ensure it's running on ${this.baseUrl}`,
+          };
+        }
+        // 409 = project_finalized: the graph is already FINALIZED. Treat as a
+        // benign no-op so the UI can just refresh state instead of erroring.
+        if (err.status === 409) {
+          return { success: false, alreadyFinalized: true };
+        }
+        const message =
+          err.error?.error || err.error?.detail || err.error?.message || err.message;
+        if (err.status === 404) {
+          return {
+            success: false,
+            error: message || 'Project is not loaded. Load the project before finalizing.',
+          };
+        }
+        return {
+          success: false,
+          error: message || `Finalize failed (${err.status})`,
+        };
+      }
+      return {
+        success: false,
+        error: `Unexpected error: ${err instanceof Error ? err.message : 'Unknown error'}`,
+      };
+    }
+  }
+
+  /**
    * Scaffold AI agent workspace folder for a project (no auth required)
    * Creates directory structure with README under analyzed_projects/projects/
    * @param projectId - UUID of the project
@@ -409,6 +497,9 @@ export class DataServerService {
       return {
         project_id: response.project_id,
         project_name: response.project_name,
+        // The server emits the StrEnum value ("PRE_MERGE"/"FINALIZED").
+        // Default to PRE_MERGE if an older data-server build omits it.
+        merge_state: response.merge_state === 'FINALIZED' ? 'FINALIZED' : 'PRE_MERGE',
         stats: response.stats ?? { git_commits: 0, jira_issues: 0, github_prs: 0 },
       };
     } catch (err) {

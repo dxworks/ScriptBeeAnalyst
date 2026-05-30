@@ -47,11 +47,35 @@ export class AuthorMatchingComponent implements OnInit {
 
   readonly oversizeThreshold = OVERSIZE_CLUSTER_WARNING_THRESHOLD;
 
+  // Once the project is FINALIZED the author refs have been rewritten to
+  // UnifiedUsers and the matching endpoints 409. Mirror that in the UI by
+  // turning this tab read-only. Getter (not a field initializer) so it doesn't
+  // read the injected service before the constructor assigns it.
+  get isFinalized() {
+    return this.currentProject.isFinalized;
+  }
+
   constructor(
     private dataServerService: DataServerService,
     private toastService: ToastService,
     private currentProject: CurrentProjectService,
   ) {}
+
+  /**
+   * Guard for every author-matching write. Returns true (and surfaces a
+   * toast) when the project is finalized, so callers can early-return. The
+   * data-server already 409s these endpoints — this stops the round-trip
+   * and gives immediate feedback.
+   */
+  private blockedByFinalize(): boolean {
+    if (this.isFinalized()) {
+      this.toastService.info(
+        'Author matching is finalized and read-only. Re-import the project to change merges.',
+      );
+      return true;
+    }
+    return false;
+  }
 
   ngOnInit(): void {
     // Auto-load suggestions if a project is loaded.
@@ -99,6 +123,7 @@ export class AuthorMatchingComponent implements OnInit {
   }
 
   async onApplySuggestion(suggestion: SuggestionDto): Promise<void> {
+    if (this.blockedByFinalize()) return;
     const projectId = this.getProjectId();
     if (!projectId || this.processingSuggestionId()) return;
 
@@ -141,6 +166,7 @@ export class AuthorMatchingComponent implements OnInit {
   }
 
   async onRejectSuggestion(suggestion: SuggestionDto): Promise<void> {
+    if (this.blockedByFinalize()) return;
     const projectId = this.getProjectId();
     if (!projectId || this.processingSuggestionId()) return;
 
@@ -255,6 +281,7 @@ export class AuthorMatchingComponent implements OnInit {
   }
 
   confirmDeleteUnifiedUser(user: UnifiedUserDto): void {
+    if (this.blockedByFinalize()) return;
     this.unifiedUserToDelete.set(user);
     this.showDeleteUnifiedUserModal.set(true);
   }
@@ -283,6 +310,7 @@ export class AuthorMatchingComponent implements OnInit {
   }
 
   requestApplyAllSuggestions(): void {
+    if (this.blockedByFinalize()) return;
     if (this.applyingAll()) return;
     if (this.suggestions().length === 0) return;
     this.showApplyAllModal.set(true);
@@ -325,6 +353,7 @@ export class AuthorMatchingComponent implements OnInit {
   }
 
   confirmDeleteAllLinks(): void {
+    if (this.blockedByFinalize()) return;
     if (this.deletingAllLinks()) return;
     this.showDeleteAllLinksModal.set(true);
   }

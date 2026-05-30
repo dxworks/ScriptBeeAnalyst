@@ -164,11 +164,26 @@ export class EnrichmentConfigComponent implements OnInit {
   readonly saving = signal(false);
   readonly rerunning = signal(false);
 
+  /**
+   * Once the project is FINALIZED the enrichment config is frozen
+   * (`projects.enrichment_config_frozen`) and the overrides endpoint 409s.
+   * Mirror that by making the whole tab read-only. Getter (not a field
+   * initializer) so it doesn't read the injected service before the
+   * constructor assigns it.
+   */
+  get isFinalized() {
+    return this.currentProject.isFinalized;
+  }
+
   /** True iff the user has at least one unsaved edit. */
   readonly dirty = computed(() => this.pendingOverridesSignal().size > 0);
 
   readonly canSave = computed(
-    () => this.dirty() && !this.saving() && this.state() === 'ready',
+    () =>
+      this.dirty() &&
+      !this.saving() &&
+      this.state() === 'ready' &&
+      !this.isFinalized(),
   );
 
   /**
@@ -184,7 +199,8 @@ export class EnrichmentConfigComponent implements OnInit {
       this.hasOverrides() &&
       !this.dirty() &&
       !this.rerunning() &&
-      !this.saving(),
+      !this.saving() &&
+      !this.isFinalized(),
   );
 
   /**
@@ -201,6 +217,7 @@ export class EnrichmentConfigComponent implements OnInit {
    */
   readonly rerunReason = computed<string | null>(() => {
     if (this.state() !== 'ready') return null;
+    if (this.isFinalized()) return 'Project is finalized — config is read-only';
     if (this.saving()) return 'Saving — please wait';
     if (this.dirty()) return 'Save your changes before rerunning';
     if (!this.hasOverrides()) return 'No overrides to apply';
@@ -471,6 +488,9 @@ export class EnrichmentConfigComponent implements OnInit {
    * separate "discard this field" gesture.
    */
   setPending(field: CatalogueFieldDto, value: unknown): void {
+    // Frozen once finalized — the single choke point for every knob edit, so
+    // guarding here keeps the inputs inert regardless of which editor fired.
+    if (this.isFinalized()) return;
     this.pendingOverridesSignal.update(prev => {
       const next = new Map(prev);
       if (deepEqual(value, field.current)) {

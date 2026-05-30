@@ -62,6 +62,16 @@ export class ProjectCardComponent {
     }
   }
 
+  /** True once the project has been finalized (query stage). */
+  isFinalized(): boolean {
+    return this.project().merge_state === 'FINALIZED';
+  }
+
+  /** Lifecycle badge text: query stage vs. setup stage. */
+  getLifecycleLabel(): string {
+    return this.isFinalized() ? 'Ready' : 'Setup';
+  }
+
   getStatusLabel(): string {
     const status = this.project().status;
     switch (status) {

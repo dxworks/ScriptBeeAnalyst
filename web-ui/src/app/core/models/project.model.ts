@@ -5,10 +5,26 @@ export interface Project {
   created_at: string;
   updated_at: string;
   status: ProjectStatus;
+  /**
+   * UnifiedUsers redesign lifecycle stage, mirrored from the data-server's
+   * `MergeState` (data-server/src/common/kernel/merge_state.py). `PRE_MERGE`
+   * = setup stage (author matches / enrichment config still editable);
+   * `FINALIZED` = query stage (refs rewritten to UnifiedUsers, setup frozen).
+   * Optional because older project rows pre-date the column; treat a missing
+   * value as `PRE_MERGE`.
+   */
+  merge_state?: MergeState;
   // Files are fetched separately via SerializedFile[]
 }
 
 export type ProjectStatus = 'draft' | 'processing' | 'ready' | 'idle' | 'resuming' | 'error';
+
+/**
+ * Project lifecycle stage. The string values match the data-server's
+ * `StrEnum` exactly — both `/projects/current` and `POST .../finalize` emit
+ * these literals, and the Supabase `projects.merge_state` column stores them.
+ */
+export type MergeState = 'PRE_MERGE' | 'FINALIZED';
 
 export interface CreateProjectDto {
   name: string;
