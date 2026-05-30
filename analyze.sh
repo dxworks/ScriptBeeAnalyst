@@ -96,7 +96,7 @@ cat > "$WORKSPACE/opencode.json" << 'OJEOF'
   "mcp": {
     "scriptbee-data": {
       "type": "local",
-      "command": ["python", "../../mcp-server/server.py"],
+      "command": ["../../mcp-server/.venv/bin/python", "../../mcp-server/server.py"],
       "environment": {
         "DATA_SERVER_URL": "http://localhost:8001"
       }
