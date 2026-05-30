@@ -632,6 +632,20 @@ async def finalize_project(project_id: str):
             f"(people-side relation kinds: {sorted(people_kinds)})"
         )
 
+    # --- 0b. repair the account -> UnifiedUser 1:1 invariant -------------
+    # Re-merging an account into a freshly minted UU used to leave a stale
+    # duplicate claim in the previous owner's ``account_refs``. The
+    # write-time fix in ``_apply_merge_to_graph`` prevents new ones; this
+    # heals any baked into the loaded pickle. Runs BEFORE rebind so Phase B
+    # people-side counts are computed off de-duplicated ownership.
+    refs_repaired = _repair_account_ref_ownership(graph)
+    if refs_repaired:
+        logger.warning(
+            f"finalize: repaired {refs_repaired} duplicate account_ref "
+            f"claim(s) in project {project_id} before rebind "
+            "(account -> UnifiedUser 1:1 invariant)"
+        )
+
     # --- 1. rebind --------------------------------------------------------
     # The rebind is the only step that mutates the in-memory graph
     # irreversibly. If it succeeds, the graph is in-memory FINALIZED
@@ -756,6 +770,7 @@ async def finalize_project(project_id: str):
         f"Finalized project {project_id} in {duration_ms}ms — "
         f"unified_users_created={rebind_stats.unified_users_created}, "
         f"refs_rewritten={rebind_stats.refs_rewritten}, "
+        f"account_refs_repaired={refs_repaired}, "
         f"phase_b_relations={phase_b_result.relations_emitted}, "
         f"phase_b_traits={phase_b_result.traits_emitted}, "
         f"phase_b_classifiers={phase_b_result.classifiers_emitted}"
@@ -765,6 +780,7 @@ async def finalize_project(project_id: str):
         "merge_state": MergeState.FINALIZED.value,
         "unified_users_created": rebind_stats.unified_users_created,
         "refs_rewritten": rebind_stats.refs_rewritten,
+        "account_refs_repaired": refs_repaired,
         "phase_b_relations_built": phase_b_result.relations_emitted,
         "phase_b_traits_emitted": phase_b_result.traits_emitted,
         "phase_b_classifiers_emitted": phase_b_result.classifiers_emitted,
@@ -971,6 +987,57 @@ def _get_activity_counts(graph: Graph) -> dict[str, int]:
     return counts
 
 
+def _detach_account_ref(graph: Graph, ref, keep_uu_id: str) -> int:
+    """Strip ``ref`` from every UnifiedUser except ``keep_uu_id``.
+
+    Enforces the 1:1 account -> UnifiedUser invariant on the reverse side
+    (``UnifiedUser.account_refs``). The forward mapping
+    (``Account.unified_user_id``) is the source of truth; this removes any
+    *other* UU's stale reverse-claim on the same account so a re-merge that
+    moved the account to a new UU doesn't leave a duplicate behind.
+
+    Maintains the ``by_account`` multi-index via remove-then-mutate-then-add:
+    ``Registry.add`` only purges the old index buckets when the stored entity
+    is a *different* object, so an in-place ``account_refs`` mutation would
+    otherwise leave stale buckets. Returns the number of stale claims removed.
+    """
+    reg = graph.unified_users
+    removed = 0
+    # ``by_account[ref]`` is a tuple snapshot (see kernel ``Index.__getitem__``),
+    # so mutating the registry while iterating it is safe.
+    for owner in reg.by_account[ref]:  # type: ignore[attr-defined]
+        if owner.id == keep_uu_id:
+            continue
+        if ref not in owner.account_refs:
+            continue
+        reg.remove(owner.id)
+        owner.account_refs = [r for r in owner.account_refs if r != ref]
+        reg.add(owner)
+        removed += 1
+    return removed
+
+
+def _repair_account_ref_ownership(graph: Graph) -> int:
+    """One-shot repair of the account -> UnifiedUser 1:1 invariant.
+
+    Heals graphs (e.g. on-disk pickles) built before the write-time fix in
+    :func:`_apply_merge_to_graph`, where re-merging an account into a freshly
+    minted UU left a stale duplicate claim in the previous owner's
+    ``account_refs``. The forward mapping ``Account.unified_user_id`` is the
+    source of truth; for every account that carries one, strip its ref from
+    every UU except the named owner. Returns the total number of stale
+    reverse-claims removed (0 when the invariant already holds).
+    """
+    total = 0
+    for reg_acc in (graph.git_accounts, graph.github_users, graph.jira_users):
+        for account in reg_acc.all():
+            owner_id = getattr(account, "unified_user_id", None)
+            if owner_id is None:
+                continue
+            total += _detach_account_ref(graph, account.ref(), owner_id)
+    return total
+
+
 def _apply_merge_to_graph(graph: Graph, uu: UnifiedUser) -> None:
     """Mirror an accepted smart-merge ``UnifiedUser`` onto the typed Graph.
 
@@ -1028,11 +1095,22 @@ def _apply_merge_to_graph(graph: Graph, uu: UnifiedUser) -> None:
         account.unified_user_id = uu.id
         resolved_accounts.append(account)
 
+    # Enforce the 1:1 account -> UnifiedUser invariant. Each resolved
+    # account now belongs to ``uu`` (its ``unified_user_id`` was set above),
+    # so strip its ref from any OTHER UnifiedUser that still claims it.
+    # Without this, re-merging an account into a new UU leaves a stale
+    # duplicate claim in the previous owner's ``account_refs`` — note that
+    # ``apply`` / ``apply-batch`` mint a fresh ``uu.id`` per call, so a
+    # re-merge routinely arrives under a different id than the prior owner.
+    reg = graph.unified_users
+    for account in resolved_accounts:
+        _detach_account_ref(graph, account.ref(), uu.id)
+
     # Create-or-update the typed UnifiedUser entity. Subsequent merges
     # that fold more accounts into an existing UU extend ``account_refs``
     # rather than replace it. De-dup on extend keeps idempotency intact
     # when the same merge is replayed (e.g. on /load).
-    existing = graph.unified_users.get(uu.id)
+    existing = reg.get(uu.id)
     if existing is None:
         # P4.C: pass through ``uu.identities`` so the typed-graph
         # ``UnifiedUser`` entity carries the same smart-merge identities
@@ -1060,8 +1138,6 @@ def _apply_merge_to_graph(graph: Graph, uu: UnifiedUser) -> None:
     existing.primary_email = uu.primary_email
     existing_refs = set(existing.account_refs)
     new_refs = [a.ref() for a in resolved_accounts if a.ref() not in existing_refs]
-    if new_refs:
-        existing.account_refs = list(existing.account_refs) + new_refs
     # P4.C: extend identities with any new entries (de-dup by
     # ``source`` + ``source_key``) so re-applying the same merge is
     # idempotent and folding a second merge into an existing UU widens
@@ -1070,12 +1146,17 @@ def _apply_merge_to_graph(graph: Graph, uu: UnifiedUser) -> None:
     new_idents = [
         i for i in uu.identities if (i.source, i.source_key) not in seen_keys
     ]
+    # Remove first so the ``by_account`` buckets keyed off the *current*
+    # ``account_refs`` are purged, then mutate, then re-add to rebuild them.
+    # ``Registry.add`` skips that purge for an in-place update (the stored
+    # entity IS ``existing``), which would otherwise double-insert the
+    # account keys into the multi-index on every replay.
+    reg.remove(existing.id)
+    if new_refs:
+        existing.account_refs = list(existing.account_refs) + new_refs
     if new_idents:
         existing.identities = list(existing.identities) + new_idents
-    # ``add`` already reindexes on insert; for an in-place mutation of
-    # ``account_refs`` we need to refresh the ``by_account`` multi-index
-    # so reverse lookups see the new bucket entries.
-    graph.unified_users.add(existing)
+    reg.add(existing)
 
 
 def _replay_user_mappings(project_id: str) -> dict:
@@ -1145,15 +1226,26 @@ def _replay_user_mappings(project_id: str) -> dict:
             )
 
     state.users = users
+
+    # Heal any account -> UnifiedUser duplicate reverse-claims baked into
+    # the loaded pickle (graphs built before the write-time fix in
+    # ``_apply_merge_to_graph``). The per-mapping detach above already
+    # prevents replay from introducing new ones; this final pass also
+    # clears stale claims left by an owner whose account moved to a UU not
+    # present in the current mappings.
+    refs_repaired = _repair_account_ref_ownership(graph)
+
     logger.info(
         f"Replayed {len(users)} unified users "
-        f"({total_matched} matched, {total_missing} missing)"
+        f"({total_matched} matched, {total_missing} missing, "
+        f"{refs_repaired} duplicate account_ref claim(s) repaired)"
     )
 
     return {
         "users_replayed": len(users),
         "identities_matched": total_matched,
         "identities_missing": total_missing,
+        "account_refs_repaired": refs_repaired,
     }
 
 
