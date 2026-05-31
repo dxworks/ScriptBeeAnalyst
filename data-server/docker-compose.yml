@@ -1,19 +1,39 @@
 services:
+  db:
+    image: postgres:16-alpine
+    container_name: scriptbee-db
+    environment:
+      - POSTGRES_USER=${POSTGRES_USER:-postgres}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-postgres}
+      - POSTGRES_DB=${POSTGRES_DB:-scriptbee}
+    ports:
+      - "5432:5432"
+    volumes:
+      - scriptbee-pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
   data-server:
     build:
       context: .
       dockerfile: Dockerfile
     container_name: scriptbee-data-server
+    depends_on:
+      db:
+        condition: service_healthy
     ports:
       - "8001:8001"
     extra_hosts:
       - "host.docker.internal:host-gateway"
     environment:
-      # Supabase connection - uses SUPABASE_URL_DOCKER to resolve host from inside container
-      - SUPABASE_URL=${SUPABASE_URL_DOCKER:-${SUPABASE_URL}}
-      - SUPABASE_ANON_KEY=${SUPABASE_ANON_KEY}
-      - SUPABASE_SERVICE_KEY=${SUPABASE_SERVICE_KEY}
-      - JWT_SECRET=${JWT_SECRET}
+      # Single-tenant local mode: the data-server owns Postgres + on-disk storage.
+      - DATABASE_URL=${DATABASE_URL:-postgresql://postgres:postgres@db:5432/scriptbee}
+      - SERIALIZED_FILES_DIR=/data/serialized-files
+      - MAX_UPLOAD_MB=${MAX_UPLOAD_MB:-500}
       # Logging configuration
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
       # Workspace for AI agent project folders
@@ -21,8 +41,12 @@ services:
     volumes:
       # Mount source for development (hot reload)
       - ./src:/app/src:ro
+      # Migrations applied on startup by src/bootstrap.py
+      - ../supabase/migrations:/supabase/migrations:ro
       # Mount workspace for AI agent scaffolding
       - ../analyzed_projects/projects:/workspace/projects
+      # On-disk serialized-file store (replaces the Supabase bucket)
+      - scriptbee-serialized-files:/data/serialized-files
       # Shared per-registry pickles produced by the processor
       - scriptbee-pickles:/tmp/pickles
     command: uvicorn src.server:app --host 0.0.0.0 --port 8001 --reload
@@ -33,14 +57,14 @@ services:
       context: .
       dockerfile: Dockerfile
     container_name: scriptbee-processor
+    depends_on:
+      db:
+        condition: service_healthy
     extra_hosts:
       - "host.docker.internal:host-gateway"
     environment:
-      # Supabase connection - uses SUPABASE_URL_DOCKER to resolve host from inside container
-      - SUPABASE_URL=${SUPABASE_URL_DOCKER:-${SUPABASE_URL}}
-      - SUPABASE_ANON_KEY=${SUPABASE_ANON_KEY}
-      - SUPABASE_SERVICE_KEY=${SUPABASE_SERVICE_KEY}
-      - JWT_SECRET=${JWT_SECRET}
+      - DATABASE_URL=${DATABASE_URL:-postgresql://postgres:postgres@db:5432/scriptbee}
+      - SERIALIZED_FILES_DIR=/data/serialized-files
       # Graph processor configuration
       - RECURSION_LIMIT=${RECURSION_LIMIT:-50000}
       # Logging configuration
@@ -50,10 +74,14 @@ services:
     volumes:
       # Mount source for development (hot reload)
       - ./src:/app/src:ro
+      # On-disk serialized-file store (shared with the data-server)
+      - scriptbee-serialized-files:/data/serialized-files
       # Shared per-registry pickles consumed by the data-server
       - scriptbee-pickles:/tmp/pickles
     command: python -u -m src.processor
     restart: unless-stopped
 
 volumes:
+  scriptbee-pgdata:
+  scriptbee-serialized-files:
   scriptbee-pickles:

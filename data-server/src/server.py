@@ -17,8 +17,9 @@ import matplotlib.pyplot as plt
 import re
 from datetime import datetime
 
-from supabase import create_client, Client
-from src.config import SUPABASE_URL, SUPABASE_SERVICE_KEY, WORKSPACE_ROOT
+from src.config import WORKSPACE_ROOT
+from src.db import close_pool, connection, query_one
+from src.bootstrap import apply_migrations
 from src.logger import get_logger
 # Chunk 19: smart-merge moved off the legacy ``graph_data: dict`` global.
 # UnifiedUsers redesign §L (P4.C): :class:`UnifiedUser` is now the canonical
@@ -55,7 +56,6 @@ from src.common.people import UnifiedUser
 from src.common.pickle_store import PickleStore
 from src.smart_merge.rebind import rebind_account_refs_to_unified
 from src.common.domains.components.resolver import parse_component_mapping
-from src.supabase_client import get_service_client
 from src import processor as v2_processor
 from src.sandbox import (
     QuerySandboxView,
@@ -68,6 +68,7 @@ from src.config_overrides.router import config_overrides_router
 from src.filter_rules.router import filter_rules_router
 from src.filter_rules.store import filter_rule_store
 from src.filter_rules.views import FilteredSandboxView
+from src.projects.router import projects_router
 
 logger = get_logger("data-server")
 
@@ -164,12 +165,21 @@ async def lifespan(app: FastAPI):
     global current_project_id
     logger.info("Data server started on port 8001")
 
+    # Single-tenant local mode: the data-server owns its Postgres schema.
+    # Apply the migrations (storage/publication statements stripped) if the
+    # schema is absent — a no-op when public.projects already exists.
+    try:
+        apply_migrations()
+    except Exception as exc:  # noqa: BLE001
+        logger.error("Schema bootstrap failed: %s", exc)
+
     try:
         yield
     finally:
         graph_store.clear()
         smart_merge_state_store.clear()
         current_project_id = None
+        close_pool()
         logger.info("Shutdown complete - graph cleared from memory")
 
 
@@ -234,6 +244,7 @@ app.add_middleware(
     allow_headers=["*"],  # Allow all headers
 )
 
+app.include_router(projects_router)
 app.include_router(filter_rules_router)
 app.include_router(config_overrides_router)
 
@@ -349,13 +360,10 @@ async def load_project(project_id: str):
 
     logger.info(f"Loading project: {project_id}")
 
-    supabase: Client = create_client(SUPABASE_URL, SUPABASE_SERVICE_KEY)
-
     try:
-        response = await asyncio.to_thread(
-            lambda: supabase.table("projects").select("*").eq("id", project_id).single().execute()
+        project = await asyncio.to_thread(
+            query_one, "select * from projects where id = %s", (project_id,)
         )
-        project = response.data
         if not project:
             return JSONResponse(
                 {"error": f"Project {project_id} not found"}, status_code=404
@@ -754,29 +762,35 @@ async def finalize_project(project_id: str):
             status_code=500,
         )
 
-    # --- 5. Persist merge_state + frozen config to Supabase --------------
+    # --- 5. Persist merge_state + frozen config to the database ----------
+    import json as _json
+
+    def _persist_finalize() -> None:
+        with connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "update projects set merge_state = %s, "
+                    "enrichment_config_frozen = %s where id = %s",
+                    (
+                        MergeState.FINALIZED.value,
+                        _json.dumps(frozen_config),
+                        project_id,
+                    ),
+                )
+
     try:
-        client = get_service_client()
-        await asyncio.to_thread(
-            lambda: client.table("projects")
-            .update({
-                "merge_state": MergeState.FINALIZED.value,
-                "enrichment_config_frozen": frozen_config,
-            })
-            .eq("id", project_id)
-            .execute()
-        )
+        await asyncio.to_thread(_persist_finalize)
     except Exception as exc:  # noqa: BLE001
         logger.exception(
-            f"finalize: Supabase persist failed for project {project_id}; "
+            f"finalize: DB persist failed for project {project_id}; "
             "graph is FINALIZED in memory + on disk but the projects row "
             "still reads PRE_MERGE. Next /load will overwrite the in-memory "
-            "state from Supabase, producing a PRE_MERGE graph again."
+            "state from the DB, producing a PRE_MERGE graph again."
         )
         return JSONResponse(
             {
                 "error": (
-                    f"Supabase persist failed (half-finalized state): {exc}. "
+                    f"DB persist failed (half-finalized state): {exc}. "
                     "Re-import the project to reset."
                 )
             },
@@ -842,11 +856,10 @@ async def scaffold_workspace(project_id: str):
     project info, stats, and UUID. Also creates outputs/ and scripts/
     subdirs.
     """
-    supabase: Client = create_client(SUPABASE_URL, SUPABASE_SERVICE_KEY)
-
     try:
-        response = supabase.table("projects").select("name").eq("id", project_id).single().execute()
-        project = response.data
+        project = query_one(
+            "select name from projects where id = %s", (project_id,)
+        )
         if not project:
             return JSONResponse({"error": f"Project {project_id} not found"}, status_code=404)
         project_name = project["name"]
@@ -2027,15 +2040,23 @@ async def update_component_mapping(project_id: str, request: Request):
     else:
         mapping_to_persist = None  # SQL NULL
 
-    # ----- 2. persist to Supabase -----
+    # ----- 2. persist to the database -----
+    import json as _json
+
+    mapping_json = (
+        _json.dumps(mapping_to_persist) if mapping_to_persist is not None else None
+    )
+
+    def _persist_mapping() -> None:
+        with connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "update projects set component_mapping = %s where id = %s",
+                    (mapping_json, project_id),
+                )
+
     try:
-        client = get_service_client()
-        await asyncio.to_thread(
-            lambda: client.table("projects")
-            .update({"component_mapping": mapping_to_persist})
-            .eq("id", project_id)
-            .execute()
-        )
+        await asyncio.to_thread(_persist_mapping)
     except Exception as exc:  # noqa: BLE001
         logger.error(f"Failed to persist component_mapping: {exc}", exc_info=True)
         return JSONResponse(
