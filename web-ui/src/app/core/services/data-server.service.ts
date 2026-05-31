@@ -284,14 +284,22 @@ export class DataServerService {
   constructor(private http: HttpClient) {}
 
   /**
-   * Build project graph on data-server
+   * Build project graph on data-server.
+   *
+   * @param computeAnnotatedLines When true, asks the build to run the
+   *   (expensive) git per-line attribution metric, emitting ``git.loc`` /
+   *   ``git.repo_size`` classifiers and the ``git.line_attribution`` trait.
+   *   Defaults to false so existing callers keep the cheap build path.
    */
-  async buildProject(projectId: string): Promise<BuildResult> {
+  async buildProject(
+    projectId: string,
+    computeAnnotatedLines = false,
+  ): Promise<BuildResult> {
     try {
       const response = await firstValueFrom(
         this.http.post<{ message: string }>(
           `${this.baseUrl}/projects/${projectId}/build`,
-          {},
+          { compute_annotated_lines: computeAnnotatedLines },
         )
       );
 
@@ -312,10 +320,15 @@ export class DataServerService {
    * their intent in service-call grammar instead of leaking the generic
    * "build" verb into UI code that means "rerun with my saved overrides".
    *
+   * @param computeAnnotatedLines forwarded to ``buildProject`` — toggles the
+   *   git per-line attribution metric for this rerun.
    * @see buildProject
    */
-  async rerunEnrichments(projectId: string): Promise<BuildResult> {
-    return this.buildProject(projectId);
+  async rerunEnrichments(
+    projectId: string,
+    computeAnnotatedLines = false,
+  ): Promise<BuildResult> {
+    return this.buildProject(projectId, computeAnnotatedLines);
   }
 
   /**

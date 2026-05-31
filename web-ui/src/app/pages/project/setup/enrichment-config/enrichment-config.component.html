@@ -62,6 +62,19 @@
         }
       </button>
 
+      <!-- Build-time toggle for the git per-line attribution metric. Applies
+           on the next Rerun: when ticked, the build emits git.loc /
+           git.repo_size classifiers + the git.line_attribution trait. -->
+      <label class="annotated-lines-toggle" title="Compute git per-line attribution (LOC + blame) on the next rerun. Slower build.">
+        <input
+          type="checkbox"
+          [checked]="computeAnnotatedLines()"
+          [disabled]="rerunning() || isFinalized()"
+          (change)="computeAnnotatedLines.set($any($event.target).checked)"
+        />
+        <span>Compute annotated lines</span>
+      </label>
+
       <button
         class="btn btn-primary btn-sm"
         type="button"

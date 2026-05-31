@@ -92,6 +92,26 @@
   }
 }
 
+// Build-time "Compute annotated lines" toggle, sat beside the Rerun button.
+.annotated-lines-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--spacing-xs);
+  font-size: 0.813rem;
+  color: var(--color-text-secondary);
+  cursor: pointer;
+  user-select: none;
+
+  input:disabled {
+    cursor: not-allowed;
+  }
+
+  &:has(input:disabled) {
+    cursor: not-allowed;
+    opacity: 0.55;
+  }
+}
+
 .tab-header-meta-count {
   font-size: 0.813rem;
   color: var(--color-text-secondary);

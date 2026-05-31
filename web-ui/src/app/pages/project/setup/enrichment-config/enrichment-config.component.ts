@@ -165,6 +165,15 @@ export class EnrichmentConfigComponent implements OnInit {
   readonly rerunning = signal(false);
 
   /**
+   * Build-time toggle for the (expensive) git per-line attribution metric.
+   * Bound to the "Compute annotated lines" checkbox; forwarded to the
+   * ``/projects/{id}/build`` body on the next rerun so the build emits
+   * ``git.loc`` / ``git.repo_size`` classifiers and the
+   * ``git.line_attribution`` trait. Defaults off.
+   */
+  readonly computeAnnotatedLines = signal(false);
+
+  /**
    * Once the project is FINALIZED the enrichment config is frozen
    * (`projects.enrichment_config_frozen`) and the overrides endpoint 409s.
    * Mirror that by making the whole tab read-only. Getter (not a field
@@ -1082,7 +1091,10 @@ export class EnrichmentConfigComponent implements OnInit {
     this.showRerunModal.set(false);
     this.rerunning.set(true);
     try {
-      const result = await this.dataServer.rerunEnrichments(projectId);
+      const result = await this.dataServer.rerunEnrichments(
+        projectId,
+        this.computeAnnotatedLines(),
+      );
       if (result.success) {
         this.toast.success('Rerun complete');
       } else {
