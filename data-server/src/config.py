@@ -38,6 +38,12 @@ RECURSION_LIMIT = int(os.getenv("RECURSION_LIMIT", "50000"))
 # Workspace configuration for AI agent project folders
 WORKSPACE_ROOT = os.getenv("WORKSPACE_ROOT", str(project_root / "analyzed_projects" / "projects"))
 
+# Directory of the built Angular SPA (dist/web-ui/browser). When present the
+# data-server serves the static SPA at "/" with an index.html fallback so the
+# whole system runs behind a single origin (one `docker compose up`). Empty /
+# missing in pure dev where `ng serve` hosts the UI on :4200.
+STATIC_DIR = os.getenv("STATIC_DIR", "")
+
 # Validate critical settings — in single-tenant mode only the database URL is
 # mandatory (no JWT / service key any more).
 if not DATABASE_URL:

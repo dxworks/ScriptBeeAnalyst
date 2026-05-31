@@ -1,0 +1,89 @@
+# =============================================================================
+# ScriptBeeAssistant — single `docker compose up` for the whole system.
+#
+#   $ cp .env.example .env        # optional: tweak POSTGRES_PASSWORD etc.
+#   $ docker compose up --build
+#   -> open http://localhost:8001
+#
+# Architecture (de-Supabased, single-tenant, no auth):
+#   * db        — PostgreSQL 16, the only datastore. Schema is applied on
+#                 startup by the app (src/bootstrap.py runs supabase/migrations
+#                 with the storage.*/publication statements stripped).
+#   * app       — ONE image (root Dockerfile): the built Angular SPA is served
+#                 at "/" by the FastAPI data-server, the API under its existing
+#                 paths, all on the same origin (port 8001). Uploaded files live
+#                 on the `serialized-files` volume (replaces the Supabase bucket).
+#   * processor — the graph build/finalize worker, same image, shares the
+#                 serialized-files + pickles volumes with `app`.
+#
+# Persistence: Postgres data, uploaded serialized files, and the graph pickles
+# all live on named volumes so they survive `docker compose down`.
+# =============================================================================
+
+services:
+  db:
+    image: postgres:16-alpine
+    container_name: scriptbee-db
+    environment:
+      - POSTGRES_USER=${POSTGRES_USER:-postgres}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-postgres}
+      - POSTGRES_DB=${POSTGRES_DB:-scriptbee}
+    volumes:
+      - scriptbee-pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-scriptbee}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: scriptbee-app
+    depends_on:
+      db:
+        condition: service_healthy
+    ports:
+      # Single entrypoint: SPA at / and API under its existing paths.
+      - "8001:8001"
+    environment:
+      - DATABASE_URL=${DATABASE_URL:-postgresql://postgres:postgres@db:5432/scriptbee}
+      - SERIALIZED_FILES_DIR=/data/serialized-files
+      - STATIC_DIR=/app/static
+      - MAX_UPLOAD_MB=${MAX_UPLOAD_MB:-500}
+      - WORKSPACE_ROOT=/workspace/projects
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+    volumes:
+      - scriptbee-serialized-files:/data/serialized-files
+      - scriptbee-pickles:/tmp/pickles
+      - scriptbee-workspace:/workspace/projects
+    restart: unless-stopped
+
+  processor:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: scriptbee-processor
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      - DATABASE_URL=${DATABASE_URL:-postgresql://postgres:postgres@db:5432/scriptbee}
+      - SERIALIZED_FILES_DIR=/data/serialized-files
+      - RECURSION_LIMIT=${RECURSION_LIMIT:-50000}
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      - PYTHONUNBUFFERED=1
+    volumes:
+      # Shared with `app`: processor writes, data-server reads.
+      - scriptbee-serialized-files:/data/serialized-files
+      - scriptbee-pickles:/tmp/pickles
+    command: ["python", "-u", "-m", "src.processor"]
+    restart: unless-stopped
+
+volumes:
+  scriptbee-pgdata:
+  scriptbee-serialized-files:
+  scriptbee-pickles:
+  scriptbee-workspace:

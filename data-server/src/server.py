@@ -2306,3 +2306,49 @@ async def generate_plot(request: CodeRequest):
 
     finally:
         sys.stdout = sys_stdout
+
+
+# =============================================================================
+# Static SPA (single-origin packaging)
+# =============================================================================
+#
+# When STATIC_DIR points at the built Angular bundle (dist/web-ui/browser), the
+# data-server serves the SPA at "/" so the whole system lives behind ONE origin
+# (one `docker compose up`). The web-ui calls the API with relative URLs
+# (environment.dataServerUrl === ''), so there is no CORS/origin split.
+#
+# This is registered LAST, after every API route above, because the catch-all
+# SPA fallback would otherwise shadow them. Real API routes are declared above
+# and match first; anything else either maps to a concrete file in the bundle
+# (hashed JS chunks, favicon, etc.) or falls back to index.html so Angular's
+# client-side router owns deep links.
+from src.config import STATIC_DIR as _STATIC_DIR  # noqa: E402
+
+if _STATIC_DIR:
+    from fastapi.responses import FileResponse  # noqa: E402
+
+    _static_root = Path(_STATIC_DIR)
+    _index_file = _static_root / "index.html"
+
+    if _index_file.is_file():
+
+        @app.get("/{full_path:path}", include_in_schema=False)
+        async def spa_fallback(full_path: str):
+            """Serve a built static file if it exists, else index.html."""
+            candidate = (_static_root / full_path).resolve()
+            try:
+                candidate.relative_to(_static_root.resolve())
+            except ValueError:
+                # Path-traversal attempt — serve the shell instead.
+                return FileResponse(_index_file)
+            if full_path and candidate.is_file():
+                return FileResponse(candidate)
+            return FileResponse(_index_file)
+
+        logger.info("Serving static SPA from %s", _static_root)
+    else:
+        logger.warning(
+            "STATIC_DIR=%s set but %s missing — SPA not served",
+            _STATIC_DIR,
+            _index_file,
+        )
