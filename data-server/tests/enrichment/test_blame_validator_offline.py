@@ -165,7 +165,7 @@ def _build_graph_with_attribution():
 
 def _files_by_path(graph) -> dict[str, object]:
     """Map bare git path -> File entity (legacy used ``str(f)`` == path)."""
-    return {f.path: f for f in graph.files.all}
+    return {f.path: f for f in graph.files.all()}
 
 
 def _annotated_commit_ids(graph, file_) -> list[str] | None:
