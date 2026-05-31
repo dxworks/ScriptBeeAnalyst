@@ -168,10 +168,37 @@ async def lifespan(app: FastAPI):
     # Single-tenant local mode: the data-server owns its Postgres schema.
     # Apply the migrations (storage/publication statements stripped) if the
     # schema is absent — a no-op when public.projects already exists.
-    try:
-        apply_migrations()
-    except Exception as exc:  # noqa: BLE001
-        logger.error("Schema bootstrap failed: %s", exc)
+    #
+    # The bootstrap is the single most likely first-run failure point (the DB
+    # may not have accepted connections yet under a fresh `docker compose up`).
+    # We retry the whole bootstrap with backoff to absorb a transient connection
+    # blip, then RE-RAISE on the final failure so uvicorn exits non-zero and
+    # Docker's `restart: unless-stopped` brings us back once the DB is ready.
+    # Swallowing the error would leave a "healthy" server that 500s every
+    # request because the schema is absent.
+    _BOOTSTRAP_MAX_ATTEMPTS = 10
+    _BOOTSTRAP_BACKOFF_SECONDS = 3.0
+    for attempt in range(1, _BOOTSTRAP_MAX_ATTEMPTS + 1):
+        try:
+            apply_migrations()
+            break
+        except Exception as exc:  # noqa: BLE001
+            if attempt >= _BOOTSTRAP_MAX_ATTEMPTS:
+                logger.error(
+                    "Schema bootstrap failed after %d attempts: %s — aborting "
+                    "startup so the container restarts and retries",
+                    attempt,
+                    exc,
+                )
+                raise
+            logger.warning(
+                "Schema bootstrap attempt %d/%d failed: %s — retrying in %.1fs",
+                attempt,
+                _BOOTSTRAP_MAX_ATTEMPTS,
+                exc,
+                _BOOTSTRAP_BACKOFF_SECONDS,
+            )
+            time.sleep(_BOOTSTRAP_BACKOFF_SECONDS)
 
     try:
         yield
