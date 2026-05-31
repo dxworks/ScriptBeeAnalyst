@@ -811,9 +811,10 @@ export class DataServerService {
   // ── Filter Rules Methods ────────────────────────────────────────────────
 
   /**
-   * List active filter rules for a project from the data-server's in-memory
-   * cache. The data-server also persists to Supabase; the UI uses Supabase
-   * realtime for live updates and this list call only as a fallback bootstrap.
+   * List active filter rules for a project from the data-server. The endpoint
+   * returns rules ordered created_at DESC with their match_count folded in;
+   * the exclusion-rules page polls this as its single source of truth (it
+   * replaced the old Supabase realtime channel).
    */
   async listFilterRules(projectId: string): Promise<FilterRuleDto[]> {
     try {
@@ -901,9 +902,8 @@ export class DataServerService {
   }
 
   /**
-   * Delete a filter rule via the data-server endpoint. The endpoint cascades
-   * the delete to Supabase and evicts the in-memory cache in one shot — UI
-   * must not delete directly through Supabase (see filter_files.md Flow D).
+   * Delete a filter rule via the data-server endpoint. The endpoint deletes
+   * the persisted row and evicts the in-memory cache in one shot.
    */
   async deleteFilterRule(projectId: string, ruleId: string): Promise<boolean> {
     try {

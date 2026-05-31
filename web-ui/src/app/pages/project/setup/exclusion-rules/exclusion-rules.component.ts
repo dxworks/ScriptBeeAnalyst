@@ -1,22 +1,16 @@
 import { Component, OnDestroy, OnInit, signal } from '@angular/core';
-import { RealtimeChannel } from '@supabase/supabase-js';
 import { ConfirmationModalComponent } from '../../../../shared/components/confirmation-modal/confirmation-modal.component';
 import { CurrentProjectService } from '../../../../core/services/current-project.service';
 import { DataServerService, FilterRuleDto } from '../../../../core/services/data-server.service';
-import { SupabaseService } from '../../../../core/services/supabase.service';
 import { ToastService } from '../../../../core/services/toast.service';
 
-const TABLE = 'project_filter_rules';
-
-interface FilterRuleRow {
-  id: string;
-  project_id: string;
-  entity_kind: string;
-  name: string;
-  nl_description: string;
-  dsl: FilterRuleDto['dsl'];
-  created_at: string | null;
-}
+/**
+ * Interval (ms) at which the rules list is re-fetched from the data-server.
+ * Replaces the old Supabase realtime channel `project_filter_rules:{id}`;
+ * a tighter poll than the projects list because rules added by the agent
+ * want near-live feedback.
+ */
+const POLL_INTERVAL_MS = 3000;
 
 @Component({
   selector: 'app-exclusion-rules',
@@ -33,11 +27,10 @@ export class ExclusionRulesComponent implements OnInit, OnDestroy {
   ruleToDelete = signal<FilterRuleDto | null>(null);
   deleting = signal(false);
 
-  private channel: RealtimeChannel | null = null;
+  private pollTimer: ReturnType<typeof setInterval> | null = null;
 
   constructor(
     private dataServer: DataServerService,
-    private supabase: SupabaseService,
     private currentProject: CurrentProjectService,
     private toast: ToastService,
   ) {}
@@ -45,114 +38,49 @@ export class ExclusionRulesComponent implements OnInit, OnDestroy {
   ngOnInit(): void {
     const projectId = this.currentProject.loadedProjectId();
     if (!projectId) return;
-    void this.loadRules(projectId);
-    this.subscribeRealtime(projectId);
+    void this.loadRules(projectId, true);
+    this.startPolling(projectId);
   }
 
   ngOnDestroy(): void {
-    this.unsubscribeRealtime();
+    this.stopPolling();
   }
 
-  private async loadRules(projectId: string): Promise<void> {
-    this.loading.set(true);
-    // Read rule rows from Supabase (so realtime updates flow through the
-    // same source of truth), then enrich with per-rule match counts from
-    // the data-server — counts are derived state that only lives in the
-    // data-server's in-memory cache.
-    const { data, error } = await this.supabase.client
-      .from(TABLE)
-      .select('*')
-      .eq('project_id', projectId)
-      .order('created_at', { ascending: false });
-
-    if (error) {
-      this.toast.error(`Failed to load exclusion rules: ${error.message}`);
-      this.loading.set(false);
-      return;
-    }
-
-    const rows = (data ?? []).map(toDto);
-    const enriched = await this.mergeMatchCounts(projectId, rows);
-    this.rules.set(enriched);
-    this.loading.set(false);
-  }
-
-  private async mergeMatchCounts(
-    projectId: string,
-    rules: FilterRuleDto[],
-  ): Promise<FilterRuleDto[]> {
-    if (rules.length === 0) return rules;
+  /**
+   * Fetch the rules list (with match counts) from the single data-server
+   * endpoint, which already orders by created_at DESC and folds in the
+   * per-rule match_count. Replaces the old two-source load (Supabase rows +
+   * separate count call).
+   *
+   * @param showSpinner only the initial load flips the loading flag; the
+   *   poll refreshes silently so the list doesn't flicker.
+   */
+  private async loadRules(projectId: string, showSpinner = false): Promise<void> {
+    if (showSpinner) this.loading.set(true);
     try {
-      const enriched = await this.dataServer.listFilterRules(projectId);
-      const counts = new Map(enriched.map(r => [r.id, r.match_count ?? null]));
-      return rules.map(r => ({ ...r, match_count: counts.get(r.id) ?? null }));
+      const rules = await this.dataServer.listFilterRules(projectId);
+      this.rules.set(rules);
     } catch {
-      return rules.map(r => ({ ...r, match_count: null }));
+      if (showSpinner) {
+        this.toast.error('Failed to load exclusion rules');
+      }
+      // Poll failures are silent; the next tick retries.
+    } finally {
+      if (showSpinner) this.loading.set(false);
     }
   }
 
-  private async refreshMatchCounts(): Promise<void> {
-    const projectId = this.currentProject.loadedProjectId();
-    if (!projectId) return;
-    const enriched = await this.mergeMatchCounts(projectId, this.rules());
-    this.rules.set(enriched);
+  private startPolling(projectId: string): void {
+    if (this.pollTimer) return;
+    this.pollTimer = setInterval(() => {
+      void this.loadRules(projectId);
+    }, POLL_INTERVAL_MS);
   }
 
-  private subscribeRealtime(projectId: string): void {
-    if (this.channel) return;
-
-    this.channel = this.supabase.client
-      .channel(`project_filter_rules:${projectId}`)
-      .on(
-        'postgres_changes',
-        {
-          event: 'INSERT',
-          schema: 'public',
-          table: TABLE,
-          filter: `project_id=eq.${projectId}`,
-        },
-        payload => {
-          const row = toDto(payload.new as FilterRuleRow);
-          this.rules.update(rs => (rs.some(r => r.id === row.id) ? rs : [row, ...rs]));
-          // New rule -> ask the data-server for its match count (and refresh
-          // any neighbouring counts in case they're stale).
-          void this.refreshMatchCounts();
-        },
-      )
-      .on(
-        'postgres_changes',
-        {
-          event: 'UPDATE',
-          schema: 'public',
-          table: TABLE,
-          filter: `project_id=eq.${projectId}`,
-        },
-        payload => {
-          const row = toDto(payload.new as FilterRuleRow);
-          this.rules.update(rs => rs.map(r => (r.id === row.id ? row : r)));
-        },
-      )
-      .on(
-        'postgres_changes',
-        {
-          event: 'DELETE',
-          schema: 'public',
-          table: TABLE,
-          filter: `project_id=eq.${projectId}`,
-        },
-        payload => {
-          const oldId = (payload.old as { id?: string }).id;
-          if (!oldId) return;
-          this.rules.update(rs => rs.filter(r => r.id !== oldId));
-        },
-      )
-      .subscribe();
-  }
-
-  private unsubscribeRealtime(): void {
-    if (this.channel) {
-      this.supabase.client.removeChannel(this.channel);
-      this.channel = null;
+  private stopPolling(): void {
+    if (this.pollTimer) {
+      clearInterval(this.pollTimer);
+      this.pollTimer = null;
     }
   }
 
@@ -213,18 +141,6 @@ export class ExclusionRulesComponent implements OnInit, OnDestroy {
     const base = singular[lower] ?? lower.replace(/_/g, ' ');
     return count === 1 ? base : `${base}s`;
   }
-}
-
-function toDto(row: FilterRuleRow): FilterRuleDto {
-  return {
-    id: row.id,
-    project_id: row.project_id,
-    entity_kind: row.entity_kind,
-    name: row.name,
-    nl_description: row.nl_description,
-    dsl: row.dsl,
-    created_at: row.created_at,
-  };
 }
 
 function capitalize(s: string): string {
