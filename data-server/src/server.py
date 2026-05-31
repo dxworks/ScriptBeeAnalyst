@@ -88,6 +88,18 @@ class CodeRequest(BaseModel):
     code: str
 
 
+class BuildRequest(BaseModel):
+    """Request body for ``POST /projects/{id}/build``.
+
+    ``compute_annotated_lines`` is the per-build toggle for the (expensive)
+    git annotated-lines reconstruction. When ``True`` the v2 processor flips
+    the effective :class:`EnrichmentConfig` so
+    :class:`GitLineAttributionMetric` emits ``git.loc`` / ``git.repo_size``
+    classifiers + the per-file attribution trait (plan §§3-4).
+    """
+    compute_annotated_lines: bool = False
+
+
 class ApplySuggestionRequest(BaseModel):
     """Request body for applying a merge suggestion."""
     suggestion_id: str
@@ -431,19 +443,26 @@ async def load_project(project_id: str):
 
 
 @app.post("/projects/{project_id}/build")
-async def build_project(project_id: str):
+async def build_project(project_id: str, req: BuildRequest = BuildRequest()):
     """Build a typed v2 :class:`Graph` for ``project_id``.
 
     Chunk 8: drives the new processor end-to-end —
     download → per-source :class:`Transformer` → typed Graph →
     ``run_pipeline`` → persist. The freshly built Graph lands in
     :data:`graph_store` keyed by ``project_id``.
+
+    The optional :class:`BuildRequest` body carries the per-build
+    ``compute_annotated_lines`` toggle (plan §4), passed down to the v2
+    processor. An empty POST (no body) keeps the flag off — existing
+    callers need no change.
     """
     global current_project_id
 
     try:
         graph, pipeline_result = await asyncio.to_thread(
-            v2_processor.build_graph, project_id
+            v2_processor.build_graph,
+            project_id,
+            compute_annotated_lines=req.compute_annotated_lines,
         )
     except NotImplementedError as exc:
         logger.warning(f"build_graph deferred: {exc}")

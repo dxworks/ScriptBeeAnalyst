@@ -207,6 +207,7 @@ def build_graph_from_bundles(
     bundles: Mapping[SourceKind, List[Mapping]],
     *,
     config: Optional[EnrichmentConfig] = None,
+    compute_annotated_lines: bool = False,
 ) -> Tuple[Graph, PipelineResult]:
     """Build a :class:`Graph` from pre-built per-source entity bundles.
 
@@ -236,9 +237,19 @@ def build_graph_from_bundles(
     config
         Optional :class:`EnrichmentConfig` passed through to the
         pipeline. Defaults to :data:`DEFAULT_CONFIG`.
+    compute_annotated_lines
+        Build-time toggle for the (expensive) git annotated-lines
+        reconstruction. When ``True`` it is set on the effective config so
+        :class:`GitLineAttributionMetric` emits ``git.loc`` / ``git.repo_size``
+        classifiers + the per-file attribution trait (plan §§3-4).
     """
     if config is None:
         config = DEFAULT_CONFIG
+
+    # Flip the annotated-lines toggle on the effective config when requested.
+    # ``replace`` keeps the caller's config intact (e.g. test fixtures).
+    if compute_annotated_lines:
+        config = replace(config, compute_annotated_lines=True)
 
     graph = Graph(project_id=project_id)
 
@@ -569,6 +580,7 @@ def build_graph(
     project_name: str = "Project",
     *,
     config: Optional[EnrichmentConfig] = None,
+    compute_annotated_lines: bool = False,
 ) -> Tuple[Graph, PipelineResult]:
     """End-to-end build for ``project_id``.
 
@@ -584,6 +596,11 @@ def build_graph(
     Returns the (graph, pipeline_result) tuple. The server's ``/build``
     endpoint hands the graph to :data:`graph_store` and surfaces the
     pipeline result to the UI.
+
+    ``compute_annotated_lines`` is the per-build toggle threaded from the
+    ``/build`` request body; when ``True`` it is forwarded to
+    :func:`build_graph_from_bundles`, which flips the effective config so
+    :class:`GitLineAttributionMetric` runs (plan §4).
     """
     downloaded = download_serialized_files_from_supabase(project_id)
     bundles = _downloaded_files_to_bundles(downloaded, project_name=project_name)
@@ -604,7 +621,10 @@ def build_graph(
         effective_config = config
     effective_config = _apply_project_overrides(project_id, effective_config)
     graph, pipeline_result = build_graph_from_bundles(
-        project_id, bundles, config=effective_config
+        project_id,
+        bundles,
+        config=effective_config,
+        compute_annotated_lines=compute_annotated_lines,
     )
     save_graph_to_disk(graph)
     return graph, pipeline_result
