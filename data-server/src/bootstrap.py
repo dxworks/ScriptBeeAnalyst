@@ -63,6 +63,12 @@ def _split_statements(sql: str) -> List[str]:
     ``handle_updated_at`` is defined with a ``$$ ... $$`` body that contains
     semicolons; a naive ``split(';')`` would shred it. We walk the text and
     only treat a ``;`` outside a ``$$`` block as a separator.
+
+    SQL comments are skipped while scanning for the ``;`` separator so that a
+    ``;`` *inside* a comment (e.g. ``-- Tables are open; the only writer ...``)
+    is not mistaken for a statement terminator — which would otherwise emit the
+    rest of the comment line as a bare, syntactically invalid statement. The
+    comment text is preserved verbatim in the buffer (Postgres ignores it).
     """
     statements: List[str] = []
     buf: List[str] = []
@@ -71,11 +77,28 @@ def _split_statements(sql: str) -> List[str]:
     n = len(sql)
     while i < n:
         ch = sql[i]
+        # ``$$``-quoted body toggles (never inside a comment — checked below).
         if sql.startswith("$$", i):
             in_dollar = not in_dollar
             buf.append("$$")
             i += 2
             continue
+        if not in_dollar:
+            # ``--`` line comment: copy through end-of-line verbatim.
+            if sql.startswith("--", i):
+                eol = sql.find("\n", i)
+                if eol == -1:
+                    eol = n
+                buf.append(sql[i:eol])
+                i = eol
+                continue
+            # ``/* ... */`` block comment: copy through the closing ``*/``.
+            if sql.startswith("/*", i):
+                end = sql.find("*/", i + 2)
+                end = n if end == -1 else end + 2
+                buf.append(sql[i:end])
+                i = end
+                continue
         if ch == ";" and not in_dollar:
             stmt = "".join(buf).strip()
             if stmt:
