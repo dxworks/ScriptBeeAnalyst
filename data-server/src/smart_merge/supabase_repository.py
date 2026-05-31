@@ -1,16 +1,18 @@
-"""
-Supabase-backed persistence for smart merge state.
-Uses service key client (bypasses RLS) since endpoints are called from the data-server.
+"""Postgres-backed persistence for smart-merge state.
+
+Single-tenant local mode: no RLS, plain SQL against the shared connection pool
+(:mod:`src.db`). The class name is retained as ``SupabaseSmartMergeRepository``
+for call-site compatibility; there is no Supabase involved any more.
 """
 from __future__ import annotations
 
 from typing import Iterable, List
 
-from src.smart_merge.identity import SourceIdentity
+from src.db import connection, execute, query
 from src.logger import get_logger
+from src.smart_merge.identity import SourceIdentity
 from src.smart_merge.repository import SmartMergeRepository
 from src.smart_merge.types import RejectedPair, UserMapping
-from src.supabase_client import get_service_client
 
 LOG = get_logger(__name__)
 
@@ -18,22 +20,19 @@ LOG = get_logger(__name__)
 class SupabaseSmartMergeRepository(SmartMergeRepository):
 
     def get_rejected_similarities(self, project_id: str) -> List[RejectedPair]:
-        client = get_service_client()
-        response = (
-            client.table("rejected_similarities")
-            .select("*")
-            .eq("project_id", project_id)
-            .execute()
+        rows = query(
+            "select * from rejected_similarities where project_id = %s",
+            (project_id,),
         )
         return [
             RejectedPair(
-                project_id=row["project_id"],
+                project_id=str(row["project_id"]),
                 first_source=row["first_source"],
                 first_source_key=row["first_source_key"],
                 second_source=row["second_source"],
                 second_source_key=row["second_source_key"],
             )
-            for row in response.data
+            for row in rows
         ]
 
     def add_rejected_similarities(
@@ -41,10 +40,10 @@ class SupabaseSmartMergeRepository(SmartMergeRepository):
         project_id: str,
         pairs: Iterable[RejectedPair],
     ) -> None:
-        client = get_service_client()
         rows = []
         for pair in pairs:
             # Store in canonical order to match the DB unique index
+            # (functional least()/greatest() index).
             key_a = f"{pair.first_source}:{pair.first_source_key}"
             key_b = f"{pair.second_source}:{pair.second_source_key}"
             if key_a > key_b:
@@ -54,21 +53,14 @@ class SupabaseSmartMergeRepository(SmartMergeRepository):
                 first_source, first_key = pair.first_source, pair.first_source_key
                 second_source, second_key = pair.second_source, pair.second_source_key
 
-            rows.append({
-                "project_id": project_id,
-                "first_source": first_source,
-                "first_source_key": first_key,
-                "second_source": second_source,
-                "second_source_key": second_key,
-            })
+            rows.append((project_id, first_source, first_key, second_source, second_key))
 
         if not rows:
             return
 
-        # The DB's uq_rejected_similarity is a functional index over
-        # least()/greatest(), which PostgREST can't target via on_conflict.
-        # Rows are already in canonical order, so filter out existing pairs
-        # and insert only the new ones.
+        # uq_rejected_similarity is a functional index over least()/greatest()
+        # which ON CONFLICT can't target by column list, so filter out existing
+        # pairs and insert only the new ones (rows are already canonical).
         existing = self.get_rejected_similarities(project_id)
         existing_keys = {
             (p.first_source, p.first_source_key, p.second_source, p.second_source_key)
@@ -76,48 +68,45 @@ class SupabaseSmartMergeRepository(SmartMergeRepository):
         }
         new_rows = [
             r for r in rows
-            if (r["first_source"], r["first_source_key"], r["second_source"], r["second_source_key"])
-            not in existing_keys
+            if (r[1], r[2], r[3], r[4]) not in existing_keys
         ]
         if new_rows:
-            client.table("rejected_similarities").insert(new_rows).execute()
+            with connection() as conn:
+                with conn.cursor() as cur:
+                    cur.executemany(
+                        "insert into rejected_similarities "
+                        "(project_id, first_source, first_source_key, "
+                        "second_source, second_source_key) "
+                        "values (%s, %s, %s, %s, %s)",
+                        new_rows,
+                    )
         LOG.info(
             f"Persisted {len(new_rows)} new rejected similarity pairs "
             f"(skipped {len(rows) - len(new_rows)} duplicates) for project {project_id}"
         )
 
     def get_user_mappings(self, project_id: str) -> List[UserMapping]:
-        client = get_service_client()
-
-        # Get all unified users for this project
-        users_response = (
-            client.table("unified_users")
-            .select("*")
-            .eq("project_id", project_id)
-            .execute()
+        users = query(
+            "select * from unified_users where project_id = %s",
+            (project_id,),
         )
-
-        if not users_response.data:
+        if not users:
             return []
 
-        # Get all identity mappings for this project
-        mappings_response = (
-            client.table("user_identity_mappings")
-            .select("*")
-            .eq("project_id", project_id)
-            .execute()
+        identity_rows = query(
+            "select * from user_identity_mappings where project_id = %s",
+            (project_id,),
         )
 
-        # Group mappings by unified_user_id
         mappings_by_user: dict[str, list] = {}
-        for row in mappings_response.data:
-            uid = row["unified_user_id"]
+        for row in identity_rows:
+            uid = str(row["unified_user_id"])
             mappings_by_user.setdefault(uid, []).append(row)
 
         result = []
-        for user_row in users_response.data:
-            uid = user_row["id"]
-            identity_rows = mappings_by_user.get(uid, [])
+        for user_row in users:
+            uid = str(user_row["id"])
+            rows = mappings_by_user.get(uid, [])
             identities = [
                 SourceIdentity(
                     source=r["source"],
@@ -126,7 +115,7 @@ class SupabaseSmartMergeRepository(SmartMergeRepository):
                     login=r["source_login"],
                     source_key=r["source_key"],
                 )
-                for r in identity_rows
+                for r in rows
             ]
             result.append(UserMapping(
                 unified_user_id=uid,
@@ -138,35 +127,47 @@ class SupabaseSmartMergeRepository(SmartMergeRepository):
         return result
 
     def upsert_user_mapping(self, mapping: UserMapping, project_id: str) -> None:
-        client = get_service_client()
-
-        # Upsert the unified user
-        client.table("unified_users").upsert({
-            "id": mapping.unified_user_id,
-            "project_id": project_id,
-            "display_name": mapping.display_name,
-            "primary_email": mapping.primary_email,
-        }).execute()
-
-        # Delete existing identity mappings for this user, then re-insert
-        client.table("user_identity_mappings").delete().eq(
-            "unified_user_id", mapping.unified_user_id
-        ).execute()
-
-        if mapping.identities:
-            rows = [
-                {
-                    "unified_user_id": mapping.unified_user_id,
-                    "project_id": project_id,
-                    "source": identity.source,
-                    "source_key": identity.source_key,
-                    "source_name": identity.name,
-                    "source_email": identity.email,
-                    "source_login": identity.login,
-                }
-                for identity in mapping.identities
-            ]
-            client.table("user_identity_mappings").insert(rows).execute()
+        with connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "insert into unified_users "
+                    "(id, project_id, display_name, primary_email) "
+                    "values (%s, %s, %s, %s) "
+                    "on conflict (id) do update set "
+                    "display_name = excluded.display_name, "
+                    "primary_email = excluded.primary_email, "
+                    "updated_at = now()",
+                    (
+                        mapping.unified_user_id,
+                        project_id,
+                        mapping.display_name,
+                        mapping.primary_email,
+                    ),
+                )
+                # Replace identity mappings for this user.
+                cur.execute(
+                    "delete from user_identity_mappings where unified_user_id = %s",
+                    (mapping.unified_user_id,),
+                )
+                if mapping.identities:
+                    cur.executemany(
+                        "insert into user_identity_mappings "
+                        "(unified_user_id, project_id, source, source_key, "
+                        "source_name, source_email, source_login) "
+                        "values (%s, %s, %s, %s, %s, %s, %s)",
+                        [
+                            (
+                                mapping.unified_user_id,
+                                project_id,
+                                identity.source,
+                                identity.source_key,
+                                identity.name,
+                                identity.email,
+                                identity.login,
+                            )
+                            for identity in mapping.identities
+                        ],
+                    )
 
         LOG.info(
             f"Upserted unified user {mapping.unified_user_id} with "
@@ -174,31 +175,25 @@ class SupabaseSmartMergeRepository(SmartMergeRepository):
         )
 
     def delete_user_mapping(self, project_id: str, unified_user_id: str) -> None:
-        client = get_service_client()
-        # Identity mappings are cascade-deleted when unified_user is deleted
-        client.table("unified_users").delete().eq("id", unified_user_id).execute()
+        # Identity mappings cascade-delete when the unified_user is deleted.
+        execute(
+            "delete from unified_users where id = %s",
+            (unified_user_id,),
+        )
         LOG.info(f"Deleted unified user {unified_user_id} from project {project_id}")
 
     def delete_all_user_mappings(self, project_id: str) -> int:
-        client = get_service_client()
-        response = (
-            client.table("unified_users")
-            .delete()
-            .eq("project_id", project_id)
-            .execute()
+        count = execute(
+            "delete from unified_users where project_id = %s",
+            (project_id,),
         )
-        count = len(response.data or [])
         LOG.info(f"Deleted {count} unified users from project {project_id}")
         return count
 
     def delete_all_rejected_similarities(self, project_id: str) -> int:
-        client = get_service_client()
-        response = (
-            client.table("rejected_similarities")
-            .delete()
-            .eq("project_id", project_id)
-            .execute()
+        count = execute(
+            "delete from rejected_similarities where project_id = %s",
+            (project_id,),
         )
-        count = len(response.data or [])
         LOG.info(f"Deleted {count} rejected similarity pairs from project {project_id}")
         return count

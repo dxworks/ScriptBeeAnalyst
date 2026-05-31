@@ -1,15 +1,16 @@
-"""Supabase-backed CRUD for the ``project_filter_rules`` table.
+"""Postgres-backed CRUD for the ``project_filter_rules`` table.
 
-Single-tenant local mode: every call uses the service-role client. No JWT,
-no user attribution, no RLS.
+Single-tenant local mode: no JWT, no user attribution, no RLS. Runs plain SQL
+against the shared connection pool (:mod:`src.db`).
 """
 from __future__ import annotations
 
+import json
 from typing import List
 
+from src.db import execute, query
 from src.filter_rules.models import FilterRule, RuleDSL
 from src.logger import get_logger
-from src.supabase_client import get_service_client
 
 LOG = get_logger(__name__)
 
@@ -17,30 +18,30 @@ _TABLE = "project_filter_rules"
 
 
 def _row_to_rule(row: dict) -> FilterRule:
+    dsl = row["dsl"]
+    if isinstance(dsl, str):
+        dsl = json.loads(dsl)
     return FilterRule(
-        id=row["id"],
-        project_id=row["project_id"],
+        id=str(row["id"]),
+        project_id=str(row["project_id"]),
         entity_kind=row["entity_kind"],
         name=row["name"],
         nl_description=row["nl_description"],
-        dsl=RuleDSL.model_validate(row["dsl"]),
+        dsl=RuleDSL.model_validate(dsl),
         created_at=row.get("created_at"),
     )
 
 
 class FilterRuleRepository:
-    """Thin wrapper over the Supabase ``project_filter_rules`` table."""
+    """Thin wrapper over the ``project_filter_rules`` table."""
 
     def list_for_project(self, project_id: str) -> List[FilterRule]:
-        client = get_service_client()
-        response = (
-            client.table(_TABLE)
-            .select("*")
-            .eq("project_id", project_id)
-            .order("created_at")
-            .execute()
+        rows = query(
+            f"select * from {_TABLE} where project_id = %s "
+            "order by created_at desc",
+            (project_id,),
         )
-        return [_row_to_rule(row) for row in (response.data or [])]
+        return [_row_to_rule(row) for row in rows]
 
     def create(
         self,
@@ -49,29 +50,28 @@ class FilterRuleRepository:
         name: str,
         nl_description: str,
     ) -> FilterRule:
-        payload = {
-            "project_id": project_id,
-            "entity_kind": dsl.entity_kind.value,
-            "name": name,
-            "nl_description": nl_description,
-            "dsl": dsl.model_dump(mode="json"),
-        }
-        response = get_service_client().table(_TABLE).insert(payload).execute()
-        rows = response.data or []
+        rows = query(
+            f"insert into {_TABLE} "
+            "(project_id, entity_kind, name, nl_description, dsl) "
+            "values (%s, %s, %s, %s, %s) returning *",
+            (
+                project_id,
+                dsl.entity_kind.value,
+                name,
+                nl_description,
+                json.dumps(dsl.model_dump(mode="json")),
+            ),
+        )
         if not rows:
             raise RuntimeError("insert returned no row")
         return _row_to_rule(rows[0])
 
     def delete(self, project_id: str, rule_id: str) -> bool:
-        response = (
-            get_service_client()
-            .table(_TABLE)
-            .delete()
-            .eq("id", rule_id)
-            .eq("project_id", project_id)
-            .execute()
+        affected = execute(
+            f"delete from {_TABLE} where id = %s and project_id = %s",
+            (rule_id, project_id),
         )
-        return bool(response.data)
+        return affected > 0
 
 
 __all__ = ["FilterRuleRepository"]

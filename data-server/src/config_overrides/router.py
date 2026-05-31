@@ -31,9 +31,9 @@ from src.config_overrides.merge import OverrideCoercionError, apply_overrides
 from src.config_overrides.models import ConfigOverridesPayload, ConfigOverridesRow
 from src.config_overrides.normalize import normalize_for_storage
 from src.config_overrides.repository import ConfigOverridesRepository
+from src.db import query_one
 from src.enrichment.config import DEFAULT_CONFIG
 from src.logger import get_logger
-from src.supabase_client import get_service_client
 
 LOG = get_logger(__name__)
 
@@ -51,22 +51,15 @@ def _project_exists(project_id: str) -> bool:
     GET/PUT layer fails loudly if the row truly doesn't exist.
     """
     try:
-        response = (
-            get_service_client()
-            .table("projects")
-            .select("id")
-            .eq("id", project_id)
-            .limit(1)
-            .execute()
+        row = query_one(
+            "select id from projects where id = %s limit 1", (project_id,)
         )
     except Exception as exc:  # noqa: BLE001 — defensive probe
-        # TODO(multi-tenant): masking probe failures as "exists" is safe
-        # only in the single-tenant local-mode deployment — under RLS the
-        # caller may legitimately be denied and we must NOT degrade open.
-        # Revisit when the project moves off service-role-only access.
+        # Masking probe failures as "exists" is safe in single-tenant
+        # local mode — the GET/PUT layer fails loudly if the row is absent.
         LOG.warning("project existence probe failed for %s: %s", project_id, exc)
         return True
-    return bool(response.data)
+    return row is not None
 
 
 def _row_envelope(row: ConfigOverridesRow) -> Dict[str, Any]:
