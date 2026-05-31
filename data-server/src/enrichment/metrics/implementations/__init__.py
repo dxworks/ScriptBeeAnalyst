@@ -21,6 +21,7 @@ from . import (  # noqa: F401
     commit_classifiers,
     commit_task_prefixes,
     file_classifiers,
+    git_line_attribution,
     issue_pr_classifiers,
     pr_traits,
 )
