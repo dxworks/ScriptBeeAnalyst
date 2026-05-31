@@ -54,6 +54,9 @@ BUILD_PATTERNS = [
 class EnrichmentConfig:
     """All knobs in one place. Adjust then re-run ``run_pipeline``."""
 
+    # Build-time toggle for the (expensive) git annotated-lines reconstruction.
+    compute_annotated_lines: bool = False
+
     # Time windows
     recent_window_days: int = 336
     idle_threshold_days: int = 180
