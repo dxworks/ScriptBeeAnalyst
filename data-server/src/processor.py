@@ -61,8 +61,6 @@ from typing import Any, Dict, List, Mapping, Optional, Tuple
 if __name__ == "__main__" and __package__ is None:
     sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from supabase import Client, create_client
-
 from src.common.domains.app_inspector import AppInspectorTransformer, build_app_inspector_bundle
 from src.common.domains.code_structure.bridge import build_code_structure_bundle
 from src.common.domains.code_structure.transformer import CodeStructureTransformer
@@ -82,11 +80,12 @@ from src.common.domains.transformer import Transformer, TransformResult
 from src.common.kernel import Graph
 from src.common.people import SourceKind
 from src.common.pickle_store import PickleStore
-from src.config import RECURSION_LIMIT, SUPABASE_SERVICE_KEY, SUPABASE_URL
+from src import storage
+from src.config import RECURSION_LIMIT
 from src.config_overrides.merge import OverrideCoercionError, apply_overrides
 from src.config_overrides.repository import ConfigOverridesRepository
+from src.db import connection, query, query_one
 from src.enrichment.config import DEFAULT_CONFIG, EnrichmentConfig
-from src.supabase_client import get_service_client
 from src.enrichment.metrics.implementations.component_resolver import (
     build_components_from_relations,
 )
@@ -274,28 +273,27 @@ def build_graph_from_bundles(
 
 
 # ---------------------------------------------------------------------------
-# Supabase infrastructure — preserved verbatim from the legacy processor.
+# Database + on-disk storage infrastructure.
 # ---------------------------------------------------------------------------
 def download_serialized_files_from_supabase(project_id: str) -> DownloadedFiles:
-    """Download every serialized file for ``project_id`` to a temp dir.
+    """Stage every serialized file for ``project_id`` into a temp dir.
 
-    Behaviour is preserved verbatim from the legacy processor (Chunk 10
-    will revisit this when the supabase-storage layer is refactored).
+    De-Supabased: the serialized_files rows come from the local Postgres
+    database and the bytes are read directly from the on-disk store
+    (:data:`src.config.SERIALIZED_FILES_DIR`) rather than a storage bucket.
+    The name is kept for call-site compatibility.
     """
-    logger.info("Downloading serialized files from Supabase Storage")
+    logger.info("Staging serialized files from local on-disk store")
 
     if not project_id:
         raise ValueError("project_id must be provided")
 
-    supabase: Client = create_client(SUPABASE_URL, SUPABASE_SERVICE_KEY)
-    response = (
-        supabase.table("serialized_files")
-        .select("*")
-        .eq("project_id", project_id)
-        .execute()
+    rows = query(
+        "select * from serialized_files where project_id = %s",
+        (project_id,),
     )
 
-    if not response.data:
+    if not rows:
         raise ValueError(f"No serialized files found for project_id: {project_id}")
 
     downloaded = DownloadedFiles()
@@ -303,16 +301,16 @@ def download_serialized_files_from_supabase(project_id: str) -> DownloadedFiles:
     temp_dir.mkdir(parents=True, exist_ok=True)
 
     file_summaries = []
-    for file_record in response.data:
+    for file_record in rows:
         file_type = file_record["file_type"]
         storage_path = file_record["storage_path"]
         file_name = file_record["name"]
         repo_name = file_record.get("repo_name")
 
         try:
-            file_bytes = supabase.storage.from_("serialized-files").download(storage_path)
+            file_bytes = storage.read_bytes(storage_path)
         except Exception as exc:
-            raise FileNotFoundError(f"Failed to download {storage_path}: {exc}") from exc
+            raise FileNotFoundError(f"Failed to read {storage_path}: {exc}") from exc
 
         if file_type == "git":
             safe_repo = repo_name or "git"
@@ -349,11 +347,13 @@ def download_serialized_files_from_supabase(project_id: str) -> DownloadedFiles:
 
 def update_project_status(project_id: str, status: str) -> None:
     """Update ``projects.status`` row for ``project_id``."""
-    supabase: Client = create_client(SUPABASE_URL, SUPABASE_SERVICE_KEY)
     try:
-        supabase.table("projects").update(
-            {"status": status, "updated_at": "now()"}
-        ).eq("id", project_id).execute()
+        with connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "update projects set status = %s where id = %s",
+                    (status, project_id),
+                )
     except Exception as exc:
         logger.warning(f"Failed to update project status: {exc}")
 
@@ -361,28 +361,30 @@ def update_project_status(project_id: str, status: str) -> None:
 def fetch_project_component_mapping(project_id: str) -> Optional[Dict[str, Any]]:
     """Return the per-project ``component_mapping`` JSONB blob or ``None``.
 
-    Reads ``projects.component_mapping`` (added by the B2 Supabase
-    migration). Returns ``None`` when the row is absent, the column is
-    null, or Supabase is unreachable — the caller falls back to the
-    operator-level ``components_mapping_path`` knob (dev/test fallback).
+    Reads ``projects.component_mapping`` (added by the B2 migration). Returns
+    ``None`` when the row is absent, the column is null, or the database is
+    unreachable — the caller falls back to the operator-level
+    ``components_mapping_path`` knob (dev/test fallback).
     """
     try:
-        client = get_service_client()
-        response = (
-            client.table("projects")
-            .select("component_mapping")
-            .eq("id", project_id)
-            .limit(1)
-            .execute()
+        row = query_one(
+            "select component_mapping from projects where id = %s limit 1",
+            (project_id,),
         )
     except Exception as exc:  # noqa: BLE001 — best-effort, fall back on any error
         logger.warning(
             "Failed to fetch component_mapping for project %s: %s", project_id, exc
         )
         return None
-    if not response.data:
+    if not row:
         return None
-    mapping = response.data[0].get("component_mapping")
+    mapping = row.get("component_mapping")
+    if isinstance(mapping, str):
+        import json as _json
+        try:
+            mapping = _json.loads(mapping)
+        except ValueError:
+            mapping = None
     if isinstance(mapping, dict):
         return mapping
     if mapping is not None:
@@ -401,18 +403,10 @@ def fetch_project_component_mapping(project_id: str) -> Optional[Dict[str, Any]]
 
 def get_next_project_to_process() -> Optional[Dict]:
     """Return the oldest ``status='processing'`` project, or None."""
-    supabase: Client = create_client(SUPABASE_URL, SUPABASE_SERVICE_KEY)
-    response = (
-        supabase.table("projects")
-        .select("*")
-        .eq("status", "processing")
-        .order("updated_at")
-        .limit(1)
-        .execute()
+    return query_one(
+        "select * from projects where status = 'processing' "
+        "order by updated_at asc limit 1"
     )
-    if response.data and len(response.data) > 0:
-        return response.data[0]
-    return None
 
 
 # ---------------------------------------------------------------------------
