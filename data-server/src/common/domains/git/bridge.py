@@ -32,6 +32,26 @@ Key translation choices (see Chunk 8 brief):
 * :class:`Change` ids come from :meth:`Change.make_id` so they're
   deterministic across re-runs. (Change ids include the commit's
   repo-scoped id, so they're naturally repo-scoped too.)
+
+  EXCEPTION — merge commits (>1 parent). A merge's combined diff for a
+  single file is emitted by inspector-git as one :class:`ChangeDTO` *per
+  parent* (each carrying that parent's ``parent_commit_id``). All of those
+  share the same ``(commit_id, old_path, new_path)`` triple, so plain
+  :meth:`Change.make_id` would give them one id and the last-write-wins
+  :class:`ChangeRegistry` would drop all but one — exactly what legacy
+  ``main`` avoided by keeping the per-parent changes as distinct in-memory
+  objects (``MergeChangesTransformer``). To preserve the same information,
+  a merge change's id is suffixed with its ``parent_commit_id``
+  (:func:`_change_id`), so the per-parent changes survive as DISTINCT
+  entities and the annotated-lines replay can reconcile them. Non-merge
+  (single-parent / root) changes keep the bare :meth:`Change.make_id` id
+  byte-for-byte — nothing in the rest of the pipeline changes for them.
+
+  ``parent_change_ref`` is also populated (legacy ``Change.parent_change``):
+  it points at the newest change to the file's *old* path reachable from the
+  change's ``parent_commit`` — a faithful port of
+  ``ChangeTransformer.get_last_change``. Renames are followed because the
+  lookup keys on ``old_path`` (the name the parent knew the file by).
 * :class:`Hunk` ids come from :meth:`Hunk.make_id` with the change-local
   ordinal (0-based position inside the change's hunk list).
 * Legacy :class:`ChangeType` / :class:`LineOperation` enums (plain
@@ -43,7 +63,7 @@ Key translation choices (see Chunk 8 brief):
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Mapping, Tuple
+from typing import Any, Dict, List, Mapping, Optional
 
 from src.inspector_git.reader.dto.gitlog.commit_dto import CommitDTO
 from src.inspector_git.reader.dto.gitlog.git_log_dto import GitLogDTO
@@ -146,6 +166,14 @@ def build_git_bundle(
     changes: List[Change] = []
     hunks: List[Hunk] = []
 
+    # Indexes for the legacy ``get_last_change`` parent-change resolution.
+    # ``commits_by_id`` lets us walk the parent chain; ``changes_by_commit``
+    # holds every change keyed by its commit's repo-scoped id. Both are built
+    # incrementally — inspector-git emits commits parent-before-child, so a
+    # change's parents are always already indexed when we resolve it.
+    commits_by_id: Dict[str, Commit] = {}
+    changes_by_commit: Dict[str, List[Change]] = {}
+
     for commit_dto in log_dto.commits:
         author = _intern_account(
             accounts_by_id,
@@ -198,7 +226,13 @@ def build_git_bundle(
             parent_refs=parent_refs,
         )
         commits.append(commit)
+        commits_by_id[commit.id] = commit
         commit_ref = commit.ref()
+
+        # A merge commit (>1 parent) emits one change per parent for the same
+        # file; we must keep those distinct (see module docstring).
+        is_merge = len(parent_refs) > 1
+        commit_changes: List[Change] = []
 
         for ordinal_in_commit, change_dto in enumerate(commit_dto.changes):
             change_type = _map_change_type(change_dto.type)
@@ -218,17 +252,39 @@ def build_git_bundle(
                 project_ref, change_dto.is_binary,
             )
 
+            parent_commit_sha = change_dto.parent_commit_id or None
+            parent_commit_ref = (
+                _commit_ref_for(repo_name, parent_commit_sha)
+                if parent_commit_sha
+                else None
+            )
+
+            # Resolve the legacy ``parent_change`` (``get_last_change``): the
+            # newest change to ``old_path`` reachable from this change's
+            # parent commit. ``None`` for ADDs / when no prior change exists.
+            parent_change = (
+                _get_last_change(
+                    commits_by_id,
+                    changes_by_commit,
+                    Commit.make_id(repo_name, parent_commit_sha),
+                    old_path,
+                )
+                if parent_commit_sha
+                else None
+            )
+
             change = Change(
-                id=Change.make_id(commit.id, old_path, new_path),
+                id=_change_id(
+                    commit.id, old_path, new_path, is_merge, parent_commit_sha
+                ),
                 commit_ref=commit_ref,
                 file_ref=file_entity.ref(),
                 change_type=change_type,
                 old_path=old_path,
                 new_path=new_path,
-                parent_commit_ref=(
-                    _commit_ref_for(repo_name, change_dto.parent_commit_id)
-                    if change_dto.parent_commit_id
-                    else None
+                parent_commit_ref=parent_commit_ref,
+                parent_change_ref=(
+                    parent_change.ref() if parent_change is not None else None
                 ),
             )
 
@@ -253,6 +309,12 @@ def build_git_bundle(
 
             change.hunk_refs = [h.ref() for h in change_hunks]
             changes.append(change)
+            commit_changes.append(change)
+
+        # Register this commit's changes only after the whole commit is built,
+        # so a per-parent merge change never resolves its ``parent_change``
+        # against a sibling change of the same merge commit.
+        changes_by_commit[commit.id] = commit_changes
 
     return {
         "project": project,
@@ -267,6 +329,68 @@ def build_git_bundle(
 # ---------------------------------------------------------------------------
 # Internals
 # ---------------------------------------------------------------------------
+
+
+def _change_id(
+    commit_id: str,
+    old_path: str,
+    new_path: str,
+    is_merge: bool,
+    parent_commit_sha: Optional[str],
+) -> str:
+    """Composite id for a :class:`Change`.
+
+    Non-merge (root / single-parent) commits use the legacy
+    :meth:`Change.make_id` triple verbatim — their ids are unchanged from
+    before this fix, so nothing downstream of the bridge shifts for them.
+
+    Merge commits (>1 parent) emit one change per parent for the same file,
+    all sharing the ``(commit_id, old_path, new_path)`` triple. To keep them
+    DISTINCT (legacy held them as separate objects; the v2 registry is
+    last-write-wins and would otherwise drop all but one), the merge change's
+    id is suffixed with its ``parent_commit_id``. Mirrors how ``main``'s
+    ``MergeChangesTransformer`` preserved per-parent changes. The ``^``
+    separator can't appear in the base id (which uses ``-`` and ``->``).
+    """
+    base = Change.make_id(commit_id, old_path, new_path)
+    if is_merge and parent_commit_sha:
+        return f"{base}^{parent_commit_sha}"
+    return base
+
+
+def _get_last_change(
+    commits_by_id: Dict[str, Commit],
+    changes_by_commit: Dict[str, List[Change]],
+    start_commit_id: str,
+    file_name: str,
+) -> Optional[Change]:
+    """Newest change whose ``new_path`` == ``file_name``, reachable upward.
+
+    Faithful port of legacy ``ChangeTransformer.get_last_change``: DFS up the
+    parent chain from ``start_commit_id`` (first parent preferred), returning
+    the first change that produced ``file_name``. Renames are followed because
+    the caller keys on the change's ``old_path``. Returns ``None`` if no such
+    change exists in the ingested history (legacy raised ``NoChangeException``;
+    here a missing parent change simply leaves ``parent_change_ref`` unset and
+    the replay falls back to its ``parent_commit_ref`` walk).
+    """
+    stack = [start_commit_id]
+    seen: set[str] = set()
+    while stack:
+        cid = stack.pop()
+        if cid in seen:
+            continue
+        seen.add(cid)
+        for ch in changes_by_commit.get(cid, ()):
+            if ch.new_path == file_name:
+                return ch
+        commit = commits_by_id.get(cid)
+        if commit is None:
+            continue
+        # Push parents in reverse so pop() visits the first parent first.
+        for p in reversed(list(commit.parent_refs)):
+            stack.append(p.id)
+    return None
 
 
 def _read_iglog(file_path: Path) -> GitLogDTO:
