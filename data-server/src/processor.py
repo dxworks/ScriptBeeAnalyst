@@ -403,10 +403,18 @@ def fetch_project_component_mapping(project_id: str) -> Optional[Dict[str, Any]]
 
 def get_next_project_to_process() -> Optional[Dict]:
     """Return the oldest ``status='processing'`` project, or None."""
-    return query_one(
+    project = query_one(
         "select * from projects where status = 'processing' "
         "order by updated_at asc limit 1"
     )
+    # psycopg returns Postgres ``uuid`` columns as ``uuid.UUID`` objects, but
+    # the whole build path was written to the old Supabase/PostgREST contract
+    # where ``id`` arrived as a JSON string (``Graph``/``ConfigOverridesRow``
+    # declare ``project_id: str``). Coerce at this boundary so downstream code
+    # keeps seeing strings.
+    if project is not None and project.get("id") is not None:
+        project["id"] = str(project["id"])
+    return project
 
 
 # ---------------------------------------------------------------------------

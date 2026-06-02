@@ -14,7 +14,6 @@ web-ui/.angular
 
 # Local data / generated artifacts
 analyzed_projects
-local_supabase_deploy
 data-server/.playwright-mcp
 
 # VCS / IDE / env

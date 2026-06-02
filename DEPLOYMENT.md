@@ -104,8 +104,10 @@ A live deployment was smoke-tested end to end:
 ## Notes
 
 - The old Supabase scaffolding (`local_supabase_deploy/`, `supabase/functions/`,
-  `.env.supabase`, `local_supabase_*.sh`, `env-switch.sh`) is **inert** — nothing in
-  the compose stack, Dockerfile, or app references it. It can be deleted at any time.
+  `.env.supabase*`, `local_supabase_*.sh`, `env-switch.sh`, `db-push.sh`, `db-reset.sh`,
+  `data-server/dev-{start,end}.sh`) has been **removed**. The only thing kept under
+  `supabase/` is `migrations/` — the canonical schema the app applies on boot
+  (`data-server/src/bootstrap.py`).
 - A couple of modules still carry "supabase" in their names/docstrings
   (e.g. `data-server/src/smart_merge/supabase_repository.py`) but are fully
   Postgres-backed; the naming is cosmetic only.
