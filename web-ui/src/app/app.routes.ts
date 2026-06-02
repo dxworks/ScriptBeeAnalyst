@@ -72,11 +72,6 @@ export const routes: Routes = [
           },
         ],
       },
-      {
-        path: 'data-model',
-        loadComponent: () =>
-          import('./pages/data-model/data-model.component').then(m => m.DataModelComponent),
-      },
     ],
   },
   {
