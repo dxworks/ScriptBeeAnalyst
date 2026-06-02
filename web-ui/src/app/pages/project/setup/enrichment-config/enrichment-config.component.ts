@@ -169,9 +169,9 @@ export class EnrichmentConfigComponent implements OnInit {
    * Bound to the "Compute annotated lines" checkbox; forwarded to the
    * ``/projects/{id}/build`` body on the next rerun so the build emits
    * ``git.loc`` / ``git.repo_size`` classifiers and the
-   * ``git.line_attribution`` trait. Defaults off.
+   * ``git.line_attribution`` trait. Defaults on.
    */
-  readonly computeAnnotatedLines = signal(false);
+  readonly computeAnnotatedLines = signal(true);
 
   /**
    * Once the project is FINALIZED the enrichment config is frozen

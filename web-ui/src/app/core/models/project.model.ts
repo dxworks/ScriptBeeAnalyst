@@ -32,9 +32,14 @@ export type ProjectStatus = 'draft' | 'processing' | 'ready' | 'idle' | 'resumin
 /**
  * Project lifecycle stage. The string values match the data-server's
  * `StrEnum` exactly — both `/projects/current` and `POST .../finalize` emit
- * these literals, and the Supabase `projects.merge_state` column stores them.
+ * these literals, and the `projects.merge_state` column stores them.
+ *
+ * `FINALIZING` is a transient row-only stage held for the duration of a
+ * finalize run (the in-memory graph itself only ever holds `PRE_MERGE` /
+ * `FINALIZED`). `/projects/current` surfaces it so a mid-finalize refresh keeps
+ * the setup locked and the Analysis loading bar up.
  */
-export type MergeState = 'PRE_MERGE' | 'FINALIZED';
+export type MergeState = 'PRE_MERGE' | 'FINALIZING' | 'FINALIZED';
 
 export interface CreateProjectDto {
   name: string;

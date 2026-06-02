@@ -44,15 +44,29 @@ export class SetupComponent {
   get finalizing() {
     return this.currentProject.finalizing;
   }
+  /** Persisted FINALIZING stage — true across a mid-finalize refresh too. */
+  get isFinalizing() {
+    return this.currentProject.isFinalizing;
+  }
   get mergeState() {
     return this.currentProject.mergeState;
   }
 
+  /** Show the "Finalizing…" affordance for either the in-flight or persisted stage. */
+  readonly finalizeRunning = computed(
+    () => this.currentProject.finalizing() || this.currentProject.isFinalizing(),
+  );
+
   // The finalize CTA is actionable only once a project is loaded and still in
-  // the PRE_MERGE stage. Computed is lazy, so referencing the injected service
-  // inside the arrow is safe.
+  // the PRE_MERGE stage — not while one is already running (in-flight or
+  // persisted FINALIZING) or already finalized. Computed is lazy, so
+  // referencing the injected service inside the arrow is safe.
   readonly canFinalize = computed(
-    () => this.currentProject.hasLoadedProject() && !this.currentProject.isFinalized(),
+    () =>
+      this.currentProject.hasLoadedProject() &&
+      !this.currentProject.isFinalized() &&
+      !this.currentProject.isFinalizing() &&
+      !this.currentProject.finalizing(),
   );
 
   showConfirm = signal(false);
@@ -67,11 +81,20 @@ export class SetupComponent {
    * The setup is "effectively finalized" the moment a finalize starts, not
    * only once it completes: we lock author-matching / enrichment-config and
    * unlock Analysis right away so the user lands on the Analysis tab and
-   * watches the finalize bar there. If the finalize fails, `finalizing()`
-   * goes false while `mergeState` stays PRE_MERGE, so the locks self-revert.
+   * watches the finalize bar there.
+   *
+   * Three signals cover this: `finalizing()` (client in-flight flag, instant
+   * but lost on refresh), `isFinalizing()` (persisted FINALIZING stage off
+   * /projects/current — survives a refresh mid-run), and `isFinalized()` (the
+   * terminal stage). If the finalize fails, all three go false while
+   * `mergeState` returns to PRE_MERGE, so the locks self-revert.
    */
   private effectiveFinalized(): boolean {
-    return this.currentProject.isFinalized() || this.currentProject.finalizing();
+    return (
+      this.currentProject.isFinalized() ||
+      this.currentProject.isFinalizing() ||
+      this.currentProject.finalizing()
+    );
   }
 
   /** A tab is locked when the current lifecycle stage matches its `lockedIn`. */

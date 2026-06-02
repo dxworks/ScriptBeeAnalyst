@@ -49,17 +49,23 @@
           Back to config
         </button>
       } @else {
-        <span class="lifecycle-badge setup" title="Setup stage; finalize when author merges and enrichment config are confirmed.">
-          Config
-        </span>
+        @if (finalizeRunning()) {
+          <span class="lifecycle-badge setup" title="A finalize is in progress; the Analysis tab shows its loading bar.">
+            Finalizing…
+          </span>
+        } @else {
+          <span class="lifecycle-badge setup" title="Setup stage; finalize when author merges and enrichment config are confirmed.">
+            Config
+          </span>
+        }
         <button
           type="button"
           class="btn btn-primary"
-          [disabled]="!canFinalize() || finalizing()"
+          [disabled]="!canFinalize() || finalizeRunning()"
           (click)="openConfirm()"
           title="Lock in author merges + enrichment config and move to the Analysis stage."
         >
-          @if (finalizing()) {
+          @if (finalizeRunning()) {
             <span class="spinner-small" aria-hidden="true"></span>
             Finalizing…
           } @else {

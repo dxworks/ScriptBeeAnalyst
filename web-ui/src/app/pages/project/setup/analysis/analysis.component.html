@@ -25,18 +25,57 @@
     </p>
   </div>
 } @else {
-  <div class="analysis-placeholder">
-    <div class="placeholder-icon">
-      <svg width="56" height="56" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-        <path d="M3 3v18h18"/>
-        <path d="M18.7 8l-5.1 5.2-2.8-2.7L7 14.3"/>
-      </svg>
+  <div class="code-workspace">
+    <div class="workspace-toolbar">
+      <div class="toolbar-info">
+        <h2>Analysis</h2>
+        <span class="toolbar-hint">Run Python against the loaded project graph (<code>graph_data</code>).</span>
+      </div>
+      <button
+        type="button"
+        class="btn-primary btn-sm"
+        (click)="run()"
+        [disabled]="running()"
+      >
+        @if (running()) {
+          <span class="run-spinner" aria-hidden="true"></span>
+          Running…
+        } @else {
+          ▶ Run
+        }
+      </button>
     </div>
-    <h2>Analysis</h2>
-    <p class="placeholder-lead">
-      This project is finalized — author references are unified and the people-side
-      analytics are built. The query &amp; analysis workspace lands here.
-    </p>
-    <p class="placeholder-sub">Coming soon — to be implemented.</p>
+
+    <div class="editor-pane">
+      <app-code-editor
+        [value]="code()"
+        [disabled]="running()"
+        (valueChange)="code.set($event)"
+        (run)="run()"
+      />
+    </div>
+
+    <div class="console-pane">
+      <div class="console-header">
+        <span class="console-title">Console</span>
+        <button
+          type="button"
+          class="btn-ghost btn-sm"
+          (click)="clearConsole()"
+          [disabled]="console().length === 0"
+        >
+          Clear
+        </button>
+      </div>
+      <div class="console-body">
+        @if (console().length === 0) {
+          <p class="console-empty">Output will appear here.</p>
+        } @else {
+          @for (entry of console(); track $index) {
+            <pre class="console-entry" [class.is-error]="entry.kind === 'err'">{{ entry.text }}</pre>
+          }
+        }
+      </div>
+    </div>
   </div>
 }

@@ -18,7 +18,7 @@ import re
 from datetime import datetime
 
 from src.config import WORKSPACE_ROOT
-from src.db import close_pool, connection, query_one
+from src.db import close_pool, connection, execute, query_one
 from src.bootstrap import apply_migrations
 from src.logger import get_logger
 # Chunk 19: smart-merge moved off the legacy ``graph_data: dict`` global.
@@ -363,17 +363,28 @@ async def get_current_project():
         "stats": _stats_for(graph),
     }
     # Live finalize progress (build/finalize checkpoints land on the projects
-    # row, see src/progress.py). Surfaced here so the project page — and the
-    # Analysis tab's finalize loading bar in particular — can read it off the
-    # same /projects/current poll. Absent when no pipeline is running.
+    # row, see src/progress.py) plus the transient FINALIZING overlay. Both are
+    # surfaced here so the project page — and the Analysis tab's finalize
+    # loading bar in particular — can read them off the same /projects/current
+    # poll. Progress is absent when no pipeline is running.
+    #
+    # The FINALIZING overlay matters because the in-memory graph flips to
+    # FINALIZED partway through a finalize (after the rebind) while Phase B is
+    # still running. Trusting the row's FINALIZING here keeps a mid-finalize
+    # refresh on the loading bar for the *whole* run, rather than briefly
+    # showing editable PRE_MERGE setup (before the rebind) then prematurely
+    # showing the FINALIZED workspace (after it).
     try:
         prog_row = query_one(
-            "select progress, progress_stage from projects where id = %s",
+            "select merge_state, progress, progress_stage from projects where id = %s",
             (current_project_id,),
         )
-        if prog_row and prog_row.get("progress") is not None:
-            resp["progress"] = prog_row["progress"]
-            resp["progress_stage"] = prog_row.get("progress_stage")
+        if prog_row:
+            if prog_row.get("merge_state") == MergeState.FINALIZING.value:
+                resp["merge_state"] = MergeState.FINALIZING.value
+            if prog_row.get("progress") is not None:
+                resp["progress"] = prog_row["progress"]
+                resp["progress_stage"] = prog_row.get("progress_stage")
     except Exception as exc:  # noqa: BLE001 — progress is best-effort
         logger.debug("progress lookup for /projects/current failed: %s", exc)
     return resp
@@ -426,6 +437,17 @@ async def load_project(project_id: str):
             logger.warning(
                 f"Project {project_id} has unknown merge_state="
                 f"{project_merge_state_raw!r}; defaulting to PRE_MERGE"
+            )
+            project_merge_state = MergeState.PRE_MERGE
+        # FINALIZING is a row-only transient — the in-memory Graph is never in
+        # that stage. A row left FINALIZING means a finalize was interrupted
+        # (e.g. the server died mid-run); treat it as PRE_MERGE so the project
+        # loads cleanly and the user can re-run finalize, matching the
+        # half-finalized recovery contract (re-attempt / re-import).
+        if project_merge_state == MergeState.FINALIZING:
+            logger.warning(
+                f"Project {project_id} row is FINALIZING (interrupted "
+                "finalize); loading as PRE_MERGE so it can be re-finalized."
             )
             project_merge_state = MergeState.PRE_MERGE
 
@@ -605,6 +627,27 @@ def _enrichment_config_to_jsonable(config: EnrichmentConfig) -> Dict[str, Any]:
     return out
 
 
+def _write_merge_state(project_id: str, state: str) -> None:
+    """Best-effort write of the projects-row ``merge_state``.
+
+    Used for the transient ``FINALIZING`` overlay set at the start of a
+    finalize and for resetting back to ``PRE_MERGE`` on a failed run. Mirrors
+    :func:`progress.report` — swallow and log so a row-state write can never
+    crash the finalize itself. The authoritative ``FINALIZED`` write at the end
+    goes through ``_persist_finalize`` (which also freezes the config and is
+    *not* best-effort).
+    """
+    try:
+        execute(
+            "update projects set merge_state = %s where id = %s",
+            (state, project_id),
+        )
+    except Exception as exc:  # noqa: BLE001 — row-state write is best-effort
+        logger.warning(
+            "merge_state write (%s) failed for %s: %s", state, project_id, exc
+        )
+
+
 @app.post("/projects/{project_id}/finalize")
 async def finalize_project(project_id: str):
     """Transition a project from ``PRE_MERGE`` to ``FINALIZED``.
@@ -663,6 +706,16 @@ async def finalize_project(project_id: str):
             },
             status_code=400,
         )
+
+    # Persist the transient FINALIZING stage on the row BEFORE any heavy work.
+    # This is the first DB write of the finalize: from here on a browser
+    # refresh reads FINALIZING off /projects/current and keeps the setup tabs
+    # locked + the Analysis loading bar up, instead of falling back to the
+    # editable PRE_MERGE setup (the in-memory graph only flips to FINALIZED
+    # partway through, so the row is the only honest mid-finalize signal). Every
+    # failure branch below resets it to PRE_MERGE so a failed run never strands
+    # the project here.
+    _write_merge_state(project_id, MergeState.FINALIZING.value)
 
     started = time.monotonic()
     progress.report(project_id, 10, "matching users")
@@ -735,6 +788,7 @@ async def finalize_project(project_id: str):
         )
     except Exception as exc:  # noqa: BLE001
         logger.exception(f"rebind failed for project {project_id}")
+        _write_merge_state(project_id, MergeState.PRE_MERGE.value)
         progress.clear(project_id)
         return JSONResponse(
             {"error": f"rebind failed: {exc}"},
@@ -788,6 +842,7 @@ async def finalize_project(project_id: str):
             "persisted to Supabase. Next /load will read PRE_MERGE from "
             "the projects row and overwrite the in-memory state."
         )
+        _write_merge_state(project_id, MergeState.PRE_MERGE.value)
         progress.clear(project_id)
         return JSONResponse(
             {
@@ -808,6 +863,7 @@ async def finalize_project(project_id: str):
             f"finalize: save_graph_to_disk failed for project {project_id}; "
             "in-memory graph is FINALIZED but on-disk pickle is stale."
         )
+        _write_merge_state(project_id, MergeState.PRE_MERGE.value)
         progress.clear(project_id)
         return JSONResponse(
             {
@@ -845,6 +901,7 @@ async def finalize_project(project_id: str):
             "still reads PRE_MERGE. Next /load will overwrite the in-memory "
             "state from the DB, producing a PRE_MERGE graph again."
         )
+        _write_merge_state(project_id, MergeState.PRE_MERGE.value)
         progress.clear(project_id)
         return JSONResponse(
             {

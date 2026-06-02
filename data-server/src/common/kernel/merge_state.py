@@ -26,5 +26,14 @@ class MergeState(StrEnum):
     PRE_MERGE = "PRE_MERGE"
     FINALIZED = "FINALIZED"
 
+    #: Transient stage persisted on the ``projects`` *row* (never on the
+    #: in-memory :class:`Graph`) for the duration of a finalize run. The
+    #: finalize endpoint writes it before the rebind and overwrites it with
+    #: ``FINALIZED`` on success (or resets it to ``PRE_MERGE`` on failure).
+    #: ``/projects/current`` surfaces it so a mid-finalize browser refresh
+    #: keeps the setup tabs locked and the Analysis loading bar up instead of
+    #: falling back to the editable PRE_MERGE setup.
+    FINALIZING = "FINALIZING"
+
 
 __all__ = ["MergeState"]

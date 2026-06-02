@@ -34,6 +34,14 @@ export class CurrentProjectService {
   readonly mergeState = this.mergeStateSignal.asReadonly();
   /** True only when a project is loaded AND its graph is FINALIZED. */
   readonly isFinalized = computed(() => this.mergeStateSignal() === 'FINALIZED');
+  /**
+   * True when the *persisted* lifecycle stage is the transient FINALIZING —
+   * i.e. a finalize is running on the server. Unlike {@link finalizing} (a
+   * client-only in-flight flag, lost on refresh) this is read off
+   * /projects/current, so it survives a mid-finalize browser refresh and is
+   * what keeps the setup locked + the Analysis loading bar up on reload.
+   */
+  readonly isFinalizing = computed(() => this.mergeStateSignal() === 'FINALIZING');
   /** True while a finalize call is in flight (drives the CTA spinner). */
   readonly finalizing = this.finalizingSignal.asReadonly();
   /** Live progress (0..100) of an in-flight build/finalize, or `null`. */

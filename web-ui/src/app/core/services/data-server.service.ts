@@ -18,6 +18,16 @@ export interface BuildResult {
   error?: string;
 }
 
+/**
+ * Result of running user-authored Python via the data-server's `/execute`
+ * endpoint. Exactly one of `output` (captured stdout) or `error` (a Python
+ * traceback / connection message) is populated.
+ */
+export interface RunCodeResult {
+  output?: string;
+  error?: string;
+}
+
 export interface LoadProjectResult {
   success: boolean;
   message?: string;
@@ -341,6 +351,39 @@ export class DataServerService {
   }
 
   /**
+   * Run user-authored Python against the currently loaded project graph.
+   *
+   * Posts the raw source to the data-server's `/execute` endpoint, which runs
+   * it with the project graph bound into scope (`graph_data`, `graph`, …),
+   * captures stdout, and returns `{ output }` on success or `{ error }` (a
+   * formatted traceback, HTTP 400) on failure. The endpoint operates on the
+   * server's *currently loaded* project, so no project id is sent — the
+   * Analysis tab only reaches this point with a project loaded.
+   */
+  async runCode(code: string): Promise<RunCodeResult> {
+    try {
+      const response = await firstValueFrom(
+        this.http.post<RunCodeResult>(`${this.baseUrl}/execute`, { code }),
+      );
+      return { output: response.output ?? '' };
+    } catch (err) {
+      if (err instanceof HttpErrorResponse) {
+        if (err.status === 0) {
+          return {
+            error: `Unable to connect to data server. Please ensure it's running on ${this.baseUrl}`,
+          };
+        }
+        // `/execute` returns the traceback under `error`; fall back to the
+        // generic FastAPI shapes for any other failure status.
+        const message =
+          err.error?.error || err.error?.detail || err.error?.message || err.message;
+        return { error: message || 'Failed to run code' };
+      }
+      return { error: 'Failed to run code' };
+    }
+  }
+
+  /**
    * Load project graph into data-server memory
    * @param projectId - UUID of the project
    * @returns LoadProjectResult with success status, stats, and message
@@ -519,9 +562,13 @@ export class DataServerService {
       return {
         project_id: response.project_id,
         project_name: response.project_name,
-        // The server emits the StrEnum value ("PRE_MERGE"/"FINALIZED").
-        // Default to PRE_MERGE if an older data-server build omits it.
-        merge_state: response.merge_state === 'FINALIZED' ? 'FINALIZED' : 'PRE_MERGE',
+        // The server emits the StrEnum value
+        // ("PRE_MERGE"/"FINALIZING"/"FINALIZED"). Default to PRE_MERGE if an
+        // older data-server build omits it or sends something unexpected.
+        merge_state:
+          response.merge_state === 'FINALIZED' || response.merge_state === 'FINALIZING'
+            ? response.merge_state
+            : 'PRE_MERGE',
         stats: response.stats ?? { git_commits: 0, jira_issues: 0, github_prs: 0 },
         progress: response.progress ?? null,
         progressStage: response.progress_stage ?? null,
