@@ -58,6 +58,13 @@ export interface CurrentProjectResponse {
     jira_issues: number;
     github_prs: number;
   };
+  /**
+   * Live pipeline progress (0..100) for the loaded project, present only
+   * while a build/finalize is running (NULL otherwise). Drives the Analysis
+   * tab's finalize loading bar. `progressStage` is the checkpoint label.
+   */
+  progress?: number | null;
+  progressStage?: string | null;
 }
 
 // Raw response shape from data-server GET /projects/current.
@@ -73,6 +80,8 @@ interface CurrentProjectResponseRaw {
     jira_issues: number;
     github_prs: number;
   };
+  progress?: number | null;
+  progress_stage?: string | null;
 }
 
 /**
@@ -514,6 +523,8 @@ export class DataServerService {
         // Default to PRE_MERGE if an older data-server build omits it.
         merge_state: response.merge_state === 'FINALIZED' ? 'FINALIZED' : 'PRE_MERGE',
         stats: response.stats ?? { git_commits: 0, jira_issues: 0, github_prs: 0 },
+        progress: response.progress ?? null,
+        progressStage: response.progress_stage ?? null,
       };
     } catch (err) {
       // Legacy 404 path (older data-server build still returning 404 for

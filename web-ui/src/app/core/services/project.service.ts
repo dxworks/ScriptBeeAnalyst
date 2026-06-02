@@ -173,10 +173,16 @@ export class ProjectService {
       const currentById = new Map(current.map(p => [p.id, p]));
 
       let changed = incoming.length !== current.length;
+      // A row is "unchanged" only when both its updated_at AND its live
+      // pipeline progress match. updated_at doesn't move during a build, so
+      // without the progress check the card's loading bar would never advance.
+      const sameRow = (a: Project, b: Project): boolean =>
+        a.updated_at === b.updated_at && a.progress === b.progress;
+
       if (!changed) {
         for (const p of incoming) {
           const existing = currentById.get(p.id);
-          if (!existing || existing.updated_at !== p.updated_at) {
+          if (!existing || !sameRow(existing, p)) {
             changed = true;
             break;
           }
@@ -191,7 +197,7 @@ export class ProjectService {
       // existing object reference when the row is unchanged.
       return incoming.map(p => {
         const existing = currentById.get(p.id);
-        return existing && existing.updated_at === p.updated_at ? existing : p;
+        return existing && sameRow(existing, p) ? existing : p;
       });
     });
   }

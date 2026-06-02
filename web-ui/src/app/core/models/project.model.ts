@@ -14,6 +14,16 @@ export interface Project {
    * value as `PRE_MERGE`.
    */
   merge_state?: MergeState;
+  /**
+   * Live pipeline progress (0..100), present only while a build/finalize is
+   * running on the data-server (in-memory registry, `src/progress.py`),
+   * surfaced through `GET /projects`. Absent when no pipeline is active —
+   * drives the dashboard card's top-edge loading bar. See `progress_stage`
+   * for the current checkpoint label.
+   */
+  progress?: number;
+  /** Human-readable checkpoint label for the current `progress` value. */
+  progress_stage?: string;
   // Files are fetched separately via SerializedFile[]
 }
 

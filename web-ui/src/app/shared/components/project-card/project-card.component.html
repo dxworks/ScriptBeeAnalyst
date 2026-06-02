@@ -1,4 +1,16 @@
 <div class="project-card card" [class.loaded]="isLoaded()">
+  @if (showProgress()) {
+    <div
+      class="card-progress"
+      role="progressbar"
+      [attr.aria-valuenow]="progressPercent()"
+      aria-valuemin="0"
+      aria-valuemax="100"
+      [attr.aria-label]="project().progress_stage || 'Processing'"
+    >
+      <div class="card-progress__fill" [style.width.%]="progressPercent()"></div>
+    </div>
+  }
   <div class="card-body">
     <!-- Header -->
     <div class="project-header">

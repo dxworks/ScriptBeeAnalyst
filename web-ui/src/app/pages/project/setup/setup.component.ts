@@ -63,10 +63,21 @@ export class SetupComponent {
     private router: Router,
   ) {}
 
+  /**
+   * The setup is "effectively finalized" the moment a finalize starts, not
+   * only once it completes: we lock author-matching / enrichment-config and
+   * unlock Analysis right away so the user lands on the Analysis tab and
+   * watches the finalize bar there. If the finalize fails, `finalizing()`
+   * goes false while `mergeState` stays PRE_MERGE, so the locks self-revert.
+   */
+  private effectiveFinalized(): boolean {
+    return this.currentProject.isFinalized() || this.currentProject.finalizing();
+  }
+
   /** A tab is locked when the current lifecycle stage matches its `lockedIn`. */
   isTabLocked(tab: SetupTab): boolean {
-    if (tab.lockedIn === 'finalized') return this.isFinalized();
-    if (tab.lockedIn === 'pre-merge') return !this.isFinalized();
+    if (tab.lockedIn === 'finalized') return this.effectiveFinalized();
+    if (tab.lockedIn === 'pre-merge') return !this.effectiveFinalized();
     return false;
   }
 
@@ -98,16 +109,20 @@ export class SetupComponent {
       return;
     }
 
-    const result = await this.currentProject.finalize(projectId);
+    // Close the modal and jump to the Analysis tab IMMEDIATELY — the finalize
+    // (Phase B) runs in the background for a couple of minutes and the
+    // Analysis page shows its progress bar. `finalizing()` flips true inside
+    // finalize(), so the setup tabs lock right away via `effectiveFinalized`.
     this.showConfirm.set(false);
+    this.router.navigate(['/project', projectId, 'setup', 'analysis']);
+
+    const result = await this.currentProject.finalize(projectId);
 
     if (result.success) {
       this.toast.success(
         `Project finalized — ${result.unified_users_created ?? 0} unified users created, ` +
           `${result.refs_rewritten ?? 0} refs rewritten.`,
       );
-      // Setup is now locked; move the user on to the (newly unlocked) Analysis tab.
-      this.router.navigate(['/project', projectId, 'setup', 'analysis']);
       return;
     }
 
@@ -116,6 +131,9 @@ export class SetupComponent {
       return;
     }
 
+    // Finalize failed — setup is still editable (mergeState stayed PRE_MERGE),
+    // so the Analysis tab re-locks. Send the user back to author matching.
     this.toast.error(result.error ?? 'Failed to finalize project.');
+    this.router.navigate(['/project', projectId, 'setup', 'author-matching']);
   }
 }

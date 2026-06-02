@@ -57,6 +57,7 @@ from src.common.pickle_store import PickleStore
 from src.smart_merge.rebind import rebind_account_refs_to_unified
 from src.common.domains.components.resolver import parse_component_mapping
 from src import processor as v2_processor
+from src import progress
 from src.sandbox import (
     QuerySandboxView,
     SetupSandboxView,
@@ -354,13 +355,28 @@ async def get_current_project():
         return {"loaded": False}
     # UnifiedUsers redesign §I (P5.B): surface the lifecycle stage so the
     # MCP layer can state-gate its tools without a second round-trip.
-    return {
+    resp = {
         "loaded": True,
         "project_id": current_project_id,
         "project_name": current_project_name,
         "merge_state": str(graph.merge_state),
         "stats": _stats_for(graph),
     }
+    # Live finalize progress (build/finalize checkpoints land on the projects
+    # row, see src/progress.py). Surfaced here so the project page — and the
+    # Analysis tab's finalize loading bar in particular — can read it off the
+    # same /projects/current poll. Absent when no pipeline is running.
+    try:
+        prog_row = query_one(
+            "select progress, progress_stage from projects where id = %s",
+            (current_project_id,),
+        )
+        if prog_row and prog_row.get("progress") is not None:
+            resp["progress"] = prog_row["progress"]
+            resp["progress_stage"] = prog_row.get("progress_stage")
+    except Exception as exc:  # noqa: BLE001 — progress is best-effort
+        logger.debug("progress lookup for /projects/current failed: %s", exc)
+    return resp
 
 
 @app.post("/projects/{project_id}/load")
@@ -501,14 +517,21 @@ async def build_project(project_id: str, req: BuildRequest = BuildRequest()):
         )
     except NotImplementedError as exc:
         logger.warning(f"build_graph deferred: {exc}")
+        progress.clear(project_id)
         return JSONResponse(
             {"error": str(exc), "deferred": True}, status_code=501,
         )
     except Exception as exc:  # noqa: BLE001
         logger.exception("build_graph failed")
+        progress.clear(project_id)
         return JSONResponse(
             {"error": f"build_graph failed: {exc}"}, status_code=500,
         )
+    # Build succeeded — flash the bar to 100% then drop it so the next poll
+    # hides it (the HTTP /build path doesn't go through process_project's
+    # finally-clear).
+    progress.report(project_id, 100, "ready")
+    progress.clear(project_id)
 
     graph_store.set(project_id, graph)
     # Fresh build invalidates any cached smart-merge state for this project.
@@ -642,6 +665,7 @@ async def finalize_project(project_id: str):
         )
 
     started = time.monotonic()
+    progress.report(project_id, 10, "matching users")
 
     # --- 0. defensive cleanup of leftover Account-keyed relations -------
     # UU aftermath §Bug 3: the v2 ``Relation.canonical_id`` includes the
@@ -711,10 +735,12 @@ async def finalize_project(project_id: str):
         )
     except Exception as exc:  # noqa: BLE001
         logger.exception(f"rebind failed for project {project_id}")
+        progress.clear(project_id)
         return JSONResponse(
             {"error": f"rebind failed: {exc}"},
             status_code=500,
         )
+    progress.report(project_id, 40, "users matched")
 
     # --- 2. snapshot the EnrichmentConfig --------------------------------
     # Source: the default config. The per-project config_overrides ARE
@@ -741,6 +767,7 @@ async def finalize_project(project_id: str):
         effective_config = DEFAULT_CONFIG
 
     frozen_config = _enrichment_config_to_jsonable(effective_config)
+    progress.report(project_id, 55, "snapshot config")
 
     # --- 3. Run Phase B against the rebound graph ------------------------
     # The graph is now FINALIZED in memory; the kind-aware metric guards
@@ -761,6 +788,7 @@ async def finalize_project(project_id: str):
             "persisted to Supabase. Next /load will read PRE_MERGE from "
             "the projects row and overwrite the in-memory state."
         )
+        progress.clear(project_id)
         return JSONResponse(
             {
                 "error": (
@@ -770,6 +798,7 @@ async def finalize_project(project_id: str):
             },
             status_code=500,
         )
+    progress.report(project_id, 85, "finalizing")
 
     # --- 4. Re-dump the typed Graph --------------------------------------
     try:
@@ -779,6 +808,7 @@ async def finalize_project(project_id: str):
             f"finalize: save_graph_to_disk failed for project {project_id}; "
             "in-memory graph is FINALIZED but on-disk pickle is stale."
         )
+        progress.clear(project_id)
         return JSONResponse(
             {
                 "error": (
@@ -788,6 +818,7 @@ async def finalize_project(project_id: str):
             },
             status_code=500,
         )
+    progress.report(project_id, 95, "saving")
 
     # --- 5. Persist merge_state + frozen config to the database ----------
     import json as _json
@@ -814,6 +845,7 @@ async def finalize_project(project_id: str):
             "still reads PRE_MERGE. Next /load will overwrite the in-memory "
             "state from the DB, producing a PRE_MERGE graph again."
         )
+        progress.clear(project_id)
         return JSONResponse(
             {
                 "error": (
@@ -824,6 +856,8 @@ async def finalize_project(project_id: str):
             status_code=500,
         )
 
+    progress.report(project_id, 100, "finalized")
+    progress.clear(project_id)
     duration_ms = int((time.monotonic() - started) * 1000)
 
     logger.info(

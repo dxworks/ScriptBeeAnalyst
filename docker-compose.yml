@@ -59,6 +59,16 @@ services:
       - scriptbee-serialized-files:/data/serialized-files
       - scriptbee-pickles:/tmp/pickles
       - scriptbee-workspace:/workspace/projects
+    # Healthy only once the lifespan startup has run apply_migrations() and
+    # uvicorn is serving — so anything that depends on the schema (the
+    # processor) can wait on this instead of racing the migrations. Uses
+    # python (always in the image) since the slim image has no curl/wget.
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8001/health')\""]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 30s
     restart: unless-stopped
 
   processor:
@@ -68,6 +78,11 @@ services:
     container_name: scriptbee-processor
     depends_on:
       db:
+        condition: service_healthy
+      # Wait for the app to finish applying migrations (it owns schema
+      # bootstrap) before polling — otherwise the first query races the
+      # migrations and crashes with "relation \"projects\" does not exist".
+      app:
         condition: service_healthy
     environment:
       - DATABASE_URL=${DATABASE_URL:-postgresql://postgres:postgres@db:5432/scriptbee}

@@ -67,7 +67,7 @@ def _project_to_dict(row: Dict[str, Any]) -> Dict[str, Any]:
 
     ``enrichment_config_frozen`` is intentionally NOT serialized.
     """
-    return {
+    out = {
         "id": str(row["id"]),
         "name": row["name"],
         "description": row.get("description"),
@@ -76,6 +76,15 @@ def _project_to_dict(row: Dict[str, Any]) -> Dict[str, Any]:
         "created_at": _iso(row.get("created_at")),
         "updated_at": _iso(row.get("updated_at")),
     }
+    # Live pipeline progress (build/finalize), written onto the row by the
+    # build worker at hardcoded checkpoints (see src/progress.py). Present
+    # only while a pipeline is running (NULL otherwise), so the dashboard
+    # card's top-edge loading bar shows up just for active projects.
+    prog = row.get("progress")
+    if prog is not None:
+        out["progress"] = prog
+        out["progress_stage"] = row.get("progress_stage")
+    return out
 
 
 def _file_to_dict(row: Dict[str, Any]) -> Dict[str, Any]:

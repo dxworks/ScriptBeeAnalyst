@@ -1,4 +1,4 @@
-import { Component, input, output } from '@angular/core';
+import { Component, computed, input, output } from '@angular/core';
 import { Project } from '../../../core/models/project.model';
 
 @Component({
@@ -20,6 +20,18 @@ export class ProjectCardComponent {
   process = output<Project>();
   open = output<Project>();
   unload = output<Project>();
+
+  /**
+   * Show the top-edge loading bar only while a build/finalize pipeline is
+   * actively running for this project — i.e. the data-server reported a
+   * progress value below 100. A missing/absent value (no pipeline) or 100
+   * (just completed) hides it.
+   */
+  showProgress = computed(() => {
+    const p = this.project().progress;
+    return p != null && p < 100;
+  });
+  progressPercent = computed(() => this.project().progress ?? 0);
 
   onEdit(): void {
     this.edit.emit(this.project());

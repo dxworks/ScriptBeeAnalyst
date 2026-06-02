@@ -80,6 +80,7 @@ from src.common.domains.transformer import Transformer, TransformResult
 from src.common.kernel import Graph
 from src.common.people import SourceKind
 from src.common.pickle_store import PickleStore
+from src import progress
 from src import storage
 from src.config import RECURSION_LIMIT
 from src.config_overrides.merge import OverrideCoercionError, apply_overrides
@@ -252,17 +253,30 @@ def build_graph_from_bundles(
 
     graph = Graph(project_id=project_id)
 
-    for source, source_bundles in bundles.items():
+    # Source/bundle loop — the "before enrichments" span. Progress climbs
+    # proportionally across the sources present, from 15% (files staged) to
+    # 55% (all sources transformed), so the dashboard bar advances as each
+    # source's transformer finishes. See ``src.progress``.
+    _SRC_LO, _SRC_HI = 15, 55
+    source_count = max(1, len(bundles))
+    for idx, (source, source_bundles) in enumerate(bundles.items()):
         transformer = get_transformer(source)
         for bundle in source_bundles:
             result = transformer.transform(bundle)
             apply_transform_result(graph, result)
+        pct = _SRC_LO + (_SRC_HI - _SRC_LO) * (idx + 1) // source_count
+        progress.report(project_id, pct, "transforming")
+
+    # Before-enrichments marker: every source is in the graph; enrichment
+    # (Phase A) is the next, heavier span.
+    progress.report(project_id, _SRC_HI, "transformed")
 
     # UnifiedUsers redesign §H — Phase A only at build. Phase B runs in
     # ``POST /projects/{id}/finalize`` after ``rebind_account_refs_to_unified``
     # has flipped role-typed refs to UNIFIED_USER kind. See the module-level
     # import comment for the duplicate-id rationale.
     pipeline_result = run_pipeline_phase_a(graph, config)
+    progress.report(project_id, 85, "enriching")
     # Populate graph.components from the component_membership relations
     # emitted by ComponentResolverMetric. Must run AFTER run_pipeline:
     # the Metric ABC's purity contract forbids registry mutations from
@@ -604,7 +618,9 @@ def build_graph(
     :func:`build_graph_from_bundles`, which flips the effective config so
     :class:`GitLineAttributionMetric` runs (plan §4).
     """
+    progress.report(project_id, 5, "starting")
     downloaded = download_serialized_files_from_supabase(project_id)
+    progress.report(project_id, 15, "staging files")
     bundles = _downloaded_files_to_bundles(downloaded, project_name=project_name)
     # Per-project mapping wins over EnrichmentConfig.components_mapping_path.
     # Cloning preserves the caller's config (e.g. test fixtures); we only
@@ -628,6 +644,7 @@ def build_graph(
         config=effective_config,
         compute_annotated_lines=compute_annotated_lines,
     )
+    progress.report(project_id, 95, "saving")
     save_graph_to_disk(graph)
     return graph, pipeline_result
 
@@ -679,6 +696,7 @@ def process_project(project_id: str, project_name: str = "Project") -> bool:
     try:
         update_project_status(project_id, "processing")
         graph, result = build_graph(project_id, project_name=project_name)
+        progress.report(project_id, 100, "ready")
         update_project_status(project_id, "ready")
         logger.info(
             "Built graph for %s — %d builders, %d metrics, %d errors",
@@ -699,6 +717,10 @@ def process_project(project_id: str, project_name: str = "Project") -> bool:
         except Exception:  # noqa: BLE001 — status update is best-effort
             pass
         return False
+    finally:
+        # Drop the progress entry so the dashboard bar disappears once the
+        # build has finished (or failed) — no stuck bars.
+        progress.clear(project_id)
 
 
 def run_loop(poll_interval: int = 60) -> int:

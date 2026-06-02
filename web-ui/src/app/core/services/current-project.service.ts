@@ -19,6 +19,10 @@ export class CurrentProjectService {
   // `null` when nothing is loaded.
   private readonly mergeStateSignal = signal<MergeState | null>(null);
   private readonly finalizingSignal = signal<boolean>(false);
+  // Live pipeline progress for the loaded project, polled off
+  // /projects/current. `null` when no build/finalize is running.
+  private readonly progressSignal = signal<number | null>(null);
+  private readonly progressStageSignal = signal<string | null>(null);
 
   readonly loadedProjectId = this.loadedProjectIdSignal.asReadonly();
   readonly loadedProjectName = this.loadedProjectNameSignal.asReadonly();
@@ -32,6 +36,10 @@ export class CurrentProjectService {
   readonly isFinalized = computed(() => this.mergeStateSignal() === 'FINALIZED');
   /** True while a finalize call is in flight (drives the CTA spinner). */
   readonly finalizing = this.finalizingSignal.asReadonly();
+  /** Live progress (0..100) of an in-flight build/finalize, or `null`. */
+  readonly progress = this.progressSignal.asReadonly();
+  /** Checkpoint label paired with {@link progress}. */
+  readonly progressStage = this.progressStageSignal.asReadonly();
 
   private pollingInterval: ReturnType<typeof setInterval> | null = null;
 
@@ -65,6 +73,8 @@ export class CurrentProjectService {
           this.loadedProjectNameSignal.set(current.project_name ?? null);
           this.loadedProjectStatsSignal.set(current.stats);
           this.mergeStateSignal.set(current.merge_state);
+          this.progressSignal.set(current.progress ?? null);
+          this.progressStageSignal.set(current.progressStage ?? null);
           this.connectedSignal.set(true);
           return;
         }
@@ -78,6 +88,8 @@ export class CurrentProjectService {
         this.loadedProjectNameSignal.set(null);
         this.loadedProjectStatsSignal.set(null);
         this.mergeStateSignal.set(null);
+        this.progressSignal.set(null);
+        this.progressStageSignal.set(null);
         this.connectedSignal.set(true);
         return;
       } catch (err) {
