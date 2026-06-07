@@ -42,8 +42,9 @@ COPY data-server/src ./src
 # Built SPA from stage 1 -> served by FastAPI at "/" via STATIC_DIR.
 COPY --from=web /web-ui/dist/web-ui/browser /app/static
 
-# Canonical schema migrations applied on startup by src/bootstrap.py.
-COPY supabase/migrations /supabase/migrations
+# Canonical schema migrations, applied on startup by src/bootstrap.py via
+# yoyo-migrations (version-tracked in the _yoyo_migration table).
+COPY data-server/migrations ./migrations
 
 # Defaults; docker-compose overrides DATABASE_URL etc.
 ENV STATIC_DIR=/app/static \

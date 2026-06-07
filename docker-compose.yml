@@ -7,8 +7,9 @@
 #
 # Architecture (de-Supabased, single-tenant, no auth):
 #   * db        — PostgreSQL 16, the only datastore. Schema is applied on
-#                 startup by the app (src/bootstrap.py runs supabase/migrations
-#                 with the storage.*/publication statements stripped).
+#                 startup by the app (src/bootstrap.py runs the SQL files in
+#                 data-server/migrations via yoyo-migrations, version-tracked
+#                 in the _yoyo_migration table).
 #   * app       — ONE image (root Dockerfile): the built Angular SPA is served
 #                 at "/" by the FastAPI data-server, the API under its existing
 #                 paths, all on the same origin (port 8001). Uploaded files live

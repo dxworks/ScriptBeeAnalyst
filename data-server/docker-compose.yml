@@ -41,8 +41,8 @@ services:
     volumes:
       # Mount source for development (hot reload)
       - ./src:/app/src:ro
-      # Migrations applied on startup by src/bootstrap.py
-      - ../supabase/migrations:/supabase/migrations:ro
+      # Migrations applied on startup by src/bootstrap.py (yoyo-migrations)
+      - ./migrations:/app/migrations:ro
       # Mount workspace for AI agent scaffolding
       - ../analyzed_projects/projects:/workspace/projects
       # On-disk serialized-file store (replaces the Supabase bucket)
