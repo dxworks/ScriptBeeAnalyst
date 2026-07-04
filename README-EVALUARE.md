@@ -51,5 +51,12 @@ Apoi se deschide interfața web la **http://localhost:8001**.
    ./analyze.sh
    ```
 
-   Comanda deschide o consolă OpenCode cu un agent local, conectat la datele
-   proiectului, cu care se poate analiza interactiv proiectul încărcat.
+   Comanda deschide interfața web OpenCode cu un agent local, conectat la
+   datele proiectului, cu care se poate analiza interactiv proiectul încărcat.
+
+   **Notă:** OpenCode nu se deschide direct în directorul de lucru al
+   proiectului. După deschidere, navigați în interfața OpenCode la directorul:
+
+   ```
+   analyzed_projects/projects/<numele-proiectului>
+   ```
