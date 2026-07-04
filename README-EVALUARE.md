@@ -8,7 +8,9 @@ dispoziție un agent AI local care răspunde la întrebări despre proiectul ana
 
 - Docker + plugin-ul `docker compose`
 - (pentru pasul de analiză) [OpenCode](https://opencode.ai) instalat local
-- (pentru pasul de analiză) Python 3
+- (pentru pasul de analiză) Python **3.10 sau mai nou** (pe macOS, `python3`
+  din sistem este 3.9 — instalați o versiune nouă, de ex. `brew install
+  python@3.11`)
 
 ## 1. Extragerea datelor
 
@@ -51,7 +53,7 @@ Apoi se deschide interfața web la **http://localhost:8001**.
 
    ```bash
    cd analyzed_projects/mcp-server
-   python3 -m venv .venv
+   python3.11 -m venv .venv        # orice Python >= 3.10
    .venv/bin/pip install -r requirements.txt
    cd ../..
    ```
