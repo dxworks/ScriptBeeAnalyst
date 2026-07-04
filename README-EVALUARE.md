@@ -8,6 +8,7 @@ dispoziție un agent AI local care răspunde la întrebări despre proiectul ana
 
 - Docker + plugin-ul `docker compose`
 - (pentru pasul de analiză) [OpenCode](https://opencode.ai) instalat local
+- (pentru pasul de analiză) Python 3
 
 ## 1. Extragerea datelor
 
@@ -45,7 +46,17 @@ Apoi se deschide interfața web la **http://localhost:8001**.
    proiectului analizat).
 3. **Finalizare** — se pornește finalizarea; sistemul construiește graful de
    date al proiectului.
-4. **Analiză** — din directorul proiectului se rulează:
+4. **Analiză** — o singură dată, după clonare, se instalează mediul Python al
+   serverului MCP (fără el agentul nu are acces la datele proiectului):
+
+   ```bash
+   cd analyzed_projects/mcp-server
+   python3 -m venv .venv
+   .venv/bin/pip install -r requirements.txt
+   cd ../..
+   ```
+
+   Apoi, din directorul proiectului se rulează:
 
    ```bash
    ./analyze.sh
@@ -60,3 +71,7 @@ Apoi se deschide interfața web la **http://localhost:8001**.
    ```
    analyzed_projects/projects/<numele-proiectului>
    ```
+
+   La prima utilizare, OpenCode va cere permisiunea de a accesa fișiere din
+   afara acestui director (instrucțiunile agentului și serverul MCP, aflate în
+   directorul repository-ului) — aprobați cererea.
