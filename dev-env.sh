@@ -14,6 +14,8 @@ set -euo pipefail
 cd "$(dirname "$0")"
 
 echo ">> Tearing down containers, volumes, and orphans (this wipes the DB)..."
-docker compose down -v --remove-orphans
+# Include the dev overlay so the dev-only `web` container and its
+# node_modules volume are torn down too.
+docker compose -f docker-compose.yml -f docker-compose.dev.yml down -v --remove-orphans
 
 echo ">> Done. Run ./dev-start.sh for a fresh session."

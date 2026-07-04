@@ -1,0 +1,106 @@
+# =============================================================================
+# Dev overlay — hot reload for the whole stack.
+#
+#   $ ./dev-start.sh          # base compose + THIS file, all services hot-reload
+#
+# This file is NOT auto-merged into a plain `docker compose up` (that stays the
+# production single-origin build). It is applied explicitly by dev-start.sh:
+#
+#   docker compose -f docker-compose.yml -f docker-compose.dev.yml up --build
+#
+# What it changes vs. the baked production images:
+#   * app       — mounts ./data-server/src and runs `uvicorn --reload`, so
+#                 Python edits reload the API live (no rebuild, no restart).
+#   * processor — mounts the same source and wraps the worker in `watchfiles`,
+#                 which restarts `python -m src.processor` on every .py change.
+#   * web       — a NEW node container running `ng serve` on :4200 with the
+#                 ./web-ui source mounted, so Angular hot-reloads in the browser.
+#
+# In dev open  http://localhost:4200  (hot-reloading UI). The API is on :8001;
+# environment.ts already points the dev UI there and the API already allows the
+# :4200 origin via CORS.
+#
+# NOTE on file watching: Docker Desktop / Colima on macOS do not reliably
+# forward inotify events across the VM boundary, so both watchers are forced
+# into polling mode (WATCHFILES_FORCE_POLLING / ng serve --poll). Polling costs
+# a little CPU but is the only thing that reliably detects edits here.
+# =============================================================================
+
+services:
+  app:
+    # Live source instead of the code baked into the image at build time.
+    volumes:
+      - ./data-server/src:/app/src
+      - scriptbee-serialized-files:/data/serialized-files
+      - scriptbee-pickles:/tmp/pickles
+      - scriptbee-workspace:/workspace/projects
+    environment:
+      - DATABASE_URL=${DATABASE_URL:-postgresql://postgres:postgres@db:5432/scriptbee}
+      - SERIALIZED_FILES_DIR=/data/serialized-files
+      - STATIC_DIR=/app/static
+      - MAX_UPLOAD_MB=${MAX_UPLOAD_MB:-500}
+      - WORKSPACE_ROOT=/workspace/projects
+      - LOG_LEVEL=${LOG_LEVEL:-DEBUG}
+      # uvicorn --reload uses watchfiles under the hood; force polling so edits
+      # on the macOS host are seen inside the Colima/Docker VM.
+      - WATCHFILES_FORCE_POLLING=true
+    command:
+      - uvicorn
+      - src.server:app
+      - --host
+      - "0.0.0.0"
+      - --port
+      - "8001"
+      - --lifespan
+      - "on"
+      - --reload
+      - --reload-dir
+      - /app/src
+
+  processor:
+    volumes:
+      - ./data-server/src:/app/src
+      - scriptbee-serialized-files:/data/serialized-files
+      - scriptbee-pickles:/tmp/pickles
+    environment:
+      - DATABASE_URL=${DATABASE_URL:-postgresql://postgres:postgres@db:5432/scriptbee}
+      - SERIALIZED_FILES_DIR=/data/serialized-files
+      - RECURSION_LIMIT=${RECURSION_LIMIT:-50000}
+      - LOG_LEVEL=${LOG_LEVEL:-DEBUG}
+      - PYTHONUNBUFFERED=1
+      - WATCHFILES_FORCE_POLLING=true
+    # watchfiles (shipped with uvicorn[standard]) restarts the worker on any
+    # .py change under /app/src.
+    command:
+      - watchfiles
+      - --filter
+      - python
+      - python -u -m src.processor
+      - /app/src
+
+  # ---- Angular dev server (hot module reload) --------------------------------
+  web:
+    image: node:22-slim
+    container_name: scriptbee-web
+    working_dir: /web-ui
+    depends_on:
+      - app
+    ports:
+      - "4200:4200"
+    volumes:
+      - ./web-ui:/web-ui
+      # Keep node_modules inside the container (Linux native binaries such as
+      # esbuild differ from the host's macOS ones), persisted across restarts.
+      - scriptbee-web-node-modules:/web-ui/node_modules
+    environment:
+      # Some editors write via rename; CHOKIDAR/poll keeps ng serve reliable in
+      # the VM.
+      - CHOKIDAR_USEPOLLING=true
+    # Install deps into the named volume on first boot, then serve with polling.
+    command:
+      - sh
+      - -lc
+      - '[ -d node_modules/@angular ] || npm ci; exec npx ng serve --host 0.0.0.0 --port 4200 --poll 2000'
+
+volumes:
+  scriptbee-web-node-modules:
