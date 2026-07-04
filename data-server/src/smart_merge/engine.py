@@ -10,7 +10,7 @@ from collections import defaultdict
 from typing import Dict, Iterable, List, Optional, Set, Tuple
 from uuid import uuid4
 
-from src.common.unified_author import SourceIdentity
+from src.smart_merge.identity import SourceIdentity
 from src.logger import get_logger
 from src.smart_merge.graph import (
     clone_graph,
@@ -43,7 +43,13 @@ MAX_STRENGTH = 10
 NAME_BLOCK_PREFIX_LEN = 3
 LOGIN_BLOCK_PREFIX_LEN = 3
 MIN_CLUSTER_DENSITY = 0.6
-MIN_CLUSTER_AVG_STRENGTH = 4.0
+# Organic similarity edges score strength = matching-token-count (~1-3);
+# only already-merged SAME_AUTHOR edges reach MAX_STRENGTH (10). A threshold
+# of 4.0 was unreachable for fresh clusters, so every size>=3 cluster — even a
+# perfect clique — was force-split back into pairs. Keep DENSITY as the real
+# topology guard against loose chains; set the strength floor to fit the 1-3
+# scale (a cluster must average above a single weakest SIMILAR(1) edge).
+MIN_CLUSTER_AVG_STRENGTH = 1.5
 MAX_CLUSTER_SIZE = 200
 
 SPLIT_RE = re.compile(r"\s|\.|-")
@@ -110,6 +116,9 @@ class AuthorSmartMergeEngine:
         for identity in identities:
             upsert_node(graph, identity)
 
+        name_token_df = self._name_token_df(identities)
+        total_identities = len(identities)
+
         candidate_pairs = self._candidate_pairs(identities)
         LOG.info(
             f"Blocking reduced candidate pairs to {len(candidate_pairs)} "
@@ -125,6 +134,8 @@ class AuthorSmartMergeEngine:
                 name_b=b.name,
                 email_b=b.email,
                 login_b=b.login,
+                name_token_df=name_token_df,
+                total_identities=total_identities,
             )
             if sim.strength <= 0:
                 continue
@@ -137,6 +148,17 @@ class AuthorSmartMergeEngine:
     @staticmethod
     def _tokenize(s: str) -> List[str]:
         return [t for t in SPLIT_RE.split((s or "").lower().strip()) if t]
+
+    @classmethod
+    def _name_token_df(cls, identities: List[SourceIdentity]) -> Dict[str, int]:
+        """Document frequency per lowercased name token: how many distinct
+        identities carry it. Feeds the IDF distinctiveness check that lets a
+        rare 2-token name merge across sources without other corroboration."""
+        df: Dict[str, int] = defaultdict(int)
+        for ident in identities:
+            for tok in set(cls._tokenize(ident.name)):
+                df[tok] += 1
+        return dict(df)
 
     def _candidate_pairs(
         self, identities: List[SourceIdentity]

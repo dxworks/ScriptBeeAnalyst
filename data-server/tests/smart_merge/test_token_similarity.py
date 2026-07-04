@@ -123,3 +123,65 @@ class TestSingleTokenGuard:
         # name IDENTICAL(1), no email, no login → no cross-field corroboration
         result = compute_best_similarity("Lee", None, None, "Lee", None, None)
         assert result.type == SimilarityType.DIFFERENT
+
+
+class TestNameCrossFieldBridges:
+    """New cross-field comparisons: name ↔ email-prefix and name ↔ login.
+    These bridge sources that share no directly-comparable field."""
+
+    def test_name_matches_other_sides_email_prefix(self):
+        """Git identity (email-only) ↔ Jira/GitHub identity (name-only):
+        the email prefix 'alice.smith' corroborates the matching name."""
+        result = compute_best_similarity(
+            "Alice Smith", "alice.smith@corp.com", None,   # git
+            "Alice Smith", None, None,                     # jira/github, name only
+        )
+        assert result.type != SimilarityType.DIFFERENT
+
+    def test_name_matches_other_sides_login(self):
+        """Name-only identity ↔ identity whose login encodes the name."""
+        result = compute_best_similarity(
+            "Alice Smith", None, None,
+            "Alice Smith", None, "alicesmith",
+        )
+        assert result.type != SimilarityType.DIFFERENT
+
+    def test_cross_field_does_not_link_unrelated_people(self):
+        """A shared first name plus unrelated email/login must NOT bridge."""
+        result = compute_best_similarity(
+            "John Smith", "jsmith@corp.com", None,
+            "John Carpenter", None, "jcarpenter",
+        )
+        assert result.type == SimilarityType.DIFFERENT
+
+
+class TestDistinctiveNameRelaxation:
+    """A rare 2-token name may merge on the name alone (IDF); a common one
+    still requires corroboration."""
+
+    def test_distinctive_two_token_name_allowed_alone(self):
+        df = {"dragos": 2, "zaharia": 2}
+        result = compute_best_similarity(
+            "Dragos Zaharia", None, None,
+            "Dragos Zaharia", None, None,
+            name_token_df=df, total_identities=100,
+        )
+        assert result.type == SimilarityType.IDENTICAL
+        assert result.strength == 2
+
+    def test_common_two_token_name_still_blocked(self):
+        df = {"john": 40, "smith": 55}
+        result = compute_best_similarity(
+            "John Smith", None, None,
+            "John Smith", None, None,
+            name_token_df=df, total_identities=100,
+        )
+        assert result.type == SimilarityType.DIFFERENT
+
+    def test_no_df_preserves_legacy_blocking(self):
+        """Without df info the relaxation is disabled — legacy behaviour."""
+        result = compute_best_similarity(
+            "Dragos Zaharia", None, None,
+            "Dragos Zaharia", None, None,
+        )
+        assert result.type == SimilarityType.DIFFERENT

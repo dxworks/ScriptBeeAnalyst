@@ -1,0 +1,369 @@
+<div class="author-matching">
+  @if (isFinalized()) {
+    <div class="readonly-banner" role="status">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <rect x="3" y="11" width="18" height="11" rx="2"/>
+        <path d="M7 11V7a5 5 0 0 1 10 0v4"/>
+      </svg>
+      <span>This project is finalized — author matching is read-only. Re-import the project to change merges.</span>
+    </div>
+  }
+  <div class="tab-header">
+    <h2>Author Matching</h2>
+    <div class="tab-header-meta">
+      @if (suggestions().length > 0) {
+        <span class="setup-progress">
+          {{ suggestionsTotal() - suggestions().length }} of {{ suggestionsTotal() }} resolved
+        </span>
+      }
+      @if (setupInitialized()) {
+        <button
+          class="btn btn-secondary btn-sm"
+          (click)="loadSuggestions()"
+          [disabled]="suggestionsLoading() || processingSuggestionId() !== null"
+          title="Recompute suggestions against the current graph."
+        >
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <polyline points="23 4 23 10 17 10"/>
+            <path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/>
+          </svg>
+          Re-scan
+        </button>
+      }
+      <button
+        class="btn btn-secondary btn-sm"
+        (click)="onSaveGraphState()"
+        [disabled]="savingGraphState()"
+        title="Snapshot the current graph (including unified users) back into the project's pickle."
+      >
+        @if (savingGraphState()) {
+          <div class="spinner-tiny"></div>
+          Saving…
+        } @else {
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/>
+            <polyline points="17 21 17 13 7 13 7 21"/>
+            <polyline points="7 3 7 8 15 8"/>
+          </svg>
+          Save graph state
+        }
+      </button>
+      <button
+        class="btn btn-danger btn-sm"
+        (click)="confirmDeleteAllLinks()"
+        [disabled]="deletingAllLinks() || (unifiedUsers().length === 0 && !setupInitialized())"
+        title="Reset author matching for this project."
+      >
+        @if (deletingAllLinks()) {
+          <div class="spinner-tiny"></div>
+          Resetting…
+        } @else {
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <polyline points="3 6 5 6 21 6"/>
+            <path d="M19 6l-2 14a2 2 0 0 1-2 2H9a2 2 0 0 1-2-2L5 6"/>
+            <path d="M10 11v6"/>
+            <path d="M14 11v6"/>
+            <path d="M9 6V4a2 2 0 0 1 2-2h2a2 2 0 0 1 2 2v2"/>
+          </svg>
+          Delete all links
+        }
+      </button>
+    </div>
+  </div>
+
+  <div class="tab-body">
+    @if (!setupInitialized() || suggestionsLoading()) {
+      @if (suggestionsLoading()) {
+        <div class="chat-placeholder chat-loading">
+          <div class="spinner-large"></div>
+          <h2>Analyzing Identities</h2>
+          <p class="text-secondary">Comparing authors across Git, GitHub, and JIRA sources...</p>
+        </div>
+      } @else {
+        <div class="chat-placeholder">
+          <svg width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+            <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/>
+            <circle cx="9" cy="7" r="4"/>
+            <path d="M23 21v-2a4 4 0 0 0-3-3.87"/>
+            <path d="M16 3.13a4 4 0 0 1 0 7.75"/>
+          </svg>
+          <h2>Match Authors Across Sources</h2>
+          <p class="text-secondary">Detect and merge duplicate identities across Git, GitHub, and JIRA to create unified user profiles.</p>
+          @if (unifiedUsers().length > 0) {
+            <p class="text-muted">{{ unifiedUsers().length }} unified user(s) already created.</p>
+          }
+          <button class="btn btn-primary" (click)="loadSuggestions()">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <circle cx="11" cy="11" r="8"/>
+              <line x1="21" y1="21" x2="16.65" y2="16.65"/>
+            </svg>
+            Find Matches
+          </button>
+        </div>
+      }
+    } @else if (suggestions().length === 0) {
+      <div class="setup-complete-card">
+        <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" class="text-success">
+          <circle cx="12" cy="12" r="10"/>
+          <path d="M9 12l2 2 4-4"/>
+        </svg>
+        <h3>Author Matching Complete</h3>
+        <p class="text-secondary">
+          @if (unifiedUsers().length > 0) {
+            {{ unifiedUsers().length }} unified user(s) created from {{ totalIdentities() }} source identities.
+          } @else {
+            No matching authors found across your data sources.
+          }
+        </p>
+        <button class="btn btn-secondary btn-sm" (click)="loadSuggestions()">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <polyline points="23 4 23 10 17 10"/>
+            <path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/>
+          </svg>
+          Re-scan for Matches
+        </button>
+      </div>
+
+      @if (unifiedUsers().length > 0) {
+        <div class="unified-users-section">
+          <h3>Unified Users ({{ unifiedUsers().length }})</h3>
+          <div class="unified-users-list">
+            @for (user of unifiedUsers(); track user.id) {
+              <div class="unified-user-card">
+                <div class="unified-user-header">
+                  <span class="unified-user-name">{{ user.display_name }}</span>
+                  @if (user.primary_email) {
+                    <span class="unified-user-email">{{ user.primary_email }}</span>
+                  }
+                  <button class="btn-remove-user" title="Remove unified user" (click)="confirmDeleteUnifiedUser(user)">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                      <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
+                    </svg>
+                  </button>
+                </div>
+                <div class="unified-user-identities">
+                  @for (identity of user.identities; track getIdentityKey(identity)) {
+                    <span class="identity-tag" [class]="'source-' + identity.source">
+                      {{ getSourceLabel(identity.source) }}: {{ identity.name || identity.login || 'unknown' }}
+                    </span>
+                  }
+                </div>
+                <div class="unified-user-stats">
+                  @if (user.stats.commit_count > 0) {
+                    <span class="stat-badge">{{ user.stats.commit_count }} commits</span>
+                  }
+                  @if (user.stats.issue_count > 0) {
+                    <span class="stat-badge">{{ user.stats.issue_count }} issues</span>
+                  }
+                  @if (user.stats.pr_count > 0) {
+                    <span class="stat-badge">{{ user.stats.pr_count }} PRs</span>
+                  }
+                </div>
+              </div>
+            }
+          </div>
+        </div>
+      }
+    } @else {
+      <div class="setup-progress-bar">
+        <div class="progress-track">
+          <div class="progress-fill"
+            [style.width.%]="((suggestionsTotal() - suggestions().length) / suggestionsTotal()) * 100">
+          </div>
+        </div>
+        <span class="progress-text">{{ suggestions().length }} suggestion(s) remaining</span>
+        <button
+          class="btn btn-success btn-sm"
+          (click)="requestApplyAllSuggestions()"
+          [disabled]="applyingAll() || processingSuggestionId() !== null"
+          title="Accept every remaining suggestion using its default name and email."
+        >
+          @if (applyingAll()) {
+            <div class="spinner-tiny"></div>
+            Applying all…
+          } @else {
+            Accept all ({{ suggestions().length }})
+          }
+        </button>
+      </div>
+
+      <div class="suggestion-cards">
+        @for (suggestion of suggestions(); track suggestion.suggestion_id) {
+          <div class="suggestion-card" [class.processing]="processingSuggestionId() === suggestion.suggestion_id">
+            <div class="suggestion-header">
+              <div class="suggestion-title-row">
+                <h4>Suggested Match</h4>
+                <span class="confidence-badge" [class]="'confidence-' + getConfidenceLevel(suggestion.confidence)">
+                  {{ getConfidenceLabel(suggestion.confidence) }}
+                </span>
+              </div>
+              <div class="suggestion-edit-fields">
+                <div class="edit-field">
+                  <label>Name</label>
+                  <input
+                    type="text"
+                    class="form-input form-input-sm"
+                    [value]="suggestionEdits()[suggestion.suggestion_id]?.name || suggestion.default_name"
+                    (input)="onSuggestionNameChange(suggestion.suggestion_id, $any($event.target).value)"
+                  />
+                </div>
+                <div class="edit-field">
+                  <label>Email</label>
+                  <input
+                    type="text"
+                    class="form-input form-input-sm"
+                    [value]="suggestionEdits()[suggestion.suggestion_id]?.email || suggestion.default_email"
+                    (input)="onSuggestionEmailChange(suggestion.suggestion_id, $any($event.target).value)"
+                  />
+                </div>
+              </div>
+            </div>
+
+            @if (isSuggestionCollapsed(suggestion)) {
+              <div class="suggestion-oversize-warning">
+                <strong>Large cluster:</strong>
+                {{ suggestion.total_identities }} identities grouped together.
+                This is often a sign the match is too broad — review carefully before accepting.
+                <button class="btn btn-secondary btn-sm" (click)="toggleSuggestionExpanded(suggestion.suggestion_id)">
+                  Show identities
+                </button>
+              </div>
+            } @else {
+              <div class="suggestion-identities">
+                <div class="identities-header">
+                  <span class="identities-count">
+                    Showing {{ suggestion.identities.length }} of {{ suggestion.total_identities }}
+                  </span>
+                  @if (isSuggestionOversize(suggestion)) {
+                    <button class="btn btn-ghost btn-sm" (click)="toggleSuggestionExpanded(suggestion.suggestion_id)">
+                      Hide list
+                    </button>
+                  }
+                </div>
+                @for (identity of suggestion.identities; track getIdentityKey(identity)) {
+                  <label class="identity-row">
+                    <input
+                      type="checkbox"
+                      [checked]="isIdentityChecked(suggestion.suggestion_id, getIdentityKey(identity))"
+                      (change)="onToggleIdentity(suggestion.suggestion_id, getIdentityKey(identity))"
+                    />
+                    <span class="source-badge" [class]="'source-' + identity.source">
+                      {{ getSourceLabel(identity.source) }}
+                    </span>
+                    <span class="identity-name">{{ identity.name || 'unknown' }}</span>
+                    @if (identity.email) {
+                      <span class="identity-email">&lt;{{ identity.email }}&gt;</span>
+                    }
+                    @if (identity.login) {
+                      <span class="identity-login">&#64;{{ identity.login }}</span>
+                    }
+                  </label>
+                }
+                @if (hasMoreIdentities(suggestion)) {
+                  <button
+                    class="btn btn-secondary btn-sm btn-load-more"
+                    (click)="onLoadMoreIdentities(suggestion)"
+                    [disabled]="isLoadingMore(suggestion.suggestion_id)"
+                  >
+                    @if (isLoadingMore(suggestion.suggestion_id)) {
+                      <div class="spinner-tiny"></div>
+                      Loading…
+                    } @else {
+                      Load more ({{ suggestion.total_identities - suggestion.identities.length }} remaining)
+                    }
+                  </button>
+                }
+              </div>
+            }
+
+            <div class="suggestion-actions">
+              <button
+                class="btn btn-success btn-sm"
+                (click)="onApplySuggestion(suggestion)"
+                [disabled]="processingSuggestionId() !== null || applyingAll()"
+              >
+                @if (processingSuggestionId() === suggestion.suggestion_id) {
+                  <div class="spinner-tiny"></div>
+                }
+                Accept
+              </button>
+              <button
+                class="btn btn-danger btn-sm"
+                (click)="onRejectSuggestion(suggestion)"
+                [disabled]="processingSuggestionId() !== null || applyingAll()"
+              >
+                Reject
+              </button>
+            </div>
+          </div>
+        }
+      </div>
+
+      @if (unifiedUsers().length > 0) {
+        <details class="unified-users-section">
+          <summary>Unified Users ({{ unifiedUsers().length }})</summary>
+          <div class="unified-users-list">
+            @for (user of unifiedUsers(); track user.id) {
+              <div class="unified-user-card">
+                <div class="unified-user-header">
+                  <span class="unified-user-name">{{ user.display_name }}</span>
+                  @if (user.primary_email) {
+                    <span class="unified-user-email">{{ user.primary_email }}</span>
+                  }
+                  <button class="btn-remove-user" title="Remove unified user" (click)="confirmDeleteUnifiedUser(user)">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                      <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
+                    </svg>
+                  </button>
+                </div>
+                <div class="unified-user-identities">
+                  @for (identity of user.identities; track getIdentityKey(identity)) {
+                    <span class="identity-tag" [class]="'source-' + identity.source">
+                      {{ getSourceLabel(identity.source) }}: {{ identity.name || identity.login || 'unknown' }}
+                    </span>
+                  }
+                </div>
+              </div>
+            }
+          </div>
+        </details>
+      }
+    }
+  </div>
+</div>
+
+@if (showDeleteUnifiedUserModal() && unifiedUserToDelete(); as u) {
+  <app-confirmation-modal
+    title="Remove Unified User?"
+    [message]="'Are you sure you want to remove the unified user \'' + u.display_name + '\'? The linked identities will become unmerged and may reappear as suggestions.'"
+    confirmText="Remove"
+    cancelText="Cancel"
+    type="warning"
+    (confirmed)="deleteUnifiedUser()"
+    (cancelled)="cancelDeleteUnifiedUser()"
+  />
+}
+
+@if (showDeleteAllLinksModal()) {
+  <app-confirmation-modal
+    title="Reset author matching?"
+    [message]="'This wipes all ' + unifiedUsers().length + ' unified user(s) and previous reject decisions for this project. The on-disk snapshot will be re-saved with no merges. Files in storage are not touched.'"
+    confirmText="Reset"
+    cancelText="Cancel"
+    type="danger"
+    (confirmed)="deleteAllLinks()"
+    (cancelled)="cancelDeleteAllLinks()"
+  />
+}
+
+@if (showApplyAllModal()) {
+  <app-confirmation-modal
+    title="Accept all suggestions?"
+    [message]="'Create ' + suggestions().length + ' unified user(s) from the remaining suggestions. Each uses its default name and email. You can still unlink any of them afterwards.'"
+    confirmText="Accept all"
+    cancelText="Cancel"
+    type="info"
+    (confirmed)="applyAllSuggestions()"
+    (cancelled)="cancelApplyAllSuggestions()"
+  />
+}

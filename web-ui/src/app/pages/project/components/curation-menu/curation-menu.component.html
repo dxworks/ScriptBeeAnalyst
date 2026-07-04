@@ -1,0 +1,247 @@
+<!--
+  Curation popover. position: fixed at the clamped anchor; the page mounts
+  exactly one of these at a time so we don't worry about z-index stacking
+  across multiple menus.
+-->
+<div
+  #panel
+  class="curation-menu"
+  role="menu"
+  [style.left.px]="clampedPosition().left"
+  [style.top.px]="clampedPosition().top"
+  (contextmenu)="$event.preventDefault()"
+>
+  <!-- Header: tiny context line so the user always knows what they're moving. -->
+  <header class="curation-menu-header">
+    <span class="curation-menu-kind">{{ anchor().kind === 'file' ? 'File' : 'Folder' }}</span>
+    <span class="curation-menu-path" [title]="anchor().path">{{ anchor().path }}</span>
+    <span class="curation-menu-bucket">
+      from {{ anchor().componentName ?? '(unassigned)' }}
+    </span>
+  </header>
+
+  @switch (submenu()) {
+    @case ('none') {
+      <ul class="curation-menu-list" role="menu">
+        <li>
+          <button type="button" class="curation-item" role="menuitem" (click)="copyPath()">
+            Copy path
+          </button>
+        </li>
+        <li class="curation-divider" role="separator" aria-hidden="true"></li>
+        <li>
+          <button
+            type="button"
+            class="curation-item"
+            role="menuitem"
+            (click)="submenu.set('moveTo')"
+          >
+            Move to component
+            <span class="curation-chevron" aria-hidden="true">›</span>
+          </button>
+        </li>
+        <li>
+          <button
+            type="button"
+            class="curation-item"
+            role="menuitem"
+            (click)="openNewComponentForm('file')"
+          >
+            Move to new component…
+          </button>
+        </li>
+
+        @if (anchor().kind === 'folder') {
+          <li class="curation-divider" role="separator" aria-hidden="true"></li>
+          <li>
+            <button
+              type="button"
+              class="curation-item"
+              role="menuitem"
+              (click)="submenu.set('folderMoveTo')"
+            >
+              Move whole folder to component
+              <span class="curation-chevron" aria-hidden="true">›</span>
+            </button>
+          </li>
+          <li>
+            <button
+              type="button"
+              class="curation-item"
+              role="menuitem"
+              (click)="openNewComponentForm('folder')"
+            >
+              Move whole folder to new component…
+            </button>
+          </li>
+        }
+      </ul>
+    }
+
+    @case ('moveTo') {
+      <ul class="curation-menu-list" role="menu">
+        @if (availableTargets().length === 0) {
+          <li class="curation-empty">No other components to move to.</li>
+        } @else {
+          @for (t of availableTargets(); track t.name) {
+            <li>
+              <button
+                type="button"
+                class="curation-item"
+                role="menuitem"
+                (click)="pickMoveTo(t.name)"
+              >
+                <span
+                  class="curation-swatch"
+                  [style.background-color]="t.color"
+                  aria-hidden="true"
+                ></span>
+                <span class="curation-item-label">{{ t.name }}</span>
+              </button>
+            </li>
+          }
+        }
+        <li class="curation-divider" role="separator" aria-hidden="true"></li>
+        <li>
+          <button
+            type="button"
+            class="curation-item curation-back"
+            role="menuitem"
+            (click)="submenu.set('none')"
+          >
+            ‹ Back
+          </button>
+        </li>
+      </ul>
+    }
+
+    @case ('folderMoveTo') {
+      <ul class="curation-menu-list" role="menu">
+        @if (availableTargets().length === 0) {
+          <li class="curation-empty">No other components to move to.</li>
+        } @else {
+          @for (t of availableTargets(); track t.name) {
+            <li>
+              <button
+                type="button"
+                class="curation-item"
+                role="menuitem"
+                (click)="pickFolderMoveTo(t.name)"
+              >
+                <span
+                  class="curation-swatch"
+                  [style.background-color]="t.color"
+                  aria-hidden="true"
+                ></span>
+                <span class="curation-item-label">{{ t.name }}</span>
+              </button>
+            </li>
+          }
+        }
+        <li class="curation-divider" role="separator" aria-hidden="true"></li>
+        <li>
+          <button
+            type="button"
+            class="curation-item curation-back"
+            role="menuitem"
+            (click)="submenu.set('none')"
+          >
+            ‹ Back
+          </button>
+        </li>
+      </ul>
+    }
+
+    @case ('newComponent') {
+      <form class="curation-form" (submit)="$event.preventDefault(); submitNewComponent('file')">
+        <label class="curation-label" for="curation-new-name">
+          New component name
+        </label>
+        <input
+          id="curation-new-name"
+          class="curation-input"
+          type="text"
+          autofocus
+          [ngModel]="newComponentName()"
+          (ngModelChange)="newComponentName.set($event)"
+          name="newName"
+          placeholder="e.g. payments"
+          autocomplete="off"
+        />
+        <p class="curation-label curation-label-secondary">Pick a colour</p>
+        <ul class="curation-palette" role="list">
+          @for (c of palette; track c) {
+            <li>
+              <button
+                type="button"
+                class="curation-swatch-btn"
+                [class.selected]="newComponentColor() === c"
+                [style.background-color]="c"
+                [attr.aria-label]="'Choose colour ' + c"
+                (click)="pickColor(c)"
+              ></button>
+            </li>
+          }
+        </ul>
+        <div class="curation-form-actions">
+          <button type="button" class="btn btn-ghost curation-form-cancel" (click)="submenu.set('none')">
+            Cancel
+          </button>
+          <button
+            type="submit"
+            class="btn btn-primary curation-form-submit"
+            [disabled]="!newComponentName().trim()"
+          >
+            Create &amp; move
+          </button>
+        </div>
+      </form>
+    }
+
+    @case ('folderNewComponent') {
+      <form class="curation-form" (submit)="$event.preventDefault(); submitNewComponent('folder')">
+        <label class="curation-label" for="curation-new-folder-name">
+          New component name (whole folder)
+        </label>
+        <input
+          id="curation-new-folder-name"
+          class="curation-input"
+          type="text"
+          autofocus
+          [ngModel]="newComponentName()"
+          (ngModelChange)="newComponentName.set($event)"
+          name="newFolderName"
+          placeholder="e.g. payments"
+          autocomplete="off"
+        />
+        <p class="curation-label curation-label-secondary">Pick a colour</p>
+        <ul class="curation-palette" role="list">
+          @for (c of palette; track c) {
+            <li>
+              <button
+                type="button"
+                class="curation-swatch-btn"
+                [class.selected]="newComponentColor() === c"
+                [style.background-color]="c"
+                [attr.aria-label]="'Choose colour ' + c"
+                (click)="pickColor(c)"
+              ></button>
+            </li>
+          }
+        </ul>
+        <div class="curation-form-actions">
+          <button type="button" class="btn btn-ghost curation-form-cancel" (click)="submenu.set('none')">
+            Cancel
+          </button>
+          <button
+            type="submit"
+            class="btn btn-primary curation-form-submit"
+            [disabled]="!newComponentName().trim()"
+          >
+            Create &amp; move folder
+          </button>
+        </div>
+      </form>
+    }
+  }
+</div>

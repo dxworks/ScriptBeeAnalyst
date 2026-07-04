@@ -1,36 +1,25 @@
-"""Enrichment layer: tags, relations, overview tables derived from Git/GitHub/JIRA graphs.
+"""Enrichment layer: tags, relations, metrics, overview tables.
 
-Port of dx's Tag / Anomaly / RelationExtractor / Table patterns (Java) into
-Python, computed over the in-memory ScriptBeeAssistant graph rather than
-Voyager output.
+The v2 pipeline (``run_pipeline``) walks the typed :class:`~src.common.kernel.Graph`,
+populating ``graph.traits`` / ``graph.classifiers`` / ``graph.relations`` and
+``graph.components`` via the :mod:`metric` / :mod:`relation` registries.
+Overview tables (``src.enrichment.overviews``) consume the enriched graph.
 """
 
-from src.enrichment.models import (
-    Classifier,
-    Component,
-    EntityTags,
-    Enrichments,
-    OverviewCell,
-    OverviewRow,
-    OverviewTable,
-    Relation,
-    RelationFile,
-    Trait,
+from src.enrichment.pipeline import (
+    PipelineError,
+    PipelineHost,
+    PipelineResult,
+    run_pipeline,
+    run_pipeline_phase_a,
+    run_pipeline_phase_b,
 )
-from src.enrichment.pipeline import compute_enrichments
-from src.enrichment.repository import SupabaseEnrichmentRepository
 
 __all__ = [
-    "SupabaseEnrichmentRepository",
-    "Classifier",
-    "Component",
-    "EntityTags",
-    "Enrichments",
-    "OverviewCell",
-    "OverviewRow",
-    "OverviewTable",
-    "Relation",
-    "RelationFile",
-    "Trait",
-    "compute_enrichments",
+    "PipelineError",
+    "PipelineHost",
+    "PipelineResult",
+    "run_pipeline",
+    "run_pipeline_phase_a",
+    "run_pipeline_phase_b",
 ]

@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from typing import List
 
-from src.common.unified_author import SourceIdentity
+from src.smart_merge.identity import SourceIdentity
 from src.smart_merge.engine import AuthorSmartMergeEngine
 from src.smart_merge.token_similarity import compute_best_similarity
 from src.smart_merge.types import SimilarityType

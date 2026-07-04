@@ -1,4 +1,4 @@
-from src.common.loader import BaseJsonLoader
+from src.common.json_loader import BaseJsonLoader
 from src.github_miner import JsonFileFormatGithub
 
 

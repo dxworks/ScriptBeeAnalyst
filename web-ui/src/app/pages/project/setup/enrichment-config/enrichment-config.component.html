@@ -1,0 +1,568 @@
+<div class="enrichment-config">
+  @if (isFinalized()) {
+    <div class="readonly-banner" role="status">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <rect x="3" y="11" width="18" height="11" rx="2"/>
+        <path d="M7 11V7a5 5 0 0 1 10 0v4"/>
+      </svg>
+      <span>This project is finalized — enrichment config is frozen and read-only. Re-import the project to change it.</span>
+    </div>
+  }
+  <header class="tab-header">
+    <div class="tab-header-titles">
+      <h2>Enrichment Config</h2>
+      @if (state() === 'ready' && lastEdited()) {
+        <p class="tab-header-subtitle">
+          Last edited
+          <time [attr.datetime]="lastEdited()">{{ formatLastEdited(lastEdited()) }}</time>
+        </p>
+      } @else if (state() === 'ready' && !hasOverrides()) {
+        <p class="tab-header-subtitle">No project-specific overrides yet — defaults shown below.</p>
+      }
+    </div>
+
+    <div class="tab-header-actions">
+      <span class="tab-header-meta-count">
+        @if (state() === 'ready') {
+          @if (dirty()) {
+            <span class="dirty-indicator" aria-live="polite">
+              {{ pendingCount() }} unsaved change{{ pendingCount() === 1 ? '' : 's' }}
+            </span>
+          } @else if (hasOverrides()) {
+            {{ persistedOverridesCount() }} override{{ persistedOverridesCount() === 1 ? '' : 's' }}
+          } @else {
+            {{ families().length }} famil{{ families().length === 1 ? 'y' : 'ies' }}
+          }
+        }
+      </span>
+
+      <button
+        class="btn btn-ghost btn-sm"
+        type="button"
+        [disabled]="!dirty() || saving()"
+        (click)="discardAll()"
+        [attr.aria-describedby]="dirty() ? 'enrichment-config-dirty-summary' : null"
+      >
+        Discard changes
+      </button>
+
+      <button
+        class="btn btn-secondary btn-sm"
+        type="button"
+        [disabled]="!canSave()"
+        [attr.aria-disabled]="!canSave() || null"
+        [attr.aria-describedby]="!canSave() && !saving() ? 'enrichment-config-save-reason' : null"
+        (click)="onSave()"
+      >
+        @if (saving()) {
+          <span class="spinner-tiny spinner-tiny-dark" aria-hidden="true"></span>
+          <span>Saving…</span>
+        } @else {
+          <span>Save changes</span>
+        }
+      </button>
+
+      <!-- Build-time toggle for the git per-line attribution metric. Applies
+           on the next Rerun: when ticked, the build emits git.loc /
+           git.repo_size classifiers + the git.line_attribution trait. -->
+      <label class="annotated-lines-toggle" title="Compute git per-line attribution (LOC + blame) on the next rerun. Slower build.">
+        <input
+          type="checkbox"
+          [checked]="computeAnnotatedLines()"
+          [disabled]="rerunning() || isFinalized()"
+          (change)="computeAnnotatedLines.set($any($event.target).checked)"
+        />
+        <span>Compute annotated lines</span>
+      </label>
+
+      <button
+        class="btn btn-primary btn-sm"
+        type="button"
+        [disabled]="!canRerun()"
+        [attr.aria-disabled]="!canRerun() || null"
+        [attr.aria-describedby]="rerunReason() ? 'enrichment-config-rerun-reason' : null"
+        [attr.title]="rerunReason()"
+        (click)="requestRerun()"
+      >
+        @if (rerunning()) {
+          <span class="spinner-tiny" aria-hidden="true"></span>
+          <span>Rerunning…</span>
+        } @else {
+          <span>Rerun enrichments</span>
+        }
+      </button>
+    </div>
+
+    <!-- Screen-reader-only reason sentence. Bound to the Rerun button via
+         aria-describedby so non-sighted users hear WHY the button is
+         disabled instead of just hearing "button, disabled". -->
+    @if (rerunReason()) {
+      <span id="enrichment-config-rerun-reason" class="sr-only">
+        Rerun enrichments — {{ rerunReason() }}.
+      </span>
+    }
+
+    <!-- Save button companion. Mirrors the Rerun pattern — when the button
+         is disabled and not mid-save, we surface "make edits below to
+         enable" so screen-reader users hear the actionable hint. -->
+    @if (!canSave() && !saving()) {
+      <span id="enrichment-config-save-reason" class="sr-only">
+        Save changes — make edits below to enable.
+      </span>
+    }
+
+    <!-- Visually-hidden summary referenced by the Discard button via
+         aria-describedby so screen-reader users hear the pending count
+         when the button gains focus. -->
+    @if (dirty()) {
+      <span id="enrichment-config-dirty-summary" class="sr-only">
+        {{ pendingCount() }} unsaved change{{ pendingCount() === 1 ? '' : 's' }} —
+        Discard will revert every input back to its saved value.
+      </span>
+    }
+  </header>
+
+  <div class="tab-body">
+    @if (state() === 'loading') {
+      <div class="empty-state">
+        <div class="spinner-large"></div>
+        <p class="text-secondary">Loading enrichment config…</p>
+      </div>
+    } @else if (state() === 'no-project') {
+      <div class="empty-state">
+        <svg width="56" height="56" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+          <rect x="3" y="3" width="18" height="18" rx="2" />
+          <path d="M9 9h6v6H9z" />
+        </svg>
+        <h3>No project loaded</h3>
+        <p class="text-secondary">
+          Open a project from the Dashboard to edit its enrichment config.
+        </p>
+      </div>
+    } @else if (state() === 'error') {
+      <div class="empty-state">
+        <svg width="56" height="56" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+          <circle cx="12" cy="12" r="10" />
+          <line x1="12" y1="8" x2="12" y2="12" />
+          <line x1="12" y1="16" x2="12.01" y2="16" />
+        </svg>
+        <h3>Couldn't load the config</h3>
+        <p class="text-secondary">{{ errorMessage() }}</p>
+        <button class="btn btn-secondary btn-sm" type="button" (click)="retry()">Retry</button>
+      </div>
+    } @else if (state() === 'ready') {
+      @if (!hasOverrides() && !dirty()) {
+        <div class="empty-overrides-hint" role="note">
+          <svg
+            class="empty-overrides-hint-icon"
+            width="16" height="16"
+            viewBox="0 0 24 24"
+            fill="none" stroke="currentColor" stroke-width="2"
+            aria-hidden="true"
+          >
+            <circle cx="12" cy="12" r="10" />
+            <line x1="12" y1="16" x2="12" y2="12" />
+            <line x1="12" y1="8" x2="12.01" y2="8" />
+          </svg>
+          <span>No project-specific overrides yet — defaults shown below.</span>
+        </div>
+      }
+      <div class="family-list">
+        @for (family of families(); track family.name) {
+          <details
+            class="family-card card"
+            [attr.open]="isFamilyOpen(family) ? '' : null"
+            (toggle)="onFamilyToggle(family, $event)"
+          >
+            <summary class="family-card-header">
+              <span class="family-card-header-titles">
+                <span class="family-disclosure" aria-hidden="true"></span>
+                <h3 class="family-name">{{ familyLabel(family.name) }}</h3>
+              </span>
+              <span class="family-meta">{{ familyMeta(family) }}</span>
+            </summary>
+
+            <dl class="knob-list">
+              @for (field of family.fields; track field.name) {
+                <div
+                  class="knob-row"
+                  [class.knob-row-overridden]="isFieldOverridden(field)"
+                  [class.knob-row-pending]="isFieldPending(field)"
+                  [class.knob-row-error]="hasFieldError(field)"
+                  [class.knob-row-no-baseline]="!field.dx_baseline"
+                  [class.knob-row-just-saved]="isRowJustSaved(field)"
+                >
+                  <dt class="knob-label" [id]="knobLabelId(field)">
+                    <span class="knob-label-line">
+                      <span class="knob-human-label">{{ humanLabel(field.name) }}</span>
+                      <code class="knob-field-name">{{ field.name }}</code>
+                      <span class="knob-type-pill">{{ typeLabel(field.type) }}</span>
+                      @if (isFieldPending(field)) {
+                        <span class="knob-pending-tag" aria-label="Unsaved edit on this row">
+                          unsaved
+                        </span>
+                      }
+                    </span>
+                    <span class="knob-meta-line">
+                      @if (field.metric_names.length > 0) {
+                        <span class="knob-used-by">
+                          <span class="knob-used-by-label">Used by</span>
+                          @for (metric of visibleMetricNames(field); track metric) {
+                            <span class="badge badge-primary knob-used-by-badge">{{ metric }}</span>
+                          }
+                          @if (overflowMetricCount(field) > 0) {
+                            <span
+                              class="badge badge-neutral knob-used-by-overflow"
+                              [attr.title]="overflowMetricTitle(field)"
+                            >
+                              +{{ overflowMetricCount(field) }} more
+                            </span>
+                          }
+                        </span>
+                      }
+                      @if (!field.dx_baseline) {
+                        <span class="badge badge-warning knob-no-baseline">
+                          no dx baseline
+                        </span>
+                      }
+                    </span>
+                  </dt>
+
+                  <dd class="knob-value">
+                    <div class="knob-input-cell">
+                      <!-- ── int ─────────────────────────────────────── -->
+                      @if (inputKind(field) === 'int') {
+                        <input
+                          type="number"
+                          class="form-input knob-input knob-input-numeric"
+                          step="1"
+                          [class.error]="hasFieldError(field)"
+                          [value]="effectiveNumber(field)"
+                          [attr.aria-labelledby]="knobLabelId(field)"
+                          [attr.aria-invalid]="hasFieldError(field) || null"
+                          [attr.aria-describedby]="hasFieldError(field) ? knobErrorId(field) : null"
+                          (input)="onIntInput(field, $any($event.target).value)"
+                        />
+                      }
+
+                      <!-- ── float ───────────────────────────────────── -->
+                      @if (inputKind(field) === 'float') {
+                        <input
+                          type="number"
+                          class="form-input knob-input knob-input-numeric"
+                          step="0.01"
+                          [class.error]="hasFieldError(field)"
+                          [value]="effectiveNumber(field)"
+                          [attr.aria-labelledby]="knobLabelId(field)"
+                          [attr.aria-invalid]="hasFieldError(field) || null"
+                          [attr.aria-describedby]="hasFieldError(field) ? knobErrorId(field) : null"
+                          (input)="onFloatInput(field, $any($event.target).value)"
+                        />
+                      }
+
+                      <!-- ── bool ────────────────────────────────────── -->
+                      @if (inputKind(field) === 'bool') {
+                        <label class="knob-bool-control">
+                          <input
+                            type="checkbox"
+                            [checked]="effectiveBool(field)"
+                            [attr.aria-labelledby]="knobLabelId(field)"
+                            [attr.aria-invalid]="hasFieldError(field) || null"
+                            [attr.aria-describedby]="hasFieldError(field) ? knobErrorId(field) : null"
+                            (change)="onBoolChange(field, $any($event.target).checked)"
+                          />
+                          <span class="knob-bool-value">{{ effectiveBool(field) ? 'true' : 'false' }}</span>
+                        </label>
+                      }
+
+                      <!-- ── string / Optional[str] ──────────────────── -->
+                      @if (inputKind(field) === 'string' || inputKind(field) === 'string-optional') {
+                        <span class="knob-string-control">
+                          <input
+                            type="text"
+                            class="form-input knob-input"
+                            [class.error]="hasFieldError(field)"
+                            [value]="effectiveString(field)"
+                            [attr.aria-labelledby]="knobLabelId(field)"
+                            [attr.aria-invalid]="hasFieldError(field) || null"
+                            [attr.aria-describedby]="hasFieldError(field) ? knobErrorId(field) : null"
+                            (input)="onStringInput(field, $any($event.target).value)"
+                          />
+                          @if (inputKind(field) === 'string-optional' && effectiveString(field) !== '') {
+                            <button
+                              type="button"
+                              class="btn-icon"
+                              [attr.aria-label]="'Clear ' + humanLabel(field.name)"
+                              (click)="clearOptionalString(field)"
+                            >×</button>
+                          }
+                        </span>
+                      }
+
+                      <!-- ── string list ─────────────────────────────── -->
+                      @if (inputKind(field) === 'string-list') {
+                        <div class="knob-composite">
+                          <!-- Polite live region announcing duplicate-add
+                               rejections. The chip pulse + input clear are
+                               invisible to screen readers without this. The
+                               text is cleared on the same setTimeout cycle
+                               that clears the pulse, so the announcement
+                               doesn't linger past its visual counterpart. -->
+                          <span class="sr-only" aria-live="polite">
+                            {{ lastRejectedMessage() }}
+                          </span>
+                          <ul class="knob-chip-list">
+                            @for (item of asStringList(field); track $index) {
+                              <li
+                                class="knob-chip"
+                                [class.knob-chip-just-rejected]="isChipJustRejected(field, $index)"
+                              >
+                                <span class="knob-chip-text">{{ item }}</span>
+                                <button
+                                  type="button"
+                                  class="btn-icon btn-icon-small"
+                                  [attr.aria-label]="'Remove ' + item"
+                                  (click)="onStringListRemove(field, $index)"
+                                >×</button>
+                              </li>
+                            }
+                          </ul>
+                          <span class="knob-chip-add">
+                            <input
+                              #stringListInput
+                              type="text"
+                              class="form-input knob-input knob-input-inline"
+                              placeholder="Add value…"
+                              [attr.aria-labelledby]="knobLabelId(field)"
+                              (keydown.enter)="onStringListAdd(field, stringListInput); $event.preventDefault()"
+                            />
+                            <button
+                              type="button"
+                              class="btn btn-ghost btn-sm"
+                              (click)="onStringListAdd(field, stringListInput)"
+                            >Add</button>
+                          </span>
+                        </div>
+                      }
+
+                      <!-- ── label/int pairs ─────────────────────────── -->
+                      @if (inputKind(field) === 'label-int-pairs') {
+                        <div class="knob-composite">
+                          <div class="knob-pair-grid knob-pair-grid-2">
+                            <div class="knob-pair-head knob-pair-head-label">Label</div>
+                            <div class="knob-pair-head knob-pair-head-value">Value</div>
+                            <div class="knob-pair-head knob-pair-head-actions"></div>
+                            @for (row of asLabelIntPairs(field); track $index) {
+                              <input
+                                type="text"
+                                class="form-input knob-input"
+                                [value]="row.label"
+                                [attr.aria-label]="'Label for row ' + ($index + 1)"
+                                (input)="onLabelIntPairLabel(field, $index, $any($event.target).value)"
+                              />
+                              <input
+                                type="number"
+                                class="form-input knob-input knob-input-numeric"
+                                step="1"
+                                [value]="row.value ?? ''"
+                                [attr.aria-label]="'Value for ' + (row.label || 'row ' + ($index + 1))"
+                                (input)="onLabelIntPairValue(field, $index, $any($event.target).value)"
+                              />
+                              <button
+                                type="button"
+                                class="btn-icon"
+                                [attr.aria-label]="'Remove ' + (row.label || 'row ' + ($index + 1))"
+                                (click)="onLabelIntPairRemove(field, $index)"
+                              >×</button>
+                            }
+                          </div>
+                          <button
+                            type="button"
+                            class="btn btn-ghost btn-sm knob-pair-add"
+                            (click)="onLabelIntPairAdd(field)"
+                          >+ Add row</button>
+                        </div>
+                      }
+
+                      <!-- ── label/range map (dict[str, tuple[int,int]]) ─ -->
+                      @if (inputKind(field) === 'label-range-map') {
+                        <div class="knob-composite">
+                          <div class="knob-pair-grid knob-pair-grid-3">
+                            <div class="knob-pair-head knob-pair-head-label">Label</div>
+                            <div class="knob-pair-head knob-pair-head-value">Start</div>
+                            <div class="knob-pair-head knob-pair-head-value">End</div>
+                            <div class="knob-pair-head knob-pair-head-actions"></div>
+                            @for (row of asLabelRangePairs(field); track $index) {
+                              <input
+                                type="text"
+                                class="form-input knob-input"
+                                [class.error]="needsLabel(field, $index, row.label) || isDuplicateLabel(field, row.label)"
+                                [value]="row.label"
+                                [attr.aria-label]="'Label for row ' + ($index + 1)"
+                                [attr.aria-invalid]="needsLabel(field, $index, row.label) || isDuplicateLabel(field, row.label) || null"
+                                [attr.aria-describedby]="(needsLabel(field, $index, row.label) || isDuplicateLabel(field, row.label)) ? rowHintId(field, $index) : null"
+                                (input)="onLabelRangePairLabel(field, $index, $any($event.target).value)"
+                              />
+                              <input
+                                type="number"
+                                class="form-input knob-input knob-input-numeric"
+                                step="1"
+                                [value]="row.start ?? ''"
+                                [attr.aria-label]="'Start for ' + (row.label || 'row ' + ($index + 1))"
+                                (input)="onLabelRangePairStart(field, $index, $any($event.target).value)"
+                              />
+                              <input
+                                type="number"
+                                class="form-input knob-input knob-input-numeric"
+                                step="1"
+                                [value]="row.end ?? ''"
+                                [attr.aria-label]="'End for ' + (row.label || 'row ' + ($index + 1))"
+                                (input)="onLabelRangePairEnd(field, $index, $any($event.target).value)"
+                              />
+                              <button
+                                type="button"
+                                class="btn-icon"
+                                [attr.aria-label]="'Remove ' + (row.label || 'row ' + ($index + 1))"
+                                (click)="onLabelRangePairRemove(field, $index)"
+                              >×</button>
+                              @if (needsLabel(field, $index, row.label)) {
+                                <span class="knob-row-hint knob-row-hint-span" [id]="rowHintId(field, $index)">(label required)</span>
+                              } @else if (isDuplicateLabel(field, row.label)) {
+                                <!-- See ``duplicateLabels`` TODO(commit 11) — this branch is dormant today. -->
+                                <span class="knob-row-hint knob-row-hint-span" [id]="rowHintId(field, $index)">(duplicate label)</span>
+                              }
+                            }
+                          </div>
+                          <button
+                            type="button"
+                            class="btn btn-ghost btn-sm knob-pair-add"
+                            (click)="onLabelRangePairAdd(field)"
+                          >+ Add row</button>
+                        </div>
+                      }
+
+                      <!-- ── regex list ──────────────────────────────── -->
+                      @if (inputKind(field) === 'regex-list') {
+                        <div class="knob-composite">
+                          <textarea
+                            class="form-input knob-input knob-input-textarea"
+                            rows="4"
+                            spellcheck="false"
+                            placeholder="One regex per line"
+                            [class.error]="hasFieldError(field)"
+                            [value]="asRegexLines(field)"
+                            [attr.aria-labelledby]="knobLabelId(field)"
+                            [attr.aria-invalid]="hasFieldError(field) || null"
+                            [attr.aria-describedby]="hasFieldError(field) ? knobErrorId(field) : null"
+                            (input)="onRegexLinesInput(field, $any($event.target).value)"
+                          ></textarea>
+                          <span class="form-hint">
+                            Inline flags like
+                            <code>(?i)</code> survive the round-trip.
+                          </span>
+                        </div>
+                      }
+
+                      <!-- ── label/regex pairs ───────────────────────── -->
+                      @if (inputKind(field) === 'label-regex-pairs') {
+                        <div class="knob-composite">
+                          @for (row of asLabelRegexPairs(field); track $index) {
+                            <div class="knob-regex-pair-row">
+                              <input
+                                type="text"
+                                class="form-input knob-input knob-input-narrow"
+                                [class.error]="needsLabel(field, $index, row.label)"
+                                [value]="row.label"
+                                [attr.aria-label]="'Label for row ' + ($index + 1)"
+                                [attr.aria-invalid]="needsLabel(field, $index, row.label) || null"
+                                [attr.aria-describedby]="needsLabel(field, $index, row.label) ? rowHintId(field, $index) : null"
+                                (input)="onLabelRegexPairLabel(field, $index, $any($event.target).value)"
+                              />
+                              <textarea
+                                class="form-input knob-input knob-input-textarea knob-input-regex"
+                                rows="2"
+                                spellcheck="false"
+                                [value]="row.regex"
+                                [attr.aria-label]="'Regex for ' + (row.label || 'row ' + ($index + 1))"
+                                (input)="onLabelRegexPairPattern(field, $index, $any($event.target).value)"
+                              ></textarea>
+                              <button
+                                type="button"
+                                class="btn-icon"
+                                [attr.aria-label]="'Remove ' + (row.label || 'row ' + ($index + 1))"
+                                (click)="onLabelRegexPairRemove(field, $index)"
+                              >×</button>
+                              @if (needsLabel(field, $index, row.label)) {
+                                <span class="knob-row-hint knob-row-hint-flex" [id]="rowHintId(field, $index)">(label required)</span>
+                              }
+                            </div>
+                          }
+                          <button
+                            type="button"
+                            class="btn btn-ghost btn-sm knob-pair-add"
+                            (click)="onLabelRegexPairAdd(field)"
+                          >+ Add row</button>
+                        </div>
+                      }
+
+                      <!-- ── unsupported (no editor) ─────────────────── -->
+                      @if (inputKind(field) === 'unsupported') {
+                        <span class="knob-unsupported">
+                          read-only ({{ field.type }})
+                        </span>
+                      }
+                    </div>
+
+                    <div class="knob-value-meta">
+                      @if (isFieldOverridden(field)) {
+                        <button
+                          type="button"
+                          class="btn-link knob-reset"
+                          [disabled]="!isFieldPending(field)"
+                          [attr.aria-label]="'Reset ' + humanLabel(field.name) + ' to saved value'"
+                          (click)="resetField(field)"
+                        >Reset</button>
+                      } @else {
+                        <span class="knob-default-tag">default</span>
+                      }
+                    </div>
+                  </dd>
+
+                  <!-- Inline 422 error region. The aria-describedby on the
+                       input points here so screen readers announce it. -->
+                  @if (hasFieldError(field)) {
+                    <div
+                      class="knob-error"
+                      role="alert"
+                      aria-live="polite"
+                      [id]="knobErrorId(field)"
+                    >
+                      {{ fieldError()?.error }}
+                    </div>
+                  }
+                </div>
+              }
+            </dl>
+          </details>
+        }
+      </div>
+    }
+  </div>
+</div>
+
+@if (showRerunModal()) {
+  <!-- ``[loading]`` deliberately omitted — ``confirmRerun`` closes the modal
+       BEFORE flipping ``rerunning()``, so the modal's loading state would
+       never activate. The in-flight indicator lives on the toolbar button
+       ("Rerunning…" + spinner), per the plan's "keep the editor usable"
+       contract. -->
+  <app-confirmation-modal
+    title="Rerun enrichments?"
+    [message]="rerunModalMessage()"
+    confirmText="Rerun"
+    cancelText="Cancel"
+    type="warning"
+    (confirmed)="confirmRerun()"
+    (cancelled)="cancelRerun()"
+  />
+}

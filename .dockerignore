@@ -1,0 +1,28 @@
+# Keep the build context small and reproducible.
+
+# Node / Angular
+web-ui/node_modules
+web-ui/dist
+web-ui/.angular
+
+# Python
+**/__pycache__
+**/*.pyc
+**/.pytest_cache
+**/.venv
+**/venv
+
+# Local data / generated artifacts
+analyzed_projects
+data-server/.playwright-mcp
+
+# VCS / IDE / env
+.git
+.idea
+.vscode
+.env
+.env.*
+!.env.example
+
+# Misc
+*.md

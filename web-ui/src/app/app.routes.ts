@@ -1,5 +1,4 @@
 import { Routes } from '@angular/router';
-import { authGuard, guestGuard } from './core/guards/auth.guard';
 
 export const routes: Routes = [
   {
@@ -8,24 +7,7 @@ export const routes: Routes = [
     pathMatch: 'full',
   },
   {
-    path: 'auth',
-    canActivate: [guestGuard],
-    children: [
-      {
-        path: 'login',
-        loadComponent: () =>
-          import('./pages/auth/login/login.component').then(m => m.LoginComponent),
-      },
-      {
-        path: 'register',
-        loadComponent: () =>
-          import('./pages/auth/register/register.component').then(m => m.RegisterComponent),
-      },
-    ],
-  },
-  {
     path: '',
-    canActivate: [authGuard],
     loadComponent: () =>
       import('./layout/main-layout/main-layout.component').then(m => m.MainLayoutComponent),
     children: [
@@ -35,19 +17,60 @@ export const routes: Routes = [
           import('./pages/dashboard/dashboard.component').then(m => m.DashboardComponent),
       },
       {
-        path: 'projects',
+        path: 'project',
         loadComponent: () =>
-          import('./pages/project-detail/project-detail.component').then(m => m.ProjectDetailComponent),
+          import('./pages/project/project.component').then(m => m.ProjectComponent),
       },
       {
-        path: 'projects/:id',
+        path: 'project/:id',
         loadComponent: () =>
-          import('./pages/project-detail/project-detail.component').then(m => m.ProjectDetailComponent),
-      },
-      {
-        path: 'data-model',
-        loadComponent: () =>
-          import('./pages/data-model/data-model.component').then(m => m.DataModelComponent),
+          import('./pages/project/project.component').then(m => m.ProjectComponent),
+        children: [
+          { path: '', redirectTo: 'setup', pathMatch: 'full' },
+          {
+            path: 'setup',
+            loadComponent: () =>
+              import('./pages/project/setup/setup.component').then(m => m.SetupComponent),
+            children: [
+              { path: '', redirectTo: 'author-matching', pathMatch: 'full' },
+              {
+                path: 'author-matching',
+                loadComponent: () =>
+                  import('./pages/project/setup/author-matching/author-matching.component').then(
+                    m => m.AuthorMatchingComponent,
+                  ),
+              },
+              {
+                path: 'exclusion-rules',
+                loadComponent: () =>
+                  import('./pages/project/setup/exclusion-rules/exclusion-rules.component').then(
+                    m => m.ExclusionRulesComponent,
+                  ),
+              },
+              {
+                path: 'enrichment-config',
+                loadComponent: () =>
+                  import(
+                    './pages/project/setup/enrichment-config/enrichment-config.component'
+                  ).then(m => m.EnrichmentConfigComponent),
+              },
+              {
+                path: 'analysis',
+                loadComponent: () =>
+                  import('./pages/project/setup/analysis/analysis.component').then(
+                    m => m.AnalysisComponent,
+                  ),
+              },
+            ],
+          },
+          {
+            path: 'components',
+            loadComponent: () =>
+              import('./pages/project/components/components-page.component').then(
+                m => m.ComponentsPageComponent,
+              ),
+          },
+        ],
       },
     ],
   },

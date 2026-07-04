@@ -1,0 +1,110 @@
+<div class="components-page">
+  <!-- ── Floating actions overlay ────────────────────────────────────────
+       Only mounted while the draft diverges from the baseline. Anchored
+       top-right of the page so the treemap fills the full chrome-less
+       canvas during idle browsing. -->
+  @if (hasPendingChanges()) {
+    <div class="components-floating-actions" role="group" aria-label="Pending changes">
+      <span class="pending-badge" aria-live="polite">
+        {{ pendingChangeCount() }} pending change{{ pendingChangeCount() === 1 ? '' : 's' }}
+      </span>
+      <button
+        type="button"
+        class="btn btn-ghost discard-pill"
+        [disabled]="saveInProgress()"
+        (click)="onDiscardChanges()"
+      >
+        Discard
+      </button>
+      <!-- The rebuild runs server-side on the request thread, so wait times
+           scale with project size (~17 min on Zeppelin). The label widens
+           during the in-flight state and a small subtext sits below to set
+           the right expectation — without it the user reads "Saving…" as
+           a few seconds and thinks the page has hung. -->
+      <div class="save-pill-wrap">
+        <button
+          type="button"
+          class="btn btn-primary save-pill"
+          [class.in-progress]="saveInProgress()"
+          [disabled]="saveInProgress()"
+          (click)="onSaveChanges()"
+        >
+          @if (saveInProgress()) {
+            <span class="spinner-inline" aria-hidden="true"></span>
+            Rebuilding graph…
+          } @else {
+            Save changes
+          }
+        </button>
+        @if (saveInProgress()) {
+          <span class="save-pill-hint" aria-live="polite">
+            This can take several minutes for large projects.
+          </span>
+        }
+      </div>
+    </div>
+  }
+
+  <!-- ── Body ───────────────────────────────────────────────────────────── -->
+  @switch (status()) {
+    @case ('loading') {
+      <div class="components-state">
+        <div class="spinner-large"></div>
+        <p class="text-secondary">Loading components…</p>
+      </div>
+    }
+    @case ('not-loaded') {
+      <div class="components-state">
+        <svg width="56" height="56" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4">
+          <rect x="3" y="3" width="7" height="7"/>
+          <rect x="14" y="3" width="7" height="7"/>
+          <rect x="3" y="14" width="7" height="7"/>
+          <rect x="14" y="14" width="7" height="7"/>
+        </svg>
+        <h2>Project not loaded</h2>
+        <p class="text-secondary">
+          Load this project into the data server to view its components.
+        </p>
+        <button type="button" class="btn btn-primary" (click)="goToProject()">
+          Load the project first
+        </button>
+      </div>
+    }
+    @case ('error') {
+      <div class="components-state">
+        <h2>Couldn’t load components</h2>
+        <p class="text-secondary">{{ errorMessage() ?? 'Unknown error.' }}</p>
+        @if (projectId(); as id) {
+          <button type="button" class="btn btn-secondary" (click)="loadData(id)">
+            Retry
+          </button>
+        }
+      </div>
+    }
+    @case ('ready') {
+      <section class="components-main">
+        <app-components-treemap
+          [files]="displayedFiles()"
+          [components]="displayedComponents()"
+          [componentColors]="componentColors()"
+          (fileClick)="onFileClick($event)"
+          (contextMenu)="onContextMenu($event)"
+        />
+      </section>
+    }
+  }
+
+  <!-- ── Curation context menu (F4) ────────────────────────────────────── -->
+  @if (openMenu(); as anchor) {
+    <app-curation-menu
+      [anchor]="anchor"
+      [components]="displayedComponents()"
+      [componentColors]="componentColors()"
+      (moveToExisting)="onMoveToExisting($event)"
+      (moveToNew)="onMoveToNew($event)"
+      (moveFolderToExisting)="onMoveFolderToExisting($event)"
+      (moveFolderToNew)="onMoveFolderToNew($event)"
+      (close)="onMenuClose()"
+    />
+  }
+</div>

@@ -1,7 +1,6 @@
 import { Injectable } from '@angular/core';
-import { HttpClient, HttpHeaders, HttpErrorResponse } from '@angular/common/http';
+import { HttpClient, HttpErrorResponse } from '@angular/common/http';
 import { firstValueFrom } from 'rxjs';
-import { AuthService } from './auth.service';
 import { environment } from '../../../environments/environment';
 import {
   SuggestionsResponse,
@@ -11,10 +10,21 @@ import {
   UnifiedUserDto,
   UnifiedUsersResponse,
 } from '../models/author-merge.model';
+import { MergeState } from '../models/project.model';
 
 export interface BuildResult {
   success: boolean;
   message?: string;
+  error?: string;
+}
+
+/**
+ * Result of running user-authored Python via the data-server's `/execute`
+ * endpoint. Exactly one of `output` (captured stdout) or `error` (a Python
+ * traceback / connection message) is populated.
+ */
+export interface RunCodeResult {
+  output?: string;
   error?: string;
 }
 
@@ -46,12 +56,242 @@ export interface HealthResponse {
 
 export interface CurrentProjectResponse {
   project_id: string;
-  user_id: string;
+  project_name?: string;
+  /**
+   * Lifecycle stage of the loaded graph. The data-server surfaces this on
+   * `/projects/current` (UnifiedUsers redesign §I). Optional/defaulted to
+   * `PRE_MERGE` so callers that predate the field keep compiling.
+   */
+  merge_state: MergeState;
   stats: {
     git_commits: number;
     jira_issues: number;
     github_prs: number;
   };
+  /**
+   * Live pipeline progress (0..100) for the loaded project, present only
+   * while a build/finalize is running (NULL otherwise). Drives the Analysis
+   * tab's finalize loading bar. `progressStage` is the checkpoint label.
+   */
+  progress?: number | null;
+  progressStage?: string | null;
+}
+
+// Raw response shape from data-server GET /projects/current.
+// The server now always returns 200; the `loaded` flag distinguishes
+// "a project is loaded" from "nothing is loaded right now".
+interface CurrentProjectResponseRaw {
+  loaded: boolean;
+  project_id?: string;
+  project_name?: string;
+  merge_state?: string;
+  stats?: {
+    git_commits: number;
+    jira_issues: number;
+    github_prs: number;
+  };
+  progress?: number | null;
+  progress_stage?: string | null;
+}
+
+/**
+ * Result of `POST /projects/{id}/finalize`. Mirrors the JSON body the
+ * data-server returns on success (server.py `finalize_project`). `success`
+ * is synthesised client-side; everything else is verbatim from the server.
+ */
+export interface FinalizeResult {
+  success: boolean;
+  error?: string;
+  /**
+   * True when the server reported the project was *already* finalized (409).
+   * Callers treat this as a benign no-op rather than a hard failure.
+   */
+  alreadyFinalized?: boolean;
+  merge_state?: MergeState;
+  unified_users_created?: number;
+  refs_rewritten?: number;
+  account_refs_repaired?: number;
+  phase_b_relations_built?: number;
+  phase_b_traits_emitted?: number;
+  phase_b_classifiers_emitted?: number;
+  phase_b_errors?: unknown[];
+  duration_ms?: number;
+}
+
+// ── Filter rules DTOs ───────────────────────────────────────────────────────
+// Mirror the Pydantic shapes in data-server/src/filter_rules/models.py. The
+// DSL is intentionally permissive on the wire: either a leaf {field, op,
+// value} predicate or an { all_of: [...] } wrapper at depth 1.
+
+export type FilterRuleOp =
+  | 'lt'
+  | 'le'
+  | 'gt'
+  | 'ge'
+  | 'eq'
+  | 'ne'
+  | 'in'
+  | 'not_in'
+  | 'contains'
+  | 'regex';
+
+export interface FilterRulePredicate {
+  field: string;
+  op: FilterRuleOp;
+  value: string | number | boolean | (string | number | boolean)[] | null;
+}
+
+export interface FilterRuleAllOf {
+  all_of: FilterRulePredicate[];
+}
+
+export interface FilterRuleDSL {
+  entity_kind: string;
+  predicate: FilterRulePredicate | FilterRuleAllOf;
+}
+
+export interface FilterRuleDto {
+  id: string;
+  project_id: string;
+  entity_kind: string;
+  name: string;
+  nl_description: string;
+  dsl: FilterRuleDSL;
+  created_at: string | null;
+  /**
+   * Number of entities this rule matches against the loaded graph.
+   * `null` when the data-server has no graph loaded for this project
+   * (the count cannot be computed). Populated by GET /projects/{id}/rules.
+   */
+  match_count?: number | null;
+}
+
+export interface FilterRulesListResponse {
+  project_id: string;
+  rules: FilterRuleDto[];
+}
+
+// ── Config overrides DTOs ───────────────────────────────────────────────────
+// Mirror the Pydantic shapes in data-server/src/config_overrides/. The
+// catalogue is read-only metadata; the overrides dict is the editable state.
+
+/**
+ * One editable knob the editor renders. `current` already reflects any
+ * persisted override (the server overlays before returning), so the UI
+ * shows `current` in the input and flags it modified when `current !=
+ * default`. `metric_names` powers the "Used by" badge. `dx_baseline` is
+ * `false` for ScriptBee-only traits (Cathedral, BusFactor1, etc.).
+ */
+export interface CatalogueFieldDto {
+  name: string;
+  type: string;
+  default: unknown;
+  current: unknown;
+  metric_names: string[];
+  dx_baseline: boolean;
+}
+
+export interface CatalogueFamilyDto {
+  name: string;
+  fields: CatalogueFieldDto[];
+}
+
+export interface CatalogueResponseDto {
+  families: CatalogueFamilyDto[];
+}
+
+/**
+ * GET /projects/{id}/config-overrides response shape. The server returns
+ * the catalogue + the persisted overrides dict + the row's updated_at in
+ * a single round-trip — the editor never needs a second call.
+ */
+export interface ConfigOverridesResponse {
+  catalogue: CatalogueResponseDto;
+  overrides: Record<string, unknown>;
+  updated_at: string | null;
+}
+
+export interface ConfigOverridesWriteResponse {
+  overrides: Record<string, unknown>;
+  updated_at: string | null;
+}
+
+/**
+ * Tagged error a caller can `instanceof`-check after a config-overrides
+ * GET to render an "unknown project" empty state vs. a transport failure.
+ */
+export class ProjectNotFoundError extends Error {
+  constructor(message = 'Project not found.') {
+    super(message);
+    this.name = 'ProjectNotFoundError';
+  }
+}
+
+/**
+ * Tagged 422 error from the config-overrides PUT endpoint. The server
+ * envelope intentionally diverges from the codebase's plain ``{error}``
+ * shape to give the UI both ``field`` (so the offending input row can be
+ * flagged inline) AND ``error`` (the human-readable explanation).
+ * Documented at the raise sites in
+ * ``data-server/src/config_overrides/router.py``.
+ */
+export class ConfigOverridesValidationError extends Error {
+  constructor(
+    public readonly field: string,
+    message: string,
+  ) {
+    super(message);
+    this.name = 'ConfigOverridesValidationError';
+  }
+}
+
+// ── Components page DTOs ────────────────────────────────────────────────────
+// Mirror the contract locked by data-server B3 (src/server.py around line 1216).
+// owner/status are intentionally absent — the data-server doesn't return them
+// in v1 and the page tolerates their absence.
+
+export interface ComponentSummaryDto {
+  name: string;
+  path_prefix: string;
+  file_count: number;
+  total_loc: number;
+  color: string | null;
+}
+
+export interface ComponentFileDto {
+  path: string;
+  loc: number | null;
+  component_name: string | null;
+}
+
+export interface ComponentMappingUpdateResult {
+  /** True when the call succeeded end-to-end (persist + rebuild). */
+  success: boolean;
+  /** Error message when success is false. */
+  error?: string;
+  /**
+   * True when the mapping WAS written to Supabase but the rebuild failed.
+   * Reported by the server as 500 + `mapping_persisted: true`. The caller
+   * should surface a different message in that case ("saved but rebuild
+   * failed; retry the build").
+   */
+  mappingPersisted?: boolean;
+  /** True when the mapping was cleared (null/empty body). */
+  cleared?: boolean;
+  /** Number of components after rebuild. */
+  componentCount?: number;
+}
+
+/**
+ * Tagged error a caller can `instanceof`-check after a components GET to
+ * distinguish "graph not loaded for this project" (a state the page should
+ * recover from with a Load button) from a generic transport failure.
+ */
+export class ProjectNotLoadedError extends Error {
+  constructor(message = 'Project is not loaded. Load the project first.') {
+    super(message);
+    this.name = 'ProjectNotLoadedError';
+  }
 }
 
 @Injectable({
@@ -60,36 +300,25 @@ export interface CurrentProjectResponse {
 export class DataServerService {
   private readonly baseUrl = environment.dataServerUrl;
 
-  constructor(
-    private http: HttpClient,
-    private authService: AuthService
-  ) {}
+  constructor(private http: HttpClient) {}
 
   /**
-   * Build project graph on data-server
-   * @param projectId - UUID of the project
-   * @returns BuildResult with success status and message
+   * Build project graph on data-server.
+   *
+   * @param computeAnnotatedLines When true, asks the build to run the
+   *   (expensive) git per-line attribution metric, emitting ``git.loc`` /
+   *   ``git.repo_size`` classifiers and the ``git.line_attribution`` trait.
+   *   Defaults to false so existing callers keep the cheap build path.
    */
-  async buildProject(projectId: string): Promise<BuildResult> {
-    const session = this.authService.session();
-    if (!session?.access_token) {
-      return {
-        success: false,
-        error: 'Not authenticated',
-      };
-    }
-
-    const headers = new HttpHeaders({
-      'Authorization': `Bearer ${session.access_token}`,
-      'Content-Type': 'application/json',
-    });
-
+  async buildProject(
+    projectId: string,
+    computeAnnotatedLines = false,
+  ): Promise<BuildResult> {
     try {
       const response = await firstValueFrom(
         this.http.post<{ message: string }>(
           `${this.baseUrl}/projects/${projectId}/build`,
-          {},
-          { headers }
+          { compute_annotated_lines: computeAnnotatedLines },
         )
       );
 
@@ -99,6 +328,58 @@ export class DataServerService {
       };
     } catch (err) {
       return this.handleError(err, 'build project');
+    }
+  }
+
+  /**
+   * Rerun the enrichment pipeline for a project. Delegates to ``buildProject``
+   * because the existing ``/projects/{id}/build`` endpoint already re-runs the
+   * full pipeline against the latest persisted overrides — no separate
+   * "rerun" endpoint exists. The wrapper exists so editor callers spell out
+   * their intent in service-call grammar instead of leaking the generic
+   * "build" verb into UI code that means "rerun with my saved overrides".
+   *
+   * @param computeAnnotatedLines forwarded to ``buildProject`` — toggles the
+   *   git per-line attribution metric for this rerun.
+   * @see buildProject
+   */
+  async rerunEnrichments(
+    projectId: string,
+    computeAnnotatedLines = false,
+  ): Promise<BuildResult> {
+    return this.buildProject(projectId, computeAnnotatedLines);
+  }
+
+  /**
+   * Run user-authored Python against the currently loaded project graph.
+   *
+   * Posts the raw source to the data-server's `/execute` endpoint, which runs
+   * it with the project graph bound into scope (`graph_data`, `graph`, …),
+   * captures stdout, and returns `{ output }` on success or `{ error }` (a
+   * formatted traceback, HTTP 400) on failure. The endpoint operates on the
+   * server's *currently loaded* project, so no project id is sent — the
+   * Analysis tab only reaches this point with a project loaded.
+   */
+  async runCode(code: string): Promise<RunCodeResult> {
+    try {
+      const response = await firstValueFrom(
+        this.http.post<RunCodeResult>(`${this.baseUrl}/execute`, { code }),
+      );
+      return { output: response.output ?? '' };
+    } catch (err) {
+      if (err instanceof HttpErrorResponse) {
+        if (err.status === 0) {
+          return {
+            error: `Unable to connect to data server. Please ensure it's running on ${this.baseUrl}`,
+          };
+        }
+        // `/execute` returns the traceback under `error`; fall back to the
+        // generic FastAPI shapes for any other failure status.
+        const message =
+          err.error?.error || err.error?.detail || err.error?.message || err.message;
+        return { error: message || 'Failed to run code' };
+      }
+      return { error: 'Failed to run code' };
     }
   }
 
@@ -143,26 +424,70 @@ export class DataServerService {
    * @returns true if successfully unloaded
    */
   async unloadProject(projectId: string): Promise<boolean> {
-    const session = this.authService.session();
-    if (!session?.access_token) {
-      return false;
-    }
-
-    const headers = new HttpHeaders({
-      'Authorization': `Bearer ${session.access_token}`,
-    });
-
     try {
       await firstValueFrom(
-        this.http.delete(
-          `${this.baseUrl}/projects/${projectId}/unload`,
-          { headers }
-        )
+        this.http.delete(`${this.baseUrl}/projects/${projectId}/unload`)
       );
       return true;
     } catch (err) {
       console.error('Failed to unload project:', err);
       return false;
+    }
+  }
+
+  /**
+   * Finalize a project: transition its loaded graph from PRE_MERGE to
+   * FINALIZED. Runs the rebind + Phase B re-key on the data-server — a
+   * blocking call that takes ~150s on large projects (Phase B), so callers
+   * must show a spinner. One-way: re-import is the only documented recovery.
+   *
+   * The project MUST be loaded into the data-server first (the endpoint
+   * 404s otherwise) — callers should ensure `loadProject` ran.
+   *
+   * Distinguishes three outcomes:
+   *  - success → `{ success: true, ...metrics }`
+   *  - already finalized (409) → `{ success: false, alreadyFinalized: true }`
+   *  - anything else → `{ success: false, error }`
+   */
+  async finalizeProject(projectId: string): Promise<FinalizeResult> {
+    try {
+      const response = await firstValueFrom(
+        this.http.post<Omit<FinalizeResult, 'success'>>(
+          `${this.baseUrl}/projects/${projectId}/finalize`,
+          {},
+        )
+      );
+      return { success: true, ...response };
+    } catch (err) {
+      if (err instanceof HttpErrorResponse) {
+        if (err.status === 0) {
+          return {
+            success: false,
+            error: `Unable to connect to data server. Please ensure it's running on ${this.baseUrl}`,
+          };
+        }
+        // 409 = project_finalized: the graph is already FINALIZED. Treat as a
+        // benign no-op so the UI can just refresh state instead of erroring.
+        if (err.status === 409) {
+          return { success: false, alreadyFinalized: true };
+        }
+        const message =
+          err.error?.error || err.error?.detail || err.error?.message || err.message;
+        if (err.status === 404) {
+          return {
+            success: false,
+            error: message || 'Project is not loaded. Load the project before finalizing.',
+          };
+        }
+        return {
+          success: false,
+          error: message || `Finalize failed (${err.status})`,
+        };
+      }
+      return {
+        success: false,
+        error: `Unexpected error: ${err instanceof Error ? err.message : 'Unknown error'}`,
+      };
     }
   }
 
@@ -226,11 +551,31 @@ export class DataServerService {
   async getCurrentProject(): Promise<CurrentProjectResponse | null> {
     try {
       const response = await firstValueFrom(
-        this.http.get<CurrentProjectResponse>(`${this.baseUrl}/projects/current`)
+        this.http.get<CurrentProjectResponseRaw>(`${this.baseUrl}/projects/current`)
       );
-      return response;
+      // Server now returns 200 with `loaded: false` instead of a 404
+      // when no project is in memory. Translate that to null so callers
+      // see the same shape as before.
+      if (!response || !response.loaded || !response.project_id) {
+        return null;
+      }
+      return {
+        project_id: response.project_id,
+        project_name: response.project_name,
+        // The server emits the StrEnum value
+        // ("PRE_MERGE"/"FINALIZING"/"FINALIZED"). Default to PRE_MERGE if an
+        // older data-server build omits it or sends something unexpected.
+        merge_state:
+          response.merge_state === 'FINALIZED' || response.merge_state === 'FINALIZING'
+            ? response.merge_state
+            : 'PRE_MERGE',
+        stats: response.stats ?? { git_commits: 0, jira_issues: 0, github_prs: 0 },
+        progress: response.progress ?? null,
+        progressStage: response.progress_stage ?? null,
+      };
     } catch (err) {
-      // 404 means no project is loaded, which is not an error
+      // Legacy 404 path (older data-server build still returning 404 for
+      // "no project loaded") — treat as "no project".
       if (err instanceof HttpErrorResponse && err.status === 404) {
         return null;
       }
@@ -409,6 +754,102 @@ export class DataServerService {
     }
   }
 
+  // ── Components page methods ─────────────────────────────────────────────
+
+  /**
+   * Fetch one row per Component in the loaded graph.
+   * Throws `ProjectNotLoadedError` on the data-server's 400 "Project is not
+   * loaded" response so the page can render a Load-prompt empty state.
+   */
+  async getComponents(projectId: string): Promise<ComponentSummaryDto[]> {
+    try {
+      const rows = await firstValueFrom(
+        this.http.get<ComponentSummaryDto[]>(
+          `${this.baseUrl}/projects/${projectId}/components`
+        )
+      );
+      return rows ?? [];
+    } catch (err) {
+      throw this.toComponentsError(err);
+    }
+  }
+
+  /**
+   * Fetch a flat {path, loc, component_name} row per file in the project.
+   * Throws `ProjectNotLoadedError` on the 400 "Project is not loaded" path.
+   */
+  async getComponentFiles(projectId: string): Promise<ComponentFileDto[]> {
+    try {
+      const rows = await firstValueFrom(
+        this.http.get<ComponentFileDto[]>(
+          `${this.baseUrl}/projects/${projectId}/components/files`
+        )
+      );
+      return rows ?? [];
+    } catch (err) {
+      throw this.toComponentsError(err);
+    }
+  }
+
+  /**
+   * Persist a curated component mapping JSON, then trigger a rebuild.
+   * Pass `null` (or `{}`) to clear the mapping.
+   *
+   * Distinguishes the two 500 paths via the server's `mapping_persisted` flag:
+   *  - persist failed → `mappingPersisted: false`
+   *  - rebuild failed after persist → `mappingPersisted: true`
+   */
+  async updateComponentMapping(
+    projectId: string,
+    mapping: Record<string, unknown> | null
+  ): Promise<ComponentMappingUpdateResult> {
+    try {
+      const response = await firstValueFrom(
+        this.http.put<{ ok: true; cleared: boolean; component_count: number }>(
+          `${this.baseUrl}/projects/${projectId}/component-mapping`,
+          mapping
+        )
+      );
+      return {
+        success: true,
+        cleared: response.cleared,
+        componentCount: response.component_count,
+      };
+    } catch (err) {
+      if (err instanceof HttpErrorResponse) {
+        const message = err.error?.error || err.error?.message || err.message;
+        return {
+          success: false,
+          error: message || 'Failed to update component mapping',
+          mappingPersisted: err.error?.mapping_persisted === true,
+        };
+      }
+      return {
+        success: false,
+        error: `Unexpected error: ${err instanceof Error ? err.message : 'Unknown error'}`,
+      };
+    }
+  }
+
+  /**
+   * Translate a GET-side HTTP error into either a `ProjectNotLoadedError` or
+   * a generic `Error`. Centralised here so both components GETs behave the
+   * same way and the page only has to `instanceof`-check once.
+   */
+  private toComponentsError(err: unknown): Error {
+    if (err instanceof HttpErrorResponse) {
+      if (err.status === 0) {
+        return new Error(`Unable to connect to data server at ${this.baseUrl}`);
+      }
+      const message = err.error?.error || err.error?.message || err.message;
+      if (err.status === 400 && typeof message === 'string' && message.includes('not loaded')) {
+        return new ProjectNotLoadedError(message);
+      }
+      return new Error(message || `Components request failed (${err.status})`);
+    }
+    return err instanceof Error ? err : new Error('Unexpected error');
+  }
+
   async saveGraphState(
     projectId: string
   ): Promise<{ ok: true; size_mb: number; user_count: number } | null> {
@@ -422,6 +863,115 @@ export class DataServerService {
     } catch (err) {
       console.error('Failed to save graph state:', err);
       return null;
+    }
+  }
+
+  // ── Filter Rules Methods ────────────────────────────────────────────────
+
+  /**
+   * List active filter rules for a project from the data-server. The endpoint
+   * returns rules ordered created_at DESC with their match_count folded in;
+   * the exclusion-rules page polls this as its single source of truth (it
+   * replaced the old Supabase realtime channel).
+   */
+  async listFilterRules(projectId: string): Promise<FilterRuleDto[]> {
+    try {
+      const response = await firstValueFrom(
+        this.http.get<FilterRulesListResponse>(
+          `${this.baseUrl}/projects/${projectId}/rules`
+        )
+      );
+      return response?.rules ?? [];
+    } catch (err) {
+      console.error('Failed to list filter rules:', err);
+      return [];
+    }
+  }
+
+  // ── Config Overrides Methods ────────────────────────────────────────────
+
+  /**
+   * Fetch the catalogue + persisted overrides + updated_at for the given
+   * project in a single round-trip. Throws :class:`ProjectNotFoundError`
+   * on 404 so the editor can render an "unknown project" empty state;
+   * any other failure throws a generic Error.
+   */
+  async getConfigOverrides(projectId: string): Promise<ConfigOverridesResponse> {
+    try {
+      return await firstValueFrom(
+        this.http.get<ConfigOverridesResponse>(
+          `${this.baseUrl}/projects/${projectId}/config-overrides`,
+        ),
+      );
+    } catch (err) {
+      throw this.toConfigOverridesError(err);
+    }
+  }
+
+  /**
+   * Persist the full overrides dict for the given project. The server
+   * replaces the whole dict on every save (no patch semantics) — the
+   * caller is expected to send the merged ``{ ...current, ...pending }``
+   * payload. Returns the persisted ``{ overrides, updated_at }`` row.
+   *
+   * Throws :class:`ConfigOverridesValidationError` on 422 so the editor
+   * can highlight the offending field; :class:`ProjectNotFoundError` on
+   * 404; a generic :class:`Error` on 500 / network failures.
+   */
+  async putConfigOverrides(
+    projectId: string,
+    overrides: Record<string, unknown>,
+  ): Promise<ConfigOverridesWriteResponse> {
+    try {
+      return await firstValueFrom(
+        this.http.put<ConfigOverridesWriteResponse>(
+          `${this.baseUrl}/projects/${projectId}/config-overrides`,
+          { overrides },
+        ),
+      );
+    } catch (err) {
+      throw this.toConfigOverridesError(err);
+    }
+  }
+
+  private toConfigOverridesError(err: unknown): Error {
+    if (err instanceof HttpErrorResponse) {
+      if (err.status === 0) {
+        return new Error(`Unable to connect to data server at ${this.baseUrl}`);
+      }
+      if (err.status === 404) {
+        const message = err.error?.error || 'Project not found.';
+        return new ProjectNotFoundError(message);
+      }
+      if (err.status === 422) {
+        // The router's PUT validator surfaces `{field, error}` — preserve
+        // both so the editor can light up the offending input row inline.
+        const field = typeof err.error?.field === 'string' ? err.error.field : '';
+        const message =
+          typeof err.error?.error === 'string'
+            ? err.error.error
+            : 'Validation failed';
+        return new ConfigOverridesValidationError(field, message);
+      }
+      const message = err.error?.error || err.error?.detail || err.message;
+      return new Error(message || `Config overrides request failed (${err.status})`);
+    }
+    return err instanceof Error ? err : new Error('Unexpected error');
+  }
+
+  /**
+   * Delete a filter rule via the data-server endpoint. The endpoint deletes
+   * the persisted row and evicts the in-memory cache in one shot.
+   */
+  async deleteFilterRule(projectId: string, ruleId: string): Promise<boolean> {
+    try {
+      await firstValueFrom(
+        this.http.delete(`${this.baseUrl}/projects/${projectId}/rules/${ruleId}`)
+      );
+      return true;
+    } catch (err) {
+      console.error('Failed to delete filter rule:', err);
+      return false;
     }
   }
 

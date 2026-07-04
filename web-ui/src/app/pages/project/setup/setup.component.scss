@@ -1,0 +1,128 @@
+.setup-shell {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+}
+
+.setup-header {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-md);
+  padding: 0 var(--spacing-xl);
+  border-bottom: 1px solid var(--color-border);
+  background-color: var(--color-surface);
+}
+
+.setup-tabs {
+  display: flex;
+  gap: var(--spacing-xs);
+  flex: 1;
+  min-width: 0;
+  overflow-x: auto;
+}
+
+.setup-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-sm);
+  flex-shrink: 0;
+}
+
+.lifecycle-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 10px;
+  border-radius: var(--radius-pill, 999px);
+  font-size: 0.75rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  white-space: nowrap;
+
+  &.setup {
+    color: var(--color-text-secondary);
+    background-color: var(--color-surface-alt, rgba(127, 127, 127, 0.12));
+    border: 1px solid var(--color-border);
+  }
+
+  &.ready {
+    color: var(--color-success, #16a34a);
+    background-color: var(--color-success-bg, rgba(22, 163, 74, 0.12));
+    border: 1px solid var(--color-success, #16a34a);
+  }
+}
+
+.spinner-small {
+  width: 14px;
+  height: 14px;
+  border: 2px solid rgba(255, 255, 255, 0.35);
+  border-top-color: white;
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.setup-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: var(--spacing-md) var(--spacing-lg);
+  font-size: 0.875rem;
+  font-weight: 500;
+  color: var(--color-text-secondary);
+  text-decoration: none;
+  border-bottom: 2px solid transparent;
+  transition: color var(--transition-fast), border-color var(--transition-fast);
+  white-space: nowrap;
+
+  &:not(.locked):hover {
+    color: var(--color-text-primary);
+  }
+
+  &.active {
+    color: var(--color-accent);
+    border-bottom-color: var(--color-accent);
+  }
+
+  // Locked tab: grayed and non-interactive. Rendered as a <span> (no
+  // routerLink) so it isn't navigable; the cursor + opacity make that clear.
+  &.locked {
+    opacity: 0.45;
+    cursor: not-allowed;
+    user-select: none;
+  }
+
+  .tab-lock-icon {
+    flex-shrink: 0;
+  }
+}
+
+.setup-content {
+  flex: 1;
+  // No `overflow-y: auto` here — the window is the scroll container for
+  // all setup tabs, matching the rest of the app (`.app-header` is sticky
+  // at body-top, `_modals` overlay the viewport). An `overflow` here
+  // would confine `position: sticky` descendants to this box and break
+  // the enrichment-config toolbar.
+  padding: var(--spacing-xl);
+  max-width: 1100px;
+  width: 100%;
+  margin: 0 auto;
+}
+
+@media (max-width: 768px) {
+  .setup-header {
+    padding: 0 var(--spacing-md);
+  }
+
+  .setup-content {
+    padding: var(--spacing-md);
+  }
+}

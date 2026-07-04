@@ -1,0 +1,25 @@
+<!--
+  Treemap host: a single sized div holds the SVG (rendered imperatively by
+  d3 inside the component's effect). The HTML tooltip is positioned as a
+  fixed-position overlay; visibility is driven by the `tooltip` signal.
+-->
+<div #host class="treemap-host" role="img" aria-label="Components treemap">
+  <svg #svg class="treemap-svg" xmlns="http://www.w3.org/2000/svg"></svg>
+
+  @if (tooltip().visible) {
+    <div
+      #tooltipEl
+      class="treemap-tooltip"
+      [style.left.px]="tooltip().x"
+      [style.top.px]="tooltip().y"
+      role="tooltip"
+    >
+      <div class="treemap-tooltip-path">{{ tooltip().path }}</div>
+      <div class="treemap-tooltip-meta">
+        <span>{{ tooltip().loc }} LOC</span>
+        <span>·</span>
+        <span>{{ tooltip().componentName }}</span>
+      </div>
+    </div>
+  }
+</div>

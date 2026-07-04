@@ -1,87 +1,313 @@
 #!/usr/bin/env python3
+"""Graph Processor (v2) — thin dispatcher around per-domain transformers.
+
+Chunk 8 of the architectural refactor. Per plan §9 + §12 steps 6–8:
+
+* Each source ships a :class:`Transformer` (in ``src/common/domains/<x>/``)
+  that turns a raw payload into a :class:`TransformResult` (project +
+  entities bucketed by :class:`EntityKind`).
+* This processor instantiates transformers, runs them, applies each
+  result to a single typed :class:`Graph`, then drives the v2 enrichment
+  pipeline (``run_pipeline``) over it.
+* The result is persisted via :meth:`Graph.dump` into a per-project
+  :class:`PickleStore`.
+
+Long-running infrastructure (Supabase polling loop, downloads, status
+updates, raw-payload smart-merge endpoints) is preserved verbatim from
+the legacy processor — only the build pipeline middle (downloaded files
+→ Graph) is rewritten. The legacy ``ProjectLinker`` step is gone; its
+semantics now live in v2 :class:`RelationBuilder`\\s (see Chunk-7 handoff
+"ProjectLinker → RelationBuilder mapping").
+
+Greenfield contract: the new processor produces v2 graphs only. Old
+``graph.pkl`` blobs are not readable by Chunk 8; the user must
+re-trigger ``Build Graph`` from the web UI.
+
+Bridge to legacy readers
+------------------------
+
+The v2 transformers (Chunks 4–6) accept ONLY pre-built entity bundles
+(Mapping form), not raw bytes / DTOs. Building entity bundles from raw
+inputs (.iglog, Jira JSON, GitHub JSON, CodeFrame, DuDe, Insider, Lizard
+CSV) requires re-porting ~1300 LOC of legacy ``*_miner/linker``
+machinery. That port is intentionally **deferred** — Chunk 8 ships:
+
+* The full transformer-dispatch / pipeline-run / graph-dump end-to-end
+  path, exercised by ``tests/chunk_08/`` against synthetic bundles
+  (the form v2 transformers natively accept).
+* A :func:`build_graph_from_bundles` callable that takes a
+  ``Dict[SourceKind | str, Mapping]`` of pre-built bundles and returns
+  a populated :class:`Graph`.
+* :func:`build_graph` orchestrator that wires download → bundles →
+  graph, with the legacy → bundles bridge stubbed (``NotImplementedError``
+  with a "Chunk 10 cleanup will wire the readers" message). This keeps
+  the supabase-polling loop alive — projects in ``status=processing``
+  will surface a clear "deferred" error rather than silently fail.
+
+When Chunk 10 deletes the legacy linker stack, the bridge becomes a
+small wrapper around each ``*Transformer.transform(<raw>)`` extended
+path; the dispatch layer above does not change.
 """
-Graph Processor - Background service for building project graphs
+from __future__ import annotations
 
-Downloads serialized files from Supabase Storage, builds graphs, and uploads pickles.
-
-Usage:
-    # Continuously poll database for projects with status='processing'
-    python -m src.processor
-
-    # Docker (runs automatically)
-    docker compose up processor
-"""
-
-import pickle
+import argparse
 import sys
 import time
-import argparse
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Mapping, Optional, Tuple
 
-# Add parent directory to path if running as script
+# Add parent directory to path if running as script.
 if __name__ == "__main__" and __package__ is None:
     sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from supabase import create_client, Client
-from src.config import SUPABASE_URL, SUPABASE_SERVICE_KEY, RECURSION_LIMIT
+from src.common.domains.app_inspector import AppInspectorTransformer, build_app_inspector_bundle
+from src.common.domains.code_structure.bridge import build_code_structure_bundle
+from src.common.domains.code_structure.transformer import CodeStructureTransformer
+from src.common.domains.duplication.bridge import build_duplication_bundle
+from src.common.domains.duplication.transformer import DuplicationTransformer
+from src.common.domains.git.bridge import build_git_bundle
+from src.common.domains.git.transformer import GitTransformer
+from src.common.domains.github.bridge import build_github_bundle
+from src.common.domains.github.transformer import GitHubTransformer
+from src.common.domains.jira.bridge import build_jira_bundle
+from src.common.domains.jira.transformer import JiraTransformer
+from src.common.domains.metrics_lizard.bridge import build_lizard_bundle
+from src.common.domains.metrics_lizard.transformer import LizardMetricsTransformer
+from src.common.domains.quality.bridge import build_quality_bundle
+from src.common.domains.quality.transformer import QualityTransformer
+from src.common.domains.transformer import Transformer, TransformResult
+from src.common.kernel import Graph
+from src.common.people import SourceKind
+from src.common.pickle_store import PickleStore
+from src import progress
+from src import storage
+from src.config import RECURSION_LIMIT
+from src.config_overrides.merge import OverrideCoercionError, apply_overrides
+from src.config_overrides.repository import ConfigOverridesRepository
+from src.db import connection, query, query_one
+from src.enrichment.config import DEFAULT_CONFIG, EnrichmentConfig
+from src.enrichment.metrics.implementations.component_resolver import (
+    build_components_from_relations,
+)
+from src.enrichment.pipeline import PipelineResult, run_pipeline_phase_a
+# UnifiedUsers redesign §H (task P4.A): /build runs Phase A only —
+# Phase B is the /finalize endpoint's job. Running Phase B at build
+# would emit relations / classifiers / traits keyed on GIT_ACCOUNT refs;
+# /finalize would then re-run Phase B against the rebound graph and emit
+# the same items keyed on UNIFIED_USER refs. Because
+# ``Relation.canonical_id`` (and the Classifier / Trait id mints)
+# include the source / target ``kind`` in the hash, both copies would
+# survive in the registries — agent queries post-finalize would see
+# duplicate edges keyed on stale per-source accounts and stale
+# UU-keyed ones. Skipping Phase B at build avoids the duplication and
+# matches the strict §H end-state.
 from src.logger import get_logger
-from src.inspector_git.reader.iglog.readers.ig_log_reader import IGLogReader
-from src.inspector_git.reader.dto.gitlog.git_log_dto import GitLogDTO
-from src.inspector_git.utils.constants import DEV_NULL
 
 logger = get_logger("processor")
-from src.inspector_git.linker.transformers import GitProjectTransformer, CommitTransformer, SimpleChangeFactory
-from src.common.models import GitProject
-from src.jira_miner.reader_dto.loader import JiraJsonLoader
-from src.jira_miner.linker.transformers import JiraProjectTransformer
-from src.github_miner.reader_dto.loader import GithubJsonLoader
-from src.github_miner.linker.transformers import GitHubProjectTransformer
-from src.common.project_linkers import ProjectLinker
-from src.lizard_miner.reader_dto.loader import LizardCsvLoader
-from src.lizard_miner.linker.transformers import LizardProjectTransformer
-from src.codestructure_miner.parser import CodeStructureFormat, parse as parse_codestructure
-from src.dude_miner.parser import parse_dude
-from src.quality_miner.parser import parse_insider
 
 
+# ---------------------------------------------------------------------------
+# DownloadedFiles dataclass — preserved from the legacy processor.
+# ---------------------------------------------------------------------------
 @dataclass
 class DownloadedFiles:
-    """Holds downloaded file paths, supporting multiple git files (one per repo)."""
-    git_files: List[Tuple[str, Path]] = field(default_factory=list)  # [(repo_name, path), ...]
+    """Per-source paths populated by ``download_serialized_files_from_supabase``.
+
+    Multiple git files are allowed (one per repo); every other source is
+    at most one. Field shape preserved verbatim from the legacy processor
+    so the supabase-storage download layer didn't have to change.
+    """
+
+    git_files: List[Tuple[str, Path]] = field(default_factory=list)
     jira_file: Optional[Path] = None
     github_file: Optional[Path] = None
     lizard_file: Optional[Path] = None
-    jafax_file: Optional[Path] = None
+    codeframe_file: Optional[Path] = None
     dude_external_file: Optional[Path] = None
     dude_internal_file: Optional[Path] = None
     quality_issues_file: Optional[Path] = None
+    app_inspector_file: Optional[Path] = None
 
 
+# ---------------------------------------------------------------------------
+# Source -> transformer dispatch table.
+# ---------------------------------------------------------------------------
+#: Map every source kind to its concrete :class:`Transformer` subclass.
+#: Code-structure / duplication / quality / lizard each have their own
+#: :class:`SourceKind` enum value (added by Chunks 4–6) but are stored
+#: alongside git/jira/github here so the dispatcher is one flat lookup.
+_TRANSFORMERS: Dict[SourceKind, type[Transformer]] = {
+    SourceKind.GIT: GitTransformer,
+    SourceKind.JIRA: JiraTransformer,
+    SourceKind.GITHUB: GitHubTransformer,
+    SourceKind.CODE_STRUCTURE: CodeStructureTransformer,
+    SourceKind.DUPLICATION: DuplicationTransformer,
+    SourceKind.QUALITY: QualityTransformer,
+    SourceKind.LIZARD: LizardMetricsTransformer,
+    SourceKind.APP_INSPECTOR: AppInspectorTransformer,
+}
+
+
+def get_transformer(source: SourceKind) -> Transformer:
+    """Return the singleton transformer for ``source``.
+
+    Transformers are stateless (per their Chunk-4/5/6 design) so we
+    instantiate one per call — cheap and matches the "one transformer
+    per build" contract.
+    """
+    try:
+        cls = _TRANSFORMERS[source]
+    except KeyError as exc:
+        raise ValueError(f"No transformer registered for source {source!r}") from exc
+    return cls()
+
+
+# ---------------------------------------------------------------------------
+# Transform-result dispatcher.
+# ---------------------------------------------------------------------------
+def apply_transform_result(graph: Graph, result: TransformResult) -> None:
+    """Route every entity in ``result`` into the matching typed registry.
+
+    Routing rules:
+
+    * ``result.project`` is added via :meth:`Graph.add_project` (dispatched
+      by ``isinstance`` because multiple project registries share
+      :attr:`EntityKind.PROJECT`).
+    * Every other ``(kind, entities)`` bucket is fed to
+      :meth:`Graph.registry_for(kind).add(entity)`. Each registry handles
+      duplicate ids by ``replace`` per Chunk-1 contract.
+    """
+    # Add the project first — downstream entities reference it via
+    # ``project_ref``, so its presence is a precondition for resolving
+    # those refs later.
+    graph.add_project(result.project)
+
+    for kind, bucket in result.entities.items():
+        registry = graph.registry_for(kind)
+        if registry is None:
+            # Defensive: TransformResult shouldn't ship buckets keyed on
+            # EntityKind.PROJECT (the project goes via ``add_project``)
+            # or on any kind that lacks a typed registry. If it does,
+            # raise loudly — a silent skip would hide a real bug.
+            raise ValueError(
+                f"apply_transform_result: no registry for kind {kind!r} "
+                f"(bucket size={len(bucket)}). Did a Transformer emit "
+                f"an entity bucket keyed on EntityKind.PROJECT?"
+            )
+        for entity in bucket:
+            registry.add(entity)
+
+
+# ---------------------------------------------------------------------------
+# Bundle-driven build (the v2-native entry point used by tests).
+# ---------------------------------------------------------------------------
+def build_graph_from_bundles(
+    project_id: str,
+    bundles: Mapping[SourceKind, List[Mapping]],
+    *,
+    config: Optional[EnrichmentConfig] = None,
+    compute_annotated_lines: bool = False,
+) -> Tuple[Graph, PipelineResult]:
+    """Build a :class:`Graph` from pre-built per-source entity bundles.
+
+    This is the canonical v2-native build path. Each ``bundles[source]``
+    is a **list** of bundle Mappings (one per repo / per source file —
+    typically a single-element list for non-git sources, but git can
+    carry multiple bundles when a project has multiple repos uploaded).
+    Each bundle is dispatched through its source's transformer and
+    merged into the same typed :class:`Graph`. Per-domain registries
+    handle multi-bundle merging naturally because entity ids are
+    repo-scoped (see :meth:`git.Commit.make_id` / :meth:`git.File.make_id`).
+
+    Pre-F1 the signature was ``Mapping[SourceKind, Mapping]`` and only
+    one git bundle could survive; the dispatcher logged a warning for
+    the dropped repos.
+
+    Parameters
+    ----------
+    project_id
+        UUID-ish identifier for the project. Stored on the Graph's
+        ``project_id`` field and used as the storage key.
+    bundles
+        Mapping of :class:`SourceKind` → list of raw bundles. Only
+        sources present in the dict have transformers invoked; missing
+        sources are skipped (the resulting Graph just has empty
+        registries for those domains).
+    config
+        Optional :class:`EnrichmentConfig` passed through to the
+        pipeline. Defaults to :data:`DEFAULT_CONFIG`.
+    compute_annotated_lines
+        Build-time toggle for the (expensive) git annotated-lines
+        reconstruction. When ``True`` it is set on the effective config so
+        :class:`GitLineAttributionMetric` emits ``git.loc`` / ``git.repo_size``
+        classifiers + the per-file attribution trait (plan §§3-4).
+    """
+    if config is None:
+        config = DEFAULT_CONFIG
+
+    # Flip the annotated-lines toggle on the effective config when requested.
+    # ``replace`` keeps the caller's config intact (e.g. test fixtures).
+    if compute_annotated_lines:
+        config = replace(config, compute_annotated_lines=True)
+
+    graph = Graph(project_id=project_id)
+
+    # Source/bundle loop — the "before enrichments" span. Progress climbs
+    # proportionally across the sources present, from 15% (files staged) to
+    # 55% (all sources transformed), so the dashboard bar advances as each
+    # source's transformer finishes. See ``src.progress``.
+    _SRC_LO, _SRC_HI = 15, 55
+    source_count = max(1, len(bundles))
+    for idx, (source, source_bundles) in enumerate(bundles.items()):
+        transformer = get_transformer(source)
+        for bundle in source_bundles:
+            result = transformer.transform(bundle)
+            apply_transform_result(graph, result)
+        pct = _SRC_LO + (_SRC_HI - _SRC_LO) * (idx + 1) // source_count
+        progress.report(project_id, pct, "transforming")
+
+    # Before-enrichments marker: every source is in the graph; enrichment
+    # (Phase A) is the next, heavier span.
+    progress.report(project_id, _SRC_HI, "transformed")
+
+    # UnifiedUsers redesign §H — Phase A only at build. Phase B runs in
+    # ``POST /projects/{id}/finalize`` after ``rebind_account_refs_to_unified``
+    # has flipped role-typed refs to UNIFIED_USER kind. See the module-level
+    # import comment for the duplicate-id rationale.
+    pipeline_result = run_pipeline_phase_a(graph, config)
+    progress.report(project_id, 85, "enriching")
+    # Populate graph.components from the component_membership relations
+    # emitted by ComponentResolverMetric. Must run AFTER run_pipeline:
+    # the Metric ABC's purity contract forbids registry mutations from
+    # inside compute(), so the post-pipeline helper owns the write into
+    # graph.components.
+    build_components_from_relations(graph)
+    return graph, pipeline_result
+
+
+# ---------------------------------------------------------------------------
+# Database + on-disk storage infrastructure.
+# ---------------------------------------------------------------------------
 def download_serialized_files_from_supabase(project_id: str) -> DownloadedFiles:
-    """
-    Downloads serialized files from Supabase Storage for a given project.
-    Supports multiple git (iglog) files with different repo names.
+    """Stage every serialized file for ``project_id`` into a temp dir.
 
-    Args:
-        project_id: Project UUID to download files for
-
-    Returns:
-        DownloadedFiles with git_files list, optional jira_file and github_file
+    De-Supabased: the serialized_files rows come from the local Postgres
+    database and the bytes are read directly from the on-disk store
+    (:data:`src.config.SERIALIZED_FILES_DIR`) rather than a storage bucket.
+    The name is kept for call-site compatibility.
     """
-    logger.info("Downloading serialized files from Supabase Storage")
+    logger.info("Staging serialized files from local on-disk store")
 
     if not project_id:
         raise ValueError("project_id must be provided")
 
-    # Initialize Supabase client with service key (bypasses RLS)
-    supabase: Client = create_client(SUPABASE_URL, SUPABASE_SERVICE_KEY)
+    rows = query(
+        "select * from serialized_files where project_id = %s",
+        (project_id,),
+    )
 
-    # Query serialized_files table for this project
-    response = supabase.table("serialized_files").select("*").eq("project_id", project_id).execute()
-
-    if not response.data:
+    if not rows:
         raise ValueError(f"No serialized files found for project_id: {project_id}")
 
     downloaded = DownloadedFiles()
@@ -89,20 +315,18 @@ def download_serialized_files_from_supabase(project_id: str) -> DownloadedFiles:
     temp_dir.mkdir(parents=True, exist_ok=True)
 
     file_summaries = []
-    for file_record in response.data:
+    for file_record in rows:
         file_type = file_record["file_type"]
         storage_path = file_record["storage_path"]
         file_name = file_record["name"]
         repo_name = file_record.get("repo_name")
 
-        # Download from Supabase Storage
         try:
-            file_bytes = supabase.storage.from_("serialized-files").download(storage_path)
-        except Exception as e:
-            raise FileNotFoundError(f"Failed to download {storage_path}: {e}")
+            file_bytes = storage.read_bytes(storage_path)
+        except Exception as exc:
+            raise FileNotFoundError(f"Failed to read {storage_path}: {exc}") from exc
 
         if file_type == "git":
-            # Multiple git files allowed, use repo_name in temp filename
             safe_repo = repo_name or "git"
             temp_file_path = temp_dir / f"git_{safe_repo}_{project_id}.iglog"
             with open(temp_file_path, "wb") as f:
@@ -119,543 +343,434 @@ def download_serialized_files_from_supabase(project_id: str) -> DownloadedFiles:
                 downloaded.github_file = temp_file_path
             elif file_type == "lizard":
                 downloaded.lizard_file = temp_file_path
-            elif file_type == "jafax":
-                downloaded.jafax_file = temp_file_path
+            elif file_type == "codeframe":
+                downloaded.codeframe_file = temp_file_path
             elif file_type == "dude_external":
                 downloaded.dude_external_file = temp_file_path
             elif file_type == "dude_internal":
                 downloaded.dude_internal_file = temp_file_path
             elif file_type == "quality_issues":
                 downloaded.quality_issues_file = temp_file_path
+            elif file_type == "app_inspector":
+                downloaded.app_inspector_file = temp_file_path
             file_summaries.append(f"{file_type} ({file_name})")
 
-    logger.info(f"Downloaded: {', '.join(file_summaries)}")
+    logger.info("Downloaded: %s", ", ".join(file_summaries))
     return downloaded
 
 
-def prefix_change_paths(git_log_dto: GitLogDTO, repo_name: str) -> None:
-    """
-    Prefix all file paths in a GitLogDTO with the repo name.
-    Modifies the DTO in place. Skips DEV_NULL paths.
-
-    Args:
-        git_log_dto: Parsed git log DTO to modify
-        repo_name: Repository name to use as prefix (e.g., "backend")
-    """
-    for commit_dto in git_log_dto.commits:
-        for change_dto in commit_dto.changes:
-            if change_dto.old_file_name != DEV_NULL:
-                change_dto.old_file_name = f"{repo_name}/{change_dto.old_file_name}"
-            if change_dto.new_file_name != DEV_NULL:
-                change_dto.new_file_name = f"{repo_name}/{change_dto.new_file_name}"
-
-
-def build_graph_from_local_files() -> Dict:
-    """
-    Builds the project graph from local test-input files and links them together.
-
-    Returns:
-        Dict with 'git', 'jira', 'github' keys containing project objects
-    """
-    base_path = Path(__file__).parent.parent / "test-input"
-
-    logger.info(f"Loading files from: {base_path}")
-
-    # InspectorGit — use the same multi-repo pipeline as production
-    iglog_file = base_path / "inspector-git" / "zeppelin.iglog"
-    repo_name = iglog_file.stem  # "zeppelin"
-    logger.info(f"Loading Git repo '{repo_name}' from {iglog_file.name}")
-    with open(iglog_file, "r", encoding="utf-8") as f:
-        git_log_dto = IGLogReader().read(f)
-
-    prefix_change_paths(git_log_dto, repo_name)
-
-    git_project = GitProject(name="LocalTest")
-    change_factory = SimpleChangeFactory()
-    for commit_dto in git_log_dto.commits:
-        CommitTransformer.add_to_project(commit_dto, git_project, False, change_factory)
-
-    # Compute branch IDs — matches original GitProjectTransformer behavior
-    first_commit = next(iter(git_project.git_commit_registry.all), None)
-    if first_commit:
-        _compute_branch_ids(first_commit)
-
-    # Jira
-    jira_file = base_path / "jira-miner" / "ZEPPELIN-detailed-issues.json"
-    logger.info(f"  - Loading JIRA data from {jira_file.name}...")
-    jira_loader = JiraJsonLoader(str(jira_file))
-    jira_data = jira_loader.load()
-    jira_project = JiraProjectTransformer(jira_data, name="Jira Project").transform()
-
-    # GitHub
-    github_file = base_path / "github-miner" / "githubProject.json"
-    logger.info(f"  - Loading GitHub data from {github_file.name}...")
-    github_loader = GithubJsonLoader(str(github_file))
-    github_data = github_loader.load()
-    github_project = GitHubProjectTransformer(github_data, name="GitHub Project").transform()
-
-    # Lizard (optional)
-    lizard_metrics: list = []
-    lizard_file = base_path / "lizard" / f"{repo_name}.csv"
-    if lizard_file.exists():
-        logger.info(f"  - Loading Lizard CSV from {lizard_file.name}...")
-        rows = LizardCsvLoader(str(lizard_file)).load()
-        lizard_metrics = LizardProjectTransformer(rows, repo_root=repo_name, repo_prefix=repo_name).transform()
-
-    # JaFax (optional). Conventional layout file name: <repo>-layout.json.
-    code_structure = None
-    jafax_file = base_path / "jafax" / f"{repo_name}-layout.json"
-    if jafax_file.exists():
-        logger.info(f"  - Loading JaFax layout from {jafax_file.name}...")
-        code_structure = parse_codestructure(
-            str(jafax_file), CodeStructureFormat.JAFAX,
-            path_prefix=None,
-        )
-
-    # DuDe duplication (optional). Conventional file names:
-    #   <repo>-external_duplication.csv (headerless)
-    #   <repo>-internal_duplication.json
-    duplication = None
-    dude_external = base_path / "dude" / f"{repo_name}-external_duplication.csv"
-    dude_internal = base_path / "dude" / f"{repo_name}-internal_duplication.json"
-    if dude_external.exists() or dude_internal.exists():
-        logger.info(
-            "  - Loading DuDe duplication (external=%s internal=%s)...",
-            dude_external.name if dude_external.exists() else "missing",
-            dude_internal.name if dude_internal.exists() else "missing",
-        )
-        duplication = parse_dude(
-            external_csv_path=str(dude_external) if dude_external.exists() else None,
-            internal_json_path=str(dude_internal) if dude_internal.exists() else None,
-            path_prefix=repo_name,
-        )
-
-    # Insider code-smells (optional). Conventional file name:
-    #   <repo>-code_smells.json (note: hyphen-prefix, NOT literal "codeSmells.json").
-    quality_issues = None
-    insider_file = base_path / "insider" / f"{repo_name}-code_smells.json"
-    if insider_file.exists():
-        logger.info(f"  - Loading Insider code-smells from {insider_file.name}...")
-        quality_issues = parse_insider(str(insider_file), path_prefix=None)
-
-    # Link projects together
-    logger.info("Linking projects")
-    ProjectLinker.link_projects(github_project, jira_project, jira_data)
-    ProjectLinker.link_projects(jira_project, git_project)
-    ProjectLinker.link_projects(github_project, git_project)
-
-    logger.info("Graph built successfully")
-    logger.info(f"Git commits: {len(git_project.git_commit_registry.all)}")
-    logger.info(f"JIRA issues: {len(jira_project.issue_registry.all)}")
-    logger.info(f"GitHub PRs: {len(github_project.pull_request_registry.all)}")
-    if lizard_metrics:
-        logger.info(f"Lizard FileMetrics: {len(lizard_metrics)}")
-    if code_structure is not None:
-        logger.info(
-            f"JaFax CodeStructure: types={len(code_structure.type_registry.all)} "
-            f"methods={len(code_structure.method_registry.all)} "
-            f"refs={len(code_structure.reference_registry.all)}"
-        )
-    if duplication is not None:
-        logger.info(
-            f"DuDe Duplication: external_pairs={len(duplication.external_pairs)} "
-            f"internal_files={len(duplication.internal_by_file)}"
-        )
-    if quality_issues is not None:
-        logger.info(
-            f"Insider QualityIssues: issues={len(quality_issues.issues)} "
-            f"files={len(quality_issues.file_paths)}"
-        )
-
-    return {
-        "git": git_project,
-        "jira": jira_project,
-        "github": github_project,
-        "metrics": {"lizard": lizard_metrics},
-        "code_structure": code_structure,
-        "duplication": duplication,
-        "quality_issues": quality_issues,
-    }
-
-
-def build_graph_from_downloaded_files(downloaded: DownloadedFiles, project_name: str = "Project") -> Dict:
-    """
-    Builds the project graph from downloaded serialized files and links them together.
-    Supports multiple git (iglog) files — all repos are merged into a single GitProject
-    with file paths prefixed by repo name.
-
-    Args:
-        downloaded: DownloadedFiles with git_files list, optional jira_file and github_file
-        project_name: Name for the merged GitProject
-
-    Returns:
-        Dict with 'git', 'jira', 'github' keys containing project objects
-    """
-    logger.info("Building graph from downloaded files")
-
-    git_project = None
-    jira_project = None
-    github_project = None
-    jira_data = None
-
-    # Load Git data — multiple iglog files merged into a single GitProject
-    if downloaded.git_files:
-        git_project = GitProject(name=project_name)
-        change_factory = SimpleChangeFactory()
-
-        for repo_name, git_file in downloaded.git_files:
-            logger.info(f"Loading Git repo '{repo_name}' from {git_file.name}")
-            with open(git_file, "r", encoding="utf-8") as f:
-                git_log_dto = IGLogReader().read(f)
-
-            # Always prefix file paths with repo name
-            prefix_change_paths(git_log_dto, repo_name)
-
-            # Add all commits from this repo to the shared project
-            for commit_dto in git_log_dto.commits:
-                CommitTransformer.add_to_project(
-                    commit_dto, git_project, False, change_factory
-                )
-
-        # Compute branch IDs — matches original GitProjectTransformer behavior
-        # (only processes the first commit in the registry)
-        first_commit = next(iter(git_project.git_commit_registry.all), None)
-        if first_commit:
-            _compute_branch_ids(first_commit)
-
-        logger.info(
-            f"Merged {len(downloaded.git_files)} git repo(s): "
-            f"{len(git_project.git_commit_registry.all)} commits, "
-            f"{len(git_project.account_registry.all)} authors, "
-            f"{len(git_project.file_registry.all)} files"
-        )
-
-    # Load JIRA data if available
-    if downloaded.jira_file:
-        jira_file = downloaded.jira_file
-        jira_loader = JiraJsonLoader(str(jira_file))
-        jira_data = jira_loader.load()
-        jira_project = JiraProjectTransformer(jira_data, name="Jira Project").transform()
-
-    # Load GitHub data if available
-    if downloaded.github_file:
-        github_file = downloaded.github_file
-        github_loader = GithubJsonLoader(str(github_file))
-        github_data = github_loader.load()
-        github_project = GitHubProjectTransformer(github_data, name="GitHub Project").transform()
-
-    # Load Lizard CSV if available. Lizard emits absolute paths; the transformer
-    # normalises against the first downloaded git repo's name so paths join with
-    # the iglog-side repo prefix.
-    lizard_metrics: list = []
-    if downloaded.lizard_file:
-        rows = LizardCsvLoader(str(downloaded.lizard_file)).load()
-        prefix = downloaded.git_files[0][0] if downloaded.git_files else None
-        lizard_metrics = LizardProjectTransformer(
-            rows, repo_root=prefix, repo_prefix=prefix,
-        ).transform()
-
-    # JaFax CodeStructure (optional). The path_prefix mirrors the iglog repo
-    # prefix so JaFax file paths join with git File.last_existing_name(); the
-    # JaFax `name` strings are typically already prefixed with the project
-    # segment (e.g. "zeppelin/...") so we leave them unchanged.
-    code_structure = None
-    if downloaded.jafax_file:
-        code_structure = parse_codestructure(
-            str(downloaded.jafax_file), CodeStructureFormat.JAFAX,
-            path_prefix=None,
-        )
-
-    # DuDe duplication (optional). Same prefix story as JaFax: DuDe paths in
-    # the observed Zeppelin run are already prefixed with the project segment,
-    # so passing the iglog prefix is a no-op when paths already match — but
-    # keeps a future ingest run that emits unprefixed paths in sync.
-    duplication = None
-    if downloaded.dude_external_file or downloaded.dude_internal_file:
-        prefix = downloaded.git_files[0][0] if downloaded.git_files else None
-        duplication = parse_dude(
-            external_csv_path=(
-                str(downloaded.dude_external_file)
-                if downloaded.dude_external_file else None
-            ),
-            internal_json_path=(
-                str(downloaded.dude_internal_file)
-                if downloaded.dude_internal_file else None
-            ),
-            path_prefix=prefix,
-        )
-
-    # Insider code-smells (optional). Same prefix story as DuDe/JaFax: Insider
-    # paths in the observed Zeppelin run are already prefixed with the project
-    # segment, so passing the iglog prefix is a no-op when paths already match.
-    quality_issues = None
-    if downloaded.quality_issues_file:
-        prefix = downloaded.git_files[0][0] if downloaded.git_files else None
-        quality_issues = parse_insider(
-            str(downloaded.quality_issues_file),
-            path_prefix=prefix,
-        )
-
-    # Link projects together (only if both projects exist)
-    if github_project and jira_project and jira_data:
-        ProjectLinker.link_projects(github_project, jira_project, jira_data)
-    if jira_project and git_project:
-        ProjectLinker.link_projects(jira_project, git_project)
-    if github_project and git_project:
-        ProjectLinker.link_projects(github_project, git_project)
-
-    # Build stats summary
-    stats = []
-    if git_project:
-        stats.append(f"Git commits: {len(git_project.git_commit_registry.all)}")
-    if jira_project:
-        stats.append(f"JIRA issues: {len(jira_project.issue_registry.all)}")
-    if github_project:
-        stats.append(f"GitHub PRs: {len(github_project.pull_request_registry.all)}")
-    if lizard_metrics:
-        stats.append(f"Lizard FileMetrics: {len(lizard_metrics)}")
-    if code_structure is not None:
-        stats.append(
-            f"JaFax types/methods/refs: {len(code_structure.type_registry.all)}"
-            f"/{len(code_structure.method_registry.all)}"
-            f"/{len(code_structure.reference_registry.all)}"
-        )
-    if duplication is not None:
-        stats.append(
-            f"DuDe pairs/internal-files: {len(duplication.external_pairs)}"
-            f"/{len(duplication.internal_by_file)}"
-        )
-    if quality_issues is not None:
-        stats.append(
-            f"Insider issues/files: {len(quality_issues.issues)}"
-            f"/{len(quality_issues.file_paths)}"
-        )
-
-    logger.info(f"Project built successfully - {', '.join(stats)}")
-
-    return {
-        "git": git_project,
-        "jira": jira_project,
-        "github": github_project,
-        "metrics": {"lizard": lizard_metrics},
-        "code_structure": code_structure,
-        "duplication": duplication,
-        "quality_issues": quality_issues,
-    }
-
-
-def _compute_branch_ids(commit) -> None:
-    """
-    Compute branch ID for a single commit.
-    Matches the original GitProjectTransformer._compute_branch_ids behavior.
-    """
-    parents = commit.parents
-    if commit.is_merge_commit:
-        commit.branch_id = parents[0].branch_id if parents else 0
-    elif not parents or parents[0].is_split_commit:
-        commit.branch_id = 1
-    else:
-        commit.branch_id = parents[0].branch_id
-
-
-def save_pickle_to_disk(graph_data: Dict, output_path: Path) -> None:
-    """
-    Serializes graph data to pickle file on local filesystem.
-
-    Args:
-        graph_data: Dict containing 'git', 'jira', 'github' project objects
-        output_path: Path where pickle file should be saved
-    """
-    # Ensure parent directory exists
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-
-    # Serialize with highest protocol for performance
-    with open(output_path, "wb") as f:
-        pickle.dump(graph_data, f, protocol=pickle.HIGHEST_PROTOCOL)
-
-
 def update_project_status(project_id: str, status: str) -> None:
-    """
-    Updates the status of a project in the database.
-
-    Args:
-        project_id: Project UUID
-        status: New status ('processing', 'ready', 'error', etc.)
-    """
-    supabase: Client = create_client(SUPABASE_URL, SUPABASE_SERVICE_KEY)
-
+    """Update ``projects.status`` row for ``project_id``."""
     try:
-        supabase.table("projects").update({
-            "status": status,
-            "updated_at": "now()"
-        }).eq("id", project_id).execute()
-    except Exception as e:
-        logger.warning(f"Failed to update project status: {e}")
+        with connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "update projects set status = %s where id = %s",
+                    (status, project_id),
+                )
+    except Exception as exc:
+        logger.warning(f"Failed to update project status: {exc}")
 
 
-def get_next_project_to_process() -> Optional[Dict]:
+def fetch_project_component_mapping(project_id: str) -> Optional[Dict[str, Any]]:
+    """Return the per-project ``component_mapping`` JSONB blob or ``None``.
+
+    Reads ``projects.component_mapping`` (added by the B2 migration). Returns
+    ``None`` when the row is absent, the column is null, or the database is
+    unreachable — the caller falls back to the operator-level
+    ``components_mapping_path`` knob (dev/test fallback).
     """
-    Queries database for the next project with status='processing'.
-    Returns oldest project first (by updated_at).
-
-    Returns:
-        Project dict or None if no projects to process
-    """
-    supabase: Client = create_client(SUPABASE_URL, SUPABASE_SERVICE_KEY)
-
-    response = supabase.table("projects").select("*").eq("status", "processing").order("updated_at").limit(1).execute()
-
-    if response.data and len(response.data) > 0:
-        return response.data[0]
+    try:
+        row = query_one(
+            "select component_mapping from projects where id = %s limit 1",
+            (project_id,),
+        )
+    except Exception as exc:  # noqa: BLE001 — best-effort, fall back on any error
+        logger.warning(
+            "Failed to fetch component_mapping for project %s: %s", project_id, exc
+        )
+        return None
+    if not row:
+        return None
+    mapping = row.get("component_mapping")
+    if isinstance(mapping, str):
+        import json as _json
+        try:
+            mapping = _json.loads(mapping)
+        except ValueError:
+            mapping = None
+    if isinstance(mapping, dict):
+        return mapping
+    if mapping is not None:
+        # Defensive: the column is JSONB so the driver normally returns
+        # dict / None / list. A non-dict, non-null value here means
+        # something wrote a malformed payload (e.g. a top-level list or
+        # a string). Silently returning None hides the bug from anyone
+        # debugging "why did my mapping not stick?".
+        logger.warning(
+            "component_mapping for project %s is non-null but not a dict "
+            "(type=%s) — falling back to heuristic",
+            project_id, type(mapping).__name__,
+        )
     return None
 
 
-def upload_pickle_to_supabase(pickle_path: Path, user_id: str, project_id: str) -> None:
+def get_next_project_to_process() -> Optional[Dict]:
+    """Return the oldest ``status='processing'`` project, or None."""
+    project = query_one(
+        "select * from projects where status = 'processing' "
+        "order by updated_at asc limit 1"
+    )
+    # psycopg returns Postgres ``uuid`` columns as ``uuid.UUID`` objects, but
+    # the whole build path was written to the old Supabase/PostgREST contract
+    # where ``id`` arrived as a JSON string (``Graph``/``ConfigOverridesRow``
+    # declare ``project_id: str``). Coerce at this boundary so downstream code
+    # keeps seeing strings.
+    if project is not None and project.get("id") is not None:
+        project["id"] = str(project["id"])
+    return project
+
+
+# ---------------------------------------------------------------------------
+# Pickle storage — per-registry layout via PickleStore.
+# ---------------------------------------------------------------------------
+def _project_pickle_dir(project_id: str) -> Path:
+    """Return the local directory where this project's registries land.
+
+    The directory hosts the per-registry ``.pkl`` + ``meta.json`` shape
+    that :class:`PickleStore` writes. Chunk-10 cleanup will revisit the
+    Supabase-storage upload layer (legacy uploads a single ``graph.pkl``;
+    v2 has many small files).
     """
-    Uploads pickle file to Supabase Storage.
+    return Path(f"/tmp/pickles/{project_id}")
 
-    Args:
-        pickle_path: Path to local pickle file
-        user_id: User UUID for storage path
-        project_id: Project UUID for storage path
+
+def save_graph_to_disk(graph: Graph) -> Path:
+    """Dump ``graph`` into ``/tmp/pickles/<project_id>/`` and return the dir."""
+    out_dir = _project_pickle_dir(graph.project_id)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    store = PickleStore(out_dir)
+    graph.dump(store)
+    return out_dir
+
+
+# ---------------------------------------------------------------------------
+# Build orchestration.
+# ---------------------------------------------------------------------------
+def _downloaded_files_to_bundles(
+    downloaded: DownloadedFiles, project_name: str = "Project"
+) -> Mapping[SourceKind, List[Mapping]]:
+    """Translate :class:`DownloadedFiles` into per-source entity bundles.
+
+    Each bridge module under ``src/common/domains/<x>/bridge.py`` exports
+    a ``build_<x>_bundle(path, ...) -> Mapping`` callable that parses the
+    raw payload and emits the entity-bundle shape its sibling Transformer
+    consumes. We invoke them per-source and assemble the dispatch dict.
+
+    Multi-repo (F1): every uploaded ``.iglog`` is processed; the git
+    bundle list carries one entry per repo. Entity ids on the git side
+    are repo-scoped (:meth:`git.Commit.make_id` / :meth:`git.File.make_id`)
+    so multiple repos coexist without collisions in :class:`CommitRegistry`
+    / :class:`FileRegistry`. Cross-source SHA joins (GitHub → git) go
+    through :class:`CommitRegistry.by_sha` so they remain repo-agnostic.
+
+    Dependent bridges (lizard, code-structure, duplication, quality) each
+    take a single ``repo_name`` because their input artefacts (one CSV
+    per project, one JSON per project) carry bare file paths with no
+    repo discriminator. With multiple iglogs uploaded but only one
+    dependent artefact, we anchor the dependent bridge to the first
+    repo's name (the one the upstream tools most likely scanned) and
+    emit a warning so the operator knows which repo the metrics will
+    bind to.
+
+    Each dependent bridge attaches a ``"_meta"`` entry to its bundle
+    reporting ``all_rows_self_repo`` — when every parsed row carried
+    its own ``repo_name`` no fallback was needed and the warning is
+    suppressed for that bundle. The ``"_meta"`` key is popped before
+    handing the bundle to its transformer so the strict bundle-key
+    validation in :meth:`Transformer.collect_bundle` stays happy.
     """
-    if not user_id or not project_id:
-        raise ValueError("user_id and project_id are required")
+    bundles: Dict[SourceKind, List[Mapping]] = {}
 
-    # Initialize Supabase client with service key (bypasses RLS)
-    supabase: Client = create_client(SUPABASE_URL, SUPABASE_SERVICE_KEY)
+    # Pick the repo_name dependent bridges (lizard / code-structure /
+    # duplication / quality) bind their refs against. Falls back to
+    # project_name when no git repo was uploaded.
+    if downloaded.git_files:
+        repo_name = downloaded.git_files[0][0]
+    else:
+        repo_name = project_name
 
-    # Storage path: {user_id}/{project_id}/graph.pkl
-    storage_path = f"{user_id}/{project_id}/graph.pkl"
+    if downloaded.git_files:
+        git_bundles: List[Mapping] = []
+        for repo, git_path in downloaded.git_files:
+            git_bundles.append(build_git_bundle(git_path, repo, project_name))
+        bundles[SourceKind.GIT] = git_bundles
 
-    # Read pickle file
-    with open(pickle_path, "rb") as f:
-        pickle_bytes = f.read()
+    if downloaded.jira_file is not None:
+        bundles[SourceKind.JIRA] = [
+            build_jira_bundle(downloaded.jira_file, project_name)
+        ]
 
-    # Upload to Supabase Storage (overwrites if exists)
-    try:
-        supabase.storage.from_("project-graphs").upload(
-            path=storage_path,
-            file=pickle_bytes,
-            file_options={"content-type": "application/octet-stream", "upsert": "true"}
+    if downloaded.github_file is not None:
+        bundles[SourceKind.GITHUB] = [
+            build_github_bundle(downloaded.github_file, project_name)
+        ]
+
+    # Track per-source whether the bundle was fully self-described so
+    # we can suppress the multi-repo warning when every row of every
+    # dependent artefact carried its own ``repo_name``.
+    self_repo_by_source: Dict[str, bool] = {}
+
+    def _capture_meta(source_label: str, bundle: Dict[str, Any]) -> Mapping[str, Any]:
+        meta = bundle.pop("_meta", None) or {}
+        self_repo_by_source[source_label] = bool(meta.get("all_rows_self_repo"))
+        return bundle
+
+    if downloaded.lizard_file is not None:
+        bundle = dict(
+            build_lizard_bundle(downloaded.lizard_file, repo_name, project_name)
         )
-    except Exception as e:
-        # If file exists, try update instead
-        if "already exists" in str(e).lower():
-            supabase.storage.from_("project-graphs").update(
-                path=storage_path,
-                file=pickle_bytes,
-                file_options={"content-type": "application/octet-stream"}
+        bundles[SourceKind.LIZARD] = [_capture_meta("lizard", bundle)]
+
+    if downloaded.codeframe_file is not None:
+        bundle = dict(
+            build_code_structure_bundle(
+                downloaded.codeframe_file, repo_name, project_name
             )
-        else:
-            raise
+        )
+        bundles[SourceKind.CODE_STRUCTURE] = [_capture_meta("code_structure", bundle)]
 
-    size_mb = len(pickle_bytes) / (1024 * 1024)
-    logger.info(f"Saved to Supabase Storage - Size: {size_mb:.2f} MB")
+    if (
+        downloaded.dude_external_file is not None
+        or downloaded.dude_internal_file is not None
+    ):
+        bundle = dict(
+            build_duplication_bundle(
+                downloaded.dude_external_file,
+                downloaded.dude_internal_file,
+                repo_name,
+                project_name,
+            )
+        )
+        bundles[SourceKind.DUPLICATION] = [_capture_meta("duplication", bundle)]
+
+    if downloaded.quality_issues_file is not None:
+        bundle = dict(
+            build_quality_bundle(
+                downloaded.quality_issues_file, repo_name, project_name
+            )
+        )
+        bundles[SourceKind.QUALITY] = [_capture_meta("quality", bundle)]
+
+    if downloaded.app_inspector_file is not None:
+        bundle = dict(
+            build_app_inspector_bundle(
+                downloaded.app_inspector_file, repo_name, project_name
+            )
+        )
+        bundles[SourceKind.APP_INSPECTOR] = [_capture_meta("app_inspector", bundle)]
+
+    # Multi-repo warning: only fire for bundles that had at least one
+    # row fall back to the function-level anchor. Bundles where every
+    # row carried its own repo_name resolve correctly without any
+    # rebinding so the warning would be a false alarm.
+    if len(downloaded.git_files) > 1 and self_repo_by_source:
+        falling_back = [src for src, self_ok in self_repo_by_source.items() if not self_ok]
+        if falling_back:
+            other_repos = [r for r, _ in downloaded.git_files[1:]]
+            logger.warning(
+                "Multiple git repos uploaded (%s) but %s bridge(s) have "
+                "rows without a self-describing repo_name — binding "
+                "fallback refs to %r; data from %s will not resolve",
+                [r for r, _ in downloaded.git_files],
+                falling_back,
+                repo_name,
+                other_repos,
+            )
+
+    return bundles
 
 
-def process_project(project_id: str, user_id: str, project_name: str = "Project") -> bool:
+def build_graph(
+    project_id: str,
+    project_name: str = "Project",
+    *,
+    config: Optional[EnrichmentConfig] = None,
+    compute_annotated_lines: bool = False,
+) -> Tuple[Graph, PipelineResult]:
+    """End-to-end build for ``project_id``.
+
+    Steps:
+
+    1. Download serialized files from Supabase Storage.
+    2. Translate them into per-source entity bundles (deferred to Chunk
+       10 — see :func:`_downloaded_files_to_bundles`).
+    3. Build a typed :class:`Graph` via :func:`build_graph_from_bundles`.
+    4. Run the v2 enrichment pipeline.
+    5. Dump the graph to local pickle storage.
+
+    Returns the (graph, pipeline_result) tuple. The server's ``/build``
+    endpoint hands the graph to :data:`graph_store` and surfaces the
+    pipeline result to the UI.
+
+    ``compute_annotated_lines`` is the per-build toggle threaded from the
+    ``/build`` request body; when ``True`` it is forwarded to
+    :func:`build_graph_from_bundles`, which flips the effective config so
+    :class:`GitLineAttributionMetric` runs (plan §4).
     """
-    Processes a single project: downloads files, builds graph, uploads pickle.
+    progress.report(project_id, 5, "starting")
+    downloaded = download_serialized_files_from_supabase(project_id)
+    progress.report(project_id, 15, "staging files")
+    bundles = _downloaded_files_to_bundles(downloaded, project_name=project_name)
+    # Per-project mapping wins over EnrichmentConfig.components_mapping_path.
+    # Cloning preserves the caller's config (e.g. test fixtures); we only
+    # inject the data when Supabase has something to inject.
+    mapping_data = fetch_project_component_mapping(project_id)
+    if mapping_data is not None:
+        # ``DEFAULT_CONFIG`` is referenced here AND inside
+        # ``_apply_project_overrides`` — duplication is intentional. Each
+        # branch defends its own concern (component mapping vs. config
+        # overrides) so a failure in one does not cascade into the other.
+        effective_config = replace(
+            config if config is not None else DEFAULT_CONFIG,
+            components_mapping_data=mapping_data,
+        )
+    else:
+        effective_config = config
+    effective_config = _apply_project_overrides(project_id, effective_config)
+    graph, pipeline_result = build_graph_from_bundles(
+        project_id,
+        bundles,
+        config=effective_config,
+        compute_annotated_lines=compute_annotated_lines,
+    )
+    progress.report(project_id, 95, "saving")
+    save_graph_to_disk(graph)
+    return graph, pipeline_result
 
-    Args:
-        project_id: Project UUID to process
-        user_id: User UUID (for storage path)
-        project_name: Human-readable project name (used as GitProject name)
 
-    Returns:
-        True if successful, False otherwise
+def _apply_project_overrides(
+    project_id: str, base: Optional[EnrichmentConfig]
+) -> Optional[EnrichmentConfig]:
+    """Overlay the project's stored config overrides onto ``base``.
+
+    Reads ``ConfigOverridesRepository`` once per ``build_graph`` call.
+    On any failure (Supabase down, corrupt JSONB shape) the build path
+    must stay alive — log the offending field/project at ERROR and
+    return ``base`` unchanged so enrichment runs against defaults.
+
+    The repository's ``get`` already degrades to an empty-overrides row
+    when Supabase is unreachable, so the only raise path here is
+    :class:`OverrideCoercionError` from :func:`apply_overrides` —
+    triggered by hand-edited or schema-drifted JSONB.
     """
     try:
-        # Step 1: Update status to 'processing'
+        overrides = ConfigOverridesRepository().get(project_id).overrides
+    except Exception:  # noqa: BLE001 — never block the build on Supabase errors
+        logger.exception(
+            "config_overrides setup failed for project %s — using base config",
+            project_id,
+        )
+        return base
+    if not overrides:
+        return base
+    starting_point = base if base is not None else DEFAULT_CONFIG
+    try:
+        return apply_overrides(starting_point, overrides)
+    except OverrideCoercionError as exc:
+        logger.error(
+            "config_overrides merge failed for project %s on field %s: %s — "
+            "using base config",
+            project_id,
+            exc.field,
+            exc,
+        )
+        return base
+
+
+# ---------------------------------------------------------------------------
+# Background loop entry point (unchanged shape).
+# ---------------------------------------------------------------------------
+def process_project(project_id: str, project_name: str = "Project") -> bool:
+    """Run the full build for one project; update DB status on the way."""
+    try:
         update_project_status(project_id, "processing")
-
-        # Step 2: Download serialized files from Supabase Storage
-        downloaded = download_serialized_files_from_supabase(project_id)
-
-        # Step 3: Build graph from downloaded files
-        graph_data = build_graph_from_downloaded_files(downloaded, project_name=project_name)
-
-        # Step 4: Save to local filesystem (temporary)
-        output_path = Path("/tmp/pickles/graph.pkl")
-        save_pickle_to_disk(graph_data, output_path)
-
-        # Step 5: Upload to Supabase Storage
-        upload_pickle_to_supabase(output_path, user_id, project_id)
-
-        # Step 6: Update status to 'ready'
+        graph, result = build_graph(project_id, project_name=project_name)
+        progress.report(project_id, 100, "ready")
         update_project_status(project_id, "ready")
-
+        logger.info(
+            "Built graph for %s — %d builders, %d metrics, %d errors",
+            project_id,
+            len(result.builders_run),
+            len(result.metrics_run),
+            len(result.errors),
+        )
         return True
-
-    except Exception as e:
+    except Exception as exc:
         logger.error("ERROR: Processing failed")
-        logger.error(f"{type(e).__name__}: {e}")
+        logger.error(f"{type(exc).__name__}: {exc}")
         import traceback
-        traceback.print_exc()
 
-        # Update status to 'error'
+        traceback.print_exc()
         try:
             update_project_status(project_id, "error")
-        except:
+        except Exception:  # noqa: BLE001 — status update is best-effort
             pass
-
         return False
+    finally:
+        # Drop the progress entry so the dashboard bar disappears once the
+        # build has finished (or failed) — no stuck bars.
+        progress.clear(project_id)
 
 
 def run_loop(poll_interval: int = 60) -> int:
-    """
-    Continuously poll database and process projects.
-
-    Args:
-        poll_interval: Seconds to wait between polls
-
-    Returns:
-        Exit code (never returns in normal operation)
-    """
-    logger.info("Processor started - Polling database every 60s")
-
+    """Continuously poll Supabase and process projects."""
+    logger.info(f"Processor started - Polling database every {poll_interval}s")
     try:
         while True:
             project = get_next_project_to_process()
-
             if project:
                 logger.info(f"Processing: {project['name']} ({project['id']})")
-                process_project(project["id"], project["user_id"], project["name"])
+                process_project(project["id"], project["name"])
             else:
                 logger.info(f"No projects to process. Waiting {poll_interval}s")
-
             time.sleep(poll_interval)
-
     except KeyboardInterrupt:
         logger.info("Stopped by user (Ctrl+C)")
         return 0
 
 
-def main():
-    """Main entry point for the processor."""
-    # Increase recursion limit for large graph pickling
+def main() -> int:
     sys.setrecursionlimit(RECURSION_LIMIT)
-
     parser = argparse.ArgumentParser(
-        description="ScriptBeeAssistant Graph Processor - Builds graph from serialized files and uploads to Supabase",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="""
-Runs continuously, polling database for projects with status='processing'.
-Press Ctrl+C to stop.
-        """,
+        description=(
+            "ScriptBeeAssistant Graph Processor (v2) — builds a typed Graph "
+            "from per-source transformers + the v2 enrichment pipeline."
+        ),
     )
-
     parser.add_argument(
         "--poll-interval",
         type=int,
         default=60,
-        help="Polling interval in seconds (default: 60)",
+        help="Polling interval in seconds (default: 60).",
     )
-
     args = parser.parse_args()
-
     return run_loop(args.poll_interval)
+
+
+__all__ = [
+    "DownloadedFiles",
+    "apply_transform_result",
+    "build_graph",
+    "build_graph_from_bundles",
+    "download_serialized_files_from_supabase",
+    "fetch_project_component_mapping",
+    "get_transformer",
+    "process_project",
+    "run_loop",
+    "save_graph_to_disk",
+    "update_project_status",
+]
 
 
 if __name__ == "__main__":

@@ -6,7 +6,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from typing import List, Optional
+from typing import Dict, List, Optional
 
 from src.smart_merge.types import Similarity, SimilarityType
 
@@ -75,6 +75,8 @@ def compute_best_similarity(
     name_b: str,
     email_b: Optional[str],
     login_b: Optional[str],
+    name_token_df: Optional[Dict[str, int]] = None,
+    total_identities: int = 0,
 ) -> Similarity:
     """
     Compute the best similarity between two identities using all available fields.
@@ -84,12 +86,27 @@ def compute_best_similarity(
     itself — if the best signal came from name matching, only a non-name
     signal (email, login, cross) counts as corroboration.
 
+    Cross-field comparisons bridge sources that share no directly-comparable
+    field (e.g. Git has email-only, GitHub/Jira have login-only):
+    - login ↔ email-prefix
+    - name  ↔ email-prefix  (catches ``firstname.lastname@`` emails)
+    - name  ↔ login         (catches logins that encode the person's name)
+
     Final guard:
     - SIMILAR → require corroboration from a different field.
-    - IDENTICAL with ≤ 2 tokens → require corroboration from a different field.
+    - IDENTICAL with ≤ 2 tokens → require corroboration from a different field,
+      UNLESS the matching name is *distinctive* (its shared tokens are rare
+      across the whole identity set — see ``name_token_df`` / IDF). This lets
+      ``"Dragoș Zaharia"`` merge across sources on the name alone while
+      ``"John Smith"`` still demands corroboration.
     - IDENTICAL with ≥ 3 tokens → allowed (truly distinctive names).
     - Single-token name with SIMILAR type → always DIFFERENT (partial
       overlap of single tokens is noise).
+
+    ``name_token_df`` maps a lowercased name token to the number of identities
+    it appears in; ``total_identities`` is that set's size. When either is
+    absent the distinctiveness relaxation is disabled (behaviour is identical
+    to the pre-IDF engine).
     """
     # Source-field tags so we know which field produced the best signal
     FIELD_NAME = "name"
@@ -144,6 +161,20 @@ def compute_best_similarity(
         prefix_a = email_address_without_domain(email_a)
         _consider(check_name_similarity(login_b, prefix_a), FIELD_CROSS)
 
+    # Cross-field: name vs email prefix. Bridges an identity whose email
+    # encodes the name (firstname.lastname@) to one that only carries a name.
+    if email_b:
+        _consider(check_name_similarity(name_a, email_address_without_domain(email_b)), FIELD_CROSS)
+    if email_a:
+        _consider(check_name_similarity(name_b, email_address_without_domain(email_a)), FIELD_CROSS)
+
+    # Cross-field: name vs login. Bridges a name-only identity to one whose
+    # login encodes the name (e.g. "Alice Smith" ↔ login "alicesmith").
+    if login_b:
+        _consider(check_name_similarity(name_a, login_b), FIELD_CROSS)
+    if login_a:
+        _consider(check_name_similarity(name_b, login_a), FIELD_CROSS)
+
     # Corroboration must come from a DIFFERENT field than best_field.
     corroborated = any(f != best_field for f in agreeing_fields)
 
@@ -154,9 +185,36 @@ def compute_best_similarity(
         and best.strength <= 2
         and not corroborated
     ):
-        return Similarity(SimilarityType.DIFFERENT, 0)
+        distinctive = best_field == FIELD_NAME and _shared_name_is_distinctive(
+            name_a, name_b, name_token_df, total_identities
+        )
+        if not distinctive:
+            return Similarity(SimilarityType.DIFFERENT, 0)
 
     return best
+
+
+def _shared_name_is_distinctive(
+    name_a: str,
+    name_b: str,
+    df: Optional[Dict[str, int]],
+    total: int,
+) -> bool:
+    """A 2-token exact-name match may skip corroboration only when every
+    shared name token is *rare* across the whole identity set.
+
+    A token is rare if it appears in at most ``max(2, 2% of identities)``
+    distinct identities. Common tokens like "john"/"smith" stay above that
+    cap and remain corroboration-gated; a surname carried by only the two
+    identities being compared (df == 2) always qualifies.
+    """
+    if not df or total <= 0:
+        return False
+    shared = {t.value for t in _tokenize(name_a)} & {t.value for t in _tokenize(name_b)}
+    if len(shared) < 2:
+        return False
+    cap = max(2, int(total * 0.02))
+    return all(df.get(tok, 0) <= cap for tok in shared)
 
 
 # ── Internal implementation ─────────────────────────────────────────────────────

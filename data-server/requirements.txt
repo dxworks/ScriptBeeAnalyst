@@ -1,8 +1,10 @@
 pydantic>=2.0.0,<3.0.0
 fastapi
 uvicorn[standard]
+python-multipart
 matplotlib
 numpy
-supabase
-python-jose[cryptography]
+psycopg[binary]>=3.1
+psycopg_pool>=3.2
+yoyo-migrations>=9.0
 python-dotenv

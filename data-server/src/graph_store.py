@@ -1,56 +1,44 @@
+"""Thread-safe in-memory storage for typed v2 :class:`Graph` instances.
+
+Chunk 8 rewrite: the same ``get`` / ``set`` / ``delete`` / ``exists`` /
+``clear`` / ``get_all_project_ids`` surface as the legacy
+``GraphStore``, but the value type is now :class:`Graph` (a typed
+Pydantic model with one registry per domain) instead of the legacy
+``dict[str, Any]`` payload. This keeps every server endpoint compiling
+unchanged while moving the in-memory shape to the v2 model.
 """
-Thread-safe in-memory storage for project graphs.
-Stores graphs by project_id for isolation.
-"""
+from __future__ import annotations
 
 import threading
-from typing import Dict, Optional, Any
+from typing import Dict, Optional
+
+from src.common.kernel import Graph
 
 
 class GraphStore:
-    """
-    Thread-safe dictionary for storing project graphs.
-    Each project_id maps to a dict with 'git', 'jira', 'github' keys.
+    """Thread-safe registry of project_id → :class:`Graph` instances.
+
+    One project's typed graph at a time, keyed by the project UUID. Locks
+    every public access so concurrent ``/build`` and ``/execute`` calls
+    don't see torn writes.
     """
 
-    def __init__(self):
-        self._store: Dict[str, Dict[str, Any]] = {}
+    def __init__(self) -> None:
+        self._store: Dict[str, Graph] = {}
         self._lock = threading.Lock()
 
-    def get(self, project_id: str) -> Optional[Dict[str, Any]]:
-        """
-        Retrieve graph data for a project.
-
-        Args:
-            project_id: UUID of the project
-
-        Returns:
-            Dict with 'git', 'jira', 'github' keys, or None if not found
-        """
+    def get(self, project_id: str) -> Optional[Graph]:
+        """Return the loaded :class:`Graph` for ``project_id`` or ``None``."""
         with self._lock:
             return self._store.get(project_id)
 
-    def set(self, project_id: str, graph_data: Dict[str, Any]) -> None:
-        """
-        Store graph data for a project.
-
-        Args:
-            project_id: UUID of the project
-            graph_data: Dict with 'git', 'jira', 'github' keys
-        """
+    def set(self, project_id: str, graph: Graph) -> None:
+        """Store ``graph`` under ``project_id``, replacing any previous entry."""
         with self._lock:
-            self._store[project_id] = graph_data
+            self._store[project_id] = graph
 
     def delete(self, project_id: str) -> bool:
-        """
-        Remove graph data for a project.
-
-        Args:
-            project_id: UUID of the project
-
-        Returns:
-            True if project was found and deleted, False otherwise
-        """
+        """Drop the entry for ``project_id``; returns ``True`` if removed."""
         with self._lock:
             if project_id in self._store:
                 del self._store[project_id]
@@ -58,33 +46,24 @@ class GraphStore:
             return False
 
     def exists(self, project_id: str) -> bool:
-        """
-        Check if graph data exists for a project.
-
-        Args:
-            project_id: UUID of the project
-
-        Returns:
-            True if graph exists, False otherwise
-        """
+        """``True`` iff a :class:`Graph` is currently loaded for ``project_id``."""
         with self._lock:
             return project_id in self._store
 
     def clear(self) -> None:
-        """Clear all stored graphs."""
+        """Drop every entry."""
         with self._lock:
             self._store.clear()
 
     def get_all_project_ids(self) -> list[str]:
-        """
-        Get list of all project IDs currently loaded.
-
-        Returns:
-            List of project_id strings
-        """
+        """Return the list of currently loaded project ids."""
         with self._lock:
             return list(self._store.keys())
 
 
-# Global graph store instance
+#: Module-level singleton — imported by ``src.server`` and the MCP sandbox
+#: helpers. One process holds one graph_store; the lock is per-instance.
 graph_store = GraphStore()
+
+
+__all__ = ["GraphStore", "graph_store"]

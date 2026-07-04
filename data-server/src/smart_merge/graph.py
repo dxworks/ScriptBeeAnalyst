@@ -6,7 +6,7 @@ from __future__ import annotations
 from copy import deepcopy
 from typing import Iterable, List, Optional, Set, Tuple
 
-from src.common.unified_author import SourceIdentity
+from src.smart_merge.identity import SourceIdentity
 from src.smart_merge.types import Edge, SimilaritiesGraph, SimilarityType
 
 

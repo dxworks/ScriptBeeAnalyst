@@ -6,6 +6,10 @@
       "env": {
         "DATA_SERVER_URL": "http://localhost:8001"
       }
+    },
+    "playwright": {
+      "command": "npx",
+      "args": ["-y", "@playwright/mcp@latest"]
     }
   }
 }

@@ -1,7 +1,8 @@
 # Plot Generation Patterns for ScriptBee Data Model
 
 When generating matplotlib visualizations, use the `generate_plot` MCP tool instead of `execute_code`.
-The `generate_plot` tool has both `graph_data` and `plt` (matplotlib.pyplot) pre-imported.
+The `generate_plot` tool has both `graph_data` (an `MCPSandboxView` over the typed v2 Graph) and
+`plt` (matplotlib.pyplot) pre-imported.
 
 IMPORTANT: Do NOT call plt.show() or plt.savefig() - the server captures the current figure automatically.
 
@@ -18,10 +19,8 @@ re-use the pattern with the new name.
 ```python
 from collections import Counter
 
-git_project = graph_data['git']
-
 commit_counts = Counter()
-for commit in git_project.git_commit_registry.all:
+for commit in graph_data.commits.all():
     if commit.author_date:
         month_label = commit.author_date.strftime('%Y-%m')
         commit_counts[month_label] += 1
@@ -43,12 +42,12 @@ plt.tight_layout()
 ```python
 from collections import Counter
 
-git_project = graph_data['git']
-
 author_counts = Counter()
-for commit in git_project.git_commit_registry.all:
-    if commit.author:
-        author_counts[commit.author.git_id.name] += 1
+for commit in graph_data.commits.all():
+    # `.author(graph_data)` is the generated resolver for `author_ref`.
+    author = commit.author(graph_data)
+    if author is not None:
+        author_counts[author.name] += 1
 
 top_authors = author_counts.most_common(10)
 names, counts = zip(*top_authors) if top_authors else ([], [])
@@ -65,11 +64,11 @@ plt.tight_layout()
 ```python
 from collections import Counter
 
-jira_project = graph_data['jira']
-
 type_counts = Counter()
-for issue in jira_project.issue_registry.all:
-    for issue_type in issue.issue_types:
+# `.type(graph_data)` is the generated resolver for `type_ref`.
+for issue in graph_data.issues.all():
+    issue_type = issue.type(graph_data)
+    if issue_type is not None:
         type_counts[issue_type.name] += 1
 
 labels = list(type_counts.keys())
@@ -86,21 +85,17 @@ plt.tight_layout()
 ## Example: BugMagnet files bar chart (using enrichment layer)
 
 ```python
-from collections import Counter
-
+# `find_files_with_trait` returns File entities; pull severity / evidence
+# off the matching Trait via graph_data.traits.for_target(file.ref()).
 files = find_files_with_trait("anomaly.testing.BugMagnet")
-e = graph_data["enrichments"]
 
-# severity = bugfix ratio for BugMagnet
 top = []
-for fid in files:
-    tags = e.find_tags("file", fid)
-    if tags is None:
-        continue
-    bm = next((t for t in tags.traits if t.name == "anomaly.testing.BugMagnet"), None)
+for f in files:
+    traits = graph_data.traits.for_target(f.ref())
+    bm = next((t for t in traits if t.name == "anomaly.testing.BugMagnet"), None)
     if bm is None:
         continue
-    top.append((fid, bm.evidence.get("bugfix_ratio", 0.0)))
+    top.append((f.id, bm.evidence.get("bugfix_ratio", 0.0)))
 top.sort(key=lambda x: -x[1])
 top = top[:10]
 
@@ -165,23 +160,28 @@ plt.tight_layout()
 ## LOC vs. churn scatter (Lizard B1)
 
 ```python
-metrics = (graph_data.get("metrics") or {}).get("lizard") or []
+# Pair each Lizard sum_nloc row with the matching v2 File, then count
+# the file's lifetime added+deleted lines via the change->hunk chain.
+# In v2 FileMetric is one (file_ref, metric_name, value) row per metric;
+# filter by metric_name == "sum_nloc" to pick the LOC rows.
 xs, ys, labels = [], [], []
-for m in metrics:
-    git_file = next(
-        (f for f in graph_data["git"].file_registry.all
-         if (f.last_existing_name() or "") == m.file_path),
-        None,
-    )
+for m in graph_data.file_metrics:
+    if m.metric_name != "sum_nloc":
+        continue
+    # Resolve the file via the EntityRef the metric carries — id IS the path.
+    git_file = graph_data.files.get(m.file_ref.id)
     if git_file is None:
         continue
-    churn = sum(
-        len(h.added_lines) + len(h.deleted_lines)
-        for ch in (git_file.changes or []) for h in (ch.hunks or [])
-    )
-    xs.append(m.sum_nloc)
+    churn = 0
+    for change in graph_data.changes.by_file[git_file.ref()]:
+        for hunk_ref in change.hunk_refs:
+            hunk = graph_data.hunks.get(hunk_ref.id)
+            if hunk is None:
+                continue
+            churn += len(hunk.added_lines) + len(hunk.deleted_lines)
+    xs.append(m.value)
     ys.append(churn)
-    labels.append(m.file_path)
+    labels.append(m.file_ref.id)
 
 plt.figure(figsize=(8, 6))
 plt.scatter(xs, ys, alpha=0.5)
@@ -202,3 +202,6 @@ plt.tight_layout()
   `get_relation_edges`) fetch data directly without writing /execute code,
   for quick chart inputs. Call `list_metrics()` first to know the right
   trait_name / overview_name / relation_kind to pass.
+- For relation-based plots, prefer `graph_data.relations.of_kind_in_window(kind, window)`
+  over the legacy `enrichments.relation_file(...)` shape — the v2 registry
+  has the strength on each `Relation` directly.

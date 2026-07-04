@@ -2,13 +2,13 @@
 
 Mirrors dx's `Initializer` class — a single tunable surface. Values chosen to
 match dx defaults where applicable; callers may override by passing a custom
-EnrichmentConfig to `compute_enrichments`.
+EnrichmentConfig to ``run_pipeline``.
 """
 from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
-from typing import Optional, Pattern
+from typing import Any, Optional, Pattern
 
 
 # ── Regexes (commit message classification) ─────────────────────────────────────
@@ -52,10 +52,13 @@ BUILD_PATTERNS = [
 
 @dataclass
 class EnrichmentConfig:
-    """All knobs in one place. Adjust then re-run compute_enrichments."""
+    """All knobs in one place. Adjust then re-run ``run_pipeline``."""
+
+    # Build-time toggle for the (expensive) git annotated-lines reconstruction.
+    compute_annotated_lines: bool = False
 
     # Time windows
-    recent_window_days: int = 90
+    recent_window_days: int = 336
     idle_threshold_days: int = 180
 
     # Commit churn buckets (sum added+deleted over all hunks)
@@ -84,7 +87,7 @@ class EnrichmentConfig:
     senior_max_days: int = 730
 
     # Anomaly thresholds (phase 2)
-    bugmagnet_min_bugfix_commits: int = 5      # min absolute count to even consider
+    bugmagnet_min_bugfix_commits: int = 10     # min absolute count to even consider
     bugmagnet_ratio_min: float = 0.40          # share of commits-on-file that are bugfixes
     orphan_min_commits: int = 1                # at least one change exists
     hermit_dominance_ratio: float = 0.80       # >80% churn by one author -> BusFactor1
@@ -122,7 +125,12 @@ class EnrichmentConfig:
     # heavy contribution flag (median project files churn <500 over their life).
     supernova_net_churn_min: int = 5000
 
-    # ── B2 — JaFax / CodeFrame thresholds ──────────────────────────────────
+    # ── B2 — CodeFrame thresholds ──────────────────────────────────────────
+    # ZoneCrossroad: minimum LIFETIME commits the file must have before the
+    # metric runs at all. dx pre-filters at this gate (``ZoneCrossroad.java:29``
+    # uses ``file.commits().size() >= 20``). Without it ScriptBee fires on
+    # very small files that have no meaningful zone signal.
+    zonecrossroad_min_file_commits: int = 20
     # ZoneCrossroad: minimum commits a file must have inside one UTC offset
     # before that offset counts as "significant". dx default
     # (ZoneCrossroad.java:16) is 10.
@@ -132,11 +140,11 @@ class EnrichmentConfig:
     concurrent_zonecrossroad_strict_threshold: int = 5
     # FeatureEncapsulationOverview thresholds (commit-spread / churn buckets).
     # Wide commit = touches >= this many files; deep commit = churn over this many lines.
-    feature_encapsulation_wide_files_min: int = 20
+    feature_encapsulation_wide_files_min: int = 40
     feature_encapsulation_deep_churn_min: int = 500
     # High-impact task = touches >= this many files; scattered task = touches
     # >= this many components.
-    feature_encapsulation_high_impact_files_min: int = 10
+    feature_encapsulation_high_impact_files_min: int = 40
     feature_encapsulation_scattered_components_min: int = 3
 
     # ── B1 — Lizard thresholds ─────────────────────────────────────────────
@@ -153,7 +161,19 @@ class EnrichmentConfig:
     test_orphan_min_commits: int = 3
 
     # Phase 3 components — optional mapping JSON path; missing file = heuristic.
+    # ``components_mapping_data`` wins over ``components_mapping_path`` at resolve
+    # time because the dict is per-project (loaded from Supabase by the
+    # processor) while the path is an operator-level fallback used in tests /
+    # single-project dev mode.
+    #
+    # ``components_mapping_data`` semantics: ``{}`` and ``None`` are treated
+    # identically — both mean "no curated mapping, fall back to path /
+    # top-folder heuristic". Do NOT flip the resolver's ``if data:`` check to
+    # ``if data is not None:``; an empty dict carries the same intent as null
+    # and the PUT endpoint normalises empty payloads to SQL NULL when persisting
+    # to projects.component_mapping.
     components_mapping_path: Optional[str] = None
+    components_mapping_data: Optional[dict[str, Any]] = None
 
     # ── A2.1 file-level traits ─────────────────────────────────────────────────
     # Knowledge family
@@ -164,11 +184,11 @@ class EnrichmentConfig:
     polarised_min_authors: int = 2
     solitaire_min_lifetime_commits: int = 5
     team_churn_set_change_ratio: float = 0.5
-    weak_owner_max_share: float = 0.2
+    weak_owner_max_share: float = 0.4
     weak_owner_min_active_authors: int = 2
 
     # ── A2.2 author-level traits ───────────────────────────────────────────────
-    orphancauser_min_orphan_files: int = 3
+    orphancauser_min_orphan_files: int = 10
     orphancauser_min_lifetime_commits: int = 10
     orphancauser_orphan_sample_cap: int = 20
 
@@ -180,7 +200,7 @@ class EnrichmentConfig:
     erosion_trend_max: float = -0.5
     flicker_cv_min: float = 1.2
     flicker_min_recent_commits: int = 4
-    frequent_changer_lifetime_min: int = 50
+    frequent_changer_lifetime_min: int = 20
     frequent_changer_recent_min: int = 10
 
     # Testing family
@@ -191,8 +211,15 @@ class EnrichmentConfig:
     identical_filenames_peer_cap: int = 20
 
     # ── A2.3 relations ─────────────────────────────────────────────────────────
-    # Δt window for time-windowed cochange (file-file and author-author).
-    time_windowed_cochange_hours: int = 24
+    # Δt window for time-windowed cochange (file-file, author-author, component).
+    # Matches dx `files_SharedTimeWindow` 3rd arg = 30 minutes (0.5h).
+    time_windowed_cochange_hours: float = 0.5
+    # Min cross-commit co-change count for a file-file time-windowed edge
+    # to be emitted. Matches dx `files_SharedTimeWindow` 1st arg = 20.
+    time_windowed_cochange_file_min_count: int = 20
+    # Min aggregated strength for a component-component time-windowed edge
+    # to be emitted. Matches dx `components_SharedTimeWindow` 1st arg = 80.
+    time_windowed_cochange_component_min_count: int = 80
     # similarity.file-file.names
     name_similarity_min_score: float = 0.85
     # If True, only compare files sharing the same extension (cuts O(N²) cost).

@@ -6,18 +6,39 @@ all linked together in an in-memory graph structure.
 
 ## MCP Tools Available
 
-You have 8 tools from the `scriptbee-data` MCP server:
+The available tools depend on the project's lifecycle stage (SETUP vs
+QUERY). See `instructions/setup.md` and `instructions/compass.md`.
+
+You have 12 tools from the `scriptbee-data` MCP server. The four
+`list_metrics` / `list_file_metrics` / `get_code_structure_summary` /
+`get_duplication_summary` tools route through `/execute` against the
+sandbox view (per the Chunk 20 rewrite — the legacy
+`/enrichments/*` REST endpoints were deleted in Chunk 10 and are NOT
+restored). Every tool below is live in its applicable stage.
 
 | Tool | Purpose |
 |------|---------|
-| `list_metrics` | Live catalog of every classifier, anomaly trait, relation kind, and overview table — reflects source code, no staleness. Call this once per session before exploring metrics. |
+| `list_metrics` | Live catalog of every Metric: name, family, emits_traits, emits_classifiers, emits_relations, config_fields, plus the registered overview names. Reflects source code, no staleness. Call this once per session before exploring metrics. |
 | `execute_code` | Run Python code against the project graph. Use `print()` for output. |
 | `generate_plot` | Create matplotlib visualizations. `plt` is pre-imported. Don't call `plt.show()`. |
 | `get_project_status` | Check if a project is loaded and get statistics. |
 | `load_project` | Load a project by its UUID (shown in the web UI). |
 | `list_anomalies` | Filter enrichment tags by trait_name and/or entity_kind. |
-| `get_overview_table` | Fetch an overview table by name as parsed CSV rows. |
+| `get_overview_table` | Fetch an overview table by name as parsed CSV rows. All 11 overviews live as of Chunk 18 (see "Live overview tables" below). |
 | `get_relation_edges` | Fetch a relation file as edges, sorted by strength. |
+| `list_file_metrics` | Per-file Lizard rollup (sum_nloc, max_ccn, avg_ccn, function_count, longest_function_nloc), sorted by sum_nloc desc. Empty dict when no Lizard CSV was ingested. |
+| `get_code_structure_summary` | Per-project counts from the CodeFrame (B2) layer (types, methods, fields, refs). `loaded=False` when no code-structure project exists. |
+| `get_duplication_summary` | Per-project bucket counts (external / sibling / internal) from the DuDe (B3) layer. `loaded=False` when no DuDe ingest happened. |
+| `get_quality_issues_summary` | Insider (B4) code-smell summary (counts, distinct rules, top rules). |
+
+### Live overview tables
+
+All 11 overviews can be fetched via `get_overview_table(name)` or
+`graph_data.overview_as_dict(name)` in `execute_code`:
+
+`authorship`, `code_quality`, `components`, `feature_encapsulation`,
+`feature_traceability`, `intent_impact`, `knowledge`, `nature`,
+`pace`, `pr_lifecycle`, `testing`.
 
 ## Workflow
 
@@ -27,29 +48,87 @@ You have 8 tools from the `scriptbee-data` MCP server:
 4. **Query data**: write Python code using `graph_data` dict and call `execute_code`
 5. **Visualize**: write matplotlib code and call `generate_plot`
 
-## Quick Reference
+## Quick Reference (Query stage)
+
+The examples below assume the project is finalized
+(`merge_state=FINALIZED`) — see `instructions/setup.md` for the
+setup-stage surface.
 
 ```python
-# Access the three data sources
-git_project    = graph_data['git']     # commits, files, changes, authors
-jira_project   = graph_data['jira']    # issues, statuses, types, users
-github_project = graph_data['github']  # pull requests, users, commits
-unified_users  = graph_data.get('users', [])  # merged identities (after setup)
+# `graph_data` is a single QuerySandboxView over the typed v2 Graph.
+# The four main entity surfaces are exposed directly as registries —
+# no more dict-of-projects.
 
 # Iterate all entities via registries
-for commit in git_project.git_commit_registry.all:
+for commit in graph_data.commits.all():
     print(commit.id[:8], commit.message[:50])
 
 # Lookup by ID
-commit = git_project.git_commit_registry.get_by_id("abc123")
-issue = jira_project.issue_registry.get_by_id("PROJ-42")
-pr = github_project.pull_request_registry.get_by_id(17)
+commit = graph_data.commits.get("abc123")
+issue  = graph_data.issues.get("PROJ-42")
+pr     = graph_data.pull_requests.get("17")     # PR ids are strings in v2
+file   = graph_data.files.get("src/app.py")
 
-# Cross-project navigation
-commit.issues          # JIRA issues linked to this commit
-commit.pull_requests   # GitHub PRs containing this commit
-issue.git_commits      # Git commits mentioning this issue
-pr.git_commits         # Git commits in this PR
+# People — every role-typed ref targets a UnifiedUser after finalize.
+# Reverse resolvers on UnifiedUser use verbose `<plural>_as_<role>`
+# naming and read O(1) off the registry indexes.
+for uu in graph_data.unified_users.all():
+    commits = uu.commits_as_author(graph_data)
+    prs_authored = uu.pull_requests_as_author(graph_data)
+    prs_merged   = uu.pull_requests_as_merged_by(graph_data)
+    issues       = uu.issues_as_reporter(graph_data)
+    print(uu.display_name, len(commits), len(prs_authored), len(prs_merged))
+
+# Forward resolvers — entity -> person
+author   = commit.author(graph_data)          # UnifiedUser | None
+merger   = pr.merged_by(graph_data)           # UnifiedUser | None
+reporter = issue.reporter(graph_data)         # UnifiedUser | None
+assignees = pr.assignees(graph_data)          # list[UnifiedUser]
+
+# Raw provenance — only when the user explicitly asks about a platform
+# (e.g. "how many distinct GitHub logins?"). Otherwise use the verbose
+# reverse resolvers above and ignore per-source accounts.
+gh_logins  = [gh.login for gh in uu.github_users(graph_data)]
+git_emails = [g.email for g in uu.git_accounts(graph_data)]
+
+# Cross-entity navigation — entities are sealed data models, so the
+# legacy `commit.issues` shape moved to free helper functions that
+# read off the typed Graph (also pre-injected into the sandbox):
+issues_for_commit   = commit_issues(commit, graph_data)   # was commit.issues
+commits_for_pr      = pr_commits(pr, graph_data)          # was pr.git_commits
+commits_for_issue   = issue_commits(issue, graph_data)    # was issue.git_commits
+
+# Enrichment side — traits / classifiers / relations live in the typed
+# Graph (graph_data.traits / .classifiers / .relations / .components).
+from src.common.kernel import EntityKind, EntityRef
+file_ref = EntityRef(kind=EntityKind.FILE, id="src/app.py")
+tags     = graph_data.tags_for(file_ref)                  # traits + classifiers
+bug_files = graph_data.find_files_with_trait("anomaly.testing.BugMagnet")
+prod_files = graph_data.find_files_with_classifier("role", "production")
+neighbors = graph_data.cochange_neighbors("src/app.py", "lifetime", limit=10)
+
+# Discoverability + per-entity helpers + per-domain summaries
+registries  = graph_data.list_registries()                  # 33 typed registries with index names
+traits      = graph_data.traits_for(file_ref)               # or filter by name
+traits_only = graph_data.traits_for(file_ref, name="anomaly.testing.BugMagnet")
+rels_out    = graph_data.relations_for(file_ref, direction="out")
+cochange    = graph_data.relations_for(file_ref, kind="cochange", window="lifetime")
+file_mets   = graph_data.metrics_for_file("src/app.py")     # {sum_nloc: ..., max_ccn: ...}
+
+git_stats    = graph_data.git_summary()
+github_stats = graph_data.github_summary()                  # PRs, reviews, comments, commits per project
+jira_stats   = graph_data.jira_summary()
+quality      = graph_data.quality_summary()
+
+# `graph_data.duplication_pairs` is an alias for `graph_data.duplications`
+# (legacy compat — both return the same DuplicationPairRegistry).
+
+# `graph_data.app_tags` is the AppTagRegistry — App Inspector concerns
+# ingested from a `<repo>-chronos-tags.json` upload. One AppTag per
+# (file_path, tag) pair, with a `strength: int`. Reverse indexes:
+# `by_file`, `by_project`, `by_tag` (exact match), and `by_tag_root`
+# (first dotted segment after the `appinspector.` prefix, e.g.
+# `by_tag_root["OS"]` or `by_tag_root["Cryptography"]`).
 ```
 
 ## Detailed Documentation
@@ -61,8 +140,11 @@ this file. Use `list_metrics` to discover what exists, then `Read` the
 
 See the `instructions/` folder for the entry-point and pattern recipes:
 
-- `compass.md` — what kind of agent you are, where things live, how to answer
-  metric questions. Read this first.
+- `setup.md` — setup-stage briefing (filter rules, author matching,
+  enrichment thresholds, finalize). Read this first when
+  `merge_state=PRE_MERGE`.
+- `compass.md` — query-stage briefing (UnifiedUser API, exploration
+  sandbox). Read this first when `merge_state=FINALIZED`.
 - `query-examples.txt` — worked-example queries against the graph and
   enrichment layer.
 - `plot-patterns.txt` — matplotlib visualization patterns.

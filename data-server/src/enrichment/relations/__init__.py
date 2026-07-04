@@ -1,21 +1,27 @@
-from src.enrichment.relations.coauthor import CoAuthorExtractor
-from src.enrichment.relations.cochange import FileCoChangeExtractor
-from src.enrichment.relations.cochange_component import ComponentCoChangeExtractor
-from src.enrichment.relations.issue_file import IssueFileExtractor
-from src.enrichment.relations.issue_issue import IssueIssueExtractor
-from src.enrichment.relations.ownership import OwnershipExtractor
-from src.enrichment.relations.pr_file import PullRequestFileExtractor
-from src.enrichment.relations.pr_reviewer import PullRequestReviewerExtractor
-from src.enrichment.relations.writer import to_csv_bytes
+"""Relations — first-class graph entities for cross-entity links.
+
+Public API::
+
+    from src.enrichment.relations import (
+        Relation, WindowKind, RelationExtra,
+        RelationRegistry, RelationBuilder,
+        BUILDERS, BuilderRegistry,
+    )
+
+See §6 of ``architectural_changes.md`` for the design.
+"""
+from __future__ import annotations
+
+from .builders import BUILDERS, BuilderRegistry, RelationBuilder
+from .models import Relation, RelationExtra, WindowKind
+from .registries import RelationRegistry
 
 __all__ = [
-    "FileCoChangeExtractor",
-    "OwnershipExtractor",
-    "IssueFileExtractor",
-    "CoAuthorExtractor",
-    "ComponentCoChangeExtractor",
-    "IssueIssueExtractor",
-    "PullRequestFileExtractor",
-    "PullRequestReviewerExtractor",
-    "to_csv_bytes",
+    "BUILDERS",
+    "BuilderRegistry",
+    "Relation",
+    "RelationExtra",
+    "RelationBuilder",
+    "RelationRegistry",
+    "WindowKind",
 ]

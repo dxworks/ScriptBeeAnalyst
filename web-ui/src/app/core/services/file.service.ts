@@ -1,6 +1,7 @@
 import { Injectable, signal } from '@angular/core';
-import { SupabaseService } from './supabase.service';
-import { AuthService } from './auth.service';
+import { HttpClient, HttpErrorResponse, HttpParams } from '@angular/common/http';
+import { firstValueFrom } from 'rxjs';
+import { environment } from '../../../environments/environment';
 import {
   SerializedFile,
   FileType,
@@ -9,8 +10,7 @@ import {
   isValidSerializedFileName,
 } from '../models/project.model';
 
-const BUCKET_NAME = 'serialized-files';
-const MAX_FILE_SIZE_MB = 500; // Configurable - matches Supabase storage limit
+const MAX_FILE_SIZE_MB = 500; // Matches the data-server MAX_UPLOAD_MB default.
 const MAX_FILE_SIZE_BYTES = MAX_FILE_SIZE_MB * 1024 * 1024;
 
 export interface FileValidationResult {
@@ -26,23 +26,29 @@ export interface UploadProgress {
   error?: string;
 }
 
+/** Wire shape of GET /projects/{id}/files/exists. */
+interface FileExistsResponse {
+  exists: boolean;
+  file: SerializedFile | null;
+}
+
 @Injectable({
   providedIn: 'root',
 })
 export class FileService {
+  private readonly baseUrl = environment.dataServerUrl;
+
   private readonly loadingSignal = signal<boolean>(false);
   private readonly errorSignal = signal<string | null>(null);
 
   readonly loading = this.loadingSignal.asReadonly();
   readonly error = this.errorSignal.asReadonly();
 
-  constructor(
-    private supabase: SupabaseService,
-    private authService: AuthService
-  ) {}
+  constructor(private http: HttpClient) {}
 
   /**
-   * Validate a file before upload
+   * Validate a file before upload. The data-server re-validates server-side;
+   * this keeps the fast client-side feedback the staging loop relies on.
    */
   validateFile(file: File): FileValidationResult {
     // Check filename
@@ -51,8 +57,8 @@ export class FileService {
         valid: false,
         error:
           `Invalid filename. Expected: *.iglog, github.json, jira.json, ` +
-          `*-layout.json, *-code_smells.json, *-external_duplication.csv, ` +
-          `*-internal_duplication.json, or *-lizard.csv`,
+          `*-codeframe.jsonl, *-code_smells.json, *-chronos-tags.json, ` +
+          `*-external_duplication.csv, *-internal_duplication.json, or *-lizard.csv`,
       };
     }
 
@@ -69,27 +75,20 @@ export class FileService {
   }
 
   /**
-   * Load all files for a project
+   * Load all files for a project (GET /projects/{id}/files, ordered by
+   * file_type ASC server-side).
    */
   async loadProjectFiles(projectId: string): Promise<SerializedFile[]> {
     this.loadingSignal.set(true);
     this.errorSignal.set(null);
 
     try {
-      const { data, error } = await this.supabase.client
-        .from('serialized_files')
-        .select('*')
-        .eq('project_id', projectId)
-        .order('file_type', { ascending: true });
-
-      if (error) {
-        this.errorSignal.set(error.message);
-        return [];
-      }
-
+      const data = await firstValueFrom(
+        this.http.get<SerializedFile[]>(`${this.baseUrl}/projects/${projectId}/files`)
+      );
       return data ?? [];
     } catch (err) {
-      this.errorSignal.set('Failed to load files');
+      this.errorSignal.set(this.errorMessage(err, 'Failed to load files'));
       return [];
     } finally {
       this.loadingSignal.set(false);
@@ -97,37 +96,40 @@ export class FileService {
   }
 
   /**
-   * Check if a file of the given type (and repo name for git) already exists for the project.
-   * For git files, matches on file_type + repo_name. For non-git, matches on file_type only.
+   * Check if a file of the given type (and repo name for git) already exists
+   * for the project. Mirrors the old Supabase maybeSingle: returns null on no
+   * match (the endpoint never 404s on "0 rows"). Omitting repoName matches
+   * rows where repo_name IS NULL.
    */
   async checkFileExists(
     projectId: string,
     fileType: FileType,
     repoName: string | null = null
   ): Promise<SerializedFile | null> {
-    let query = this.supabase.client
-      .from('serialized_files')
-      .select('*')
-      .eq('project_id', projectId)
-      .eq('file_type', fileType);
-
+    let params = new HttpParams().set('file_type', fileType);
     if (repoName !== null) {
-      query = query.eq('repo_name', repoName);
-    } else {
-      query = query.is('repo_name', null);
+      params = params.set('repo_name', repoName);
     }
 
-    const { data, error } = await query.single();
-
-    if (error || !data) {
+    try {
+      const res = await firstValueFrom(
+        this.http.get<FileExistsResponse>(
+          `${this.baseUrl}/projects/${projectId}/files/exists`,
+          { params }
+        )
+      );
+      return res?.exists ? res.file : null;
+    } catch {
+      // Match the old behaviour: any failure is treated as "no existing file"
+      // so the surrounding multi-file staging loop keeps going.
       return null;
     }
-
-    return data;
   }
 
   /**
-   * Upload a file to storage and save metadata to DB
+   * Upload a file via multipart to POST /projects/{id}/files. The data-server
+   * validates, writes the bytes to disk, derives the storage_path (server now
+   * owns the hash), and inserts the serialized_files row.
    */
   async uploadFile(
     projectId: string,
@@ -135,13 +137,6 @@ export class FileService {
   ): Promise<SerializedFile | null> {
     this.loadingSignal.set(true);
     this.errorSignal.set(null);
-
-    const user = this.authService.user();
-    if (!user) {
-      this.errorSignal.set('User not authenticated');
-      this.loadingSignal.set(false);
-      return null;
-    }
 
     const validation = this.validateFile(file);
     if (!validation.valid) {
@@ -154,54 +149,22 @@ export class FileService {
     const repoName = getRepoNameFromFile(file.name);
 
     try {
-      // Generate unique storage path with hash before extension
-      const timestamp = Date.now();
-      const hash = this.generateHash(user.id, fileType, timestamp);
-      const fileName = file.name.toLowerCase();
-      const lastDotIndex = fileName.lastIndexOf('.');
-      const baseName = lastDotIndex > 0 ? fileName.substring(0, lastDotIndex) : fileName;
-      const extension = lastDotIndex > 0 ? fileName.substring(lastDotIndex) : '';
-      const storagePath = `${user.id}/${projectId}/${baseName}_${hash}${extension}`;
-
-      // Upload to storage
-      const { error: uploadError } = await this.supabase.client.storage
-        .from(BUCKET_NAME)
-        .upload(storagePath, file, {
-          cacheControl: '3600',
-          upsert: false,
-        });
-
-      if (uploadError) {
-        this.errorSignal.set(`Upload failed: ${uploadError.message}`);
-        return null;
+      const form = new FormData();
+      form.append('file', file, file.name);
+      form.append('file_type', fileType);
+      if (repoName !== null) {
+        form.append('repo_name', repoName);
       }
 
-      // Save metadata to DB
-      const { data, error: dbError } = await this.supabase.client
-        .from('serialized_files')
-        .insert({
-          name: file.name,
-          file_type: fileType,
-          repo_name: repoName,
-          storage_path: storagePath,
-          size_bytes: file.size,
-          project_id: projectId,
-        })
-        .select()
-        .single();
-
-      if (dbError) {
-        // Rollback: delete the uploaded file
-        await this.supabase.client.storage
-          .from(BUCKET_NAME)
-          .remove([storagePath]);
-        this.errorSignal.set(`Failed to save file metadata: ${dbError.message}`);
-        return null;
-      }
-
+      const data = await firstValueFrom(
+        this.http.post<SerializedFile>(
+          `${this.baseUrl}/projects/${projectId}/files`,
+          form
+        )
+      );
       return data;
     } catch (err) {
-      this.errorSignal.set('Failed to upload file');
+      this.errorSignal.set(this.errorMessage(err, 'Failed to upload file'));
       return null;
     } finally {
       this.loadingSignal.set(false);
@@ -209,7 +172,8 @@ export class FileService {
   }
 
   /**
-   * Replace an existing file (delete old, upload new)
+   * Replace an existing file (delete old, upload new). Two server calls; no
+   * dedicated endpoint needed.
    */
   async replaceFile(
     projectId: string,
@@ -227,37 +191,22 @@ export class FileService {
   }
 
   /**
-   * Delete a file from storage and DB
+   * Delete a file via DELETE /projects/{id}/files/{file_id}. The data-server
+   * unlinks the bytes from disk then deletes the row in one call.
    */
   async deleteFile(file: SerializedFile): Promise<boolean> {
     this.loadingSignal.set(true);
     this.errorSignal.set(null);
 
     try {
-      // Delete from storage
-      const { error: storageError } = await this.supabase.client.storage
-        .from(BUCKET_NAME)
-        .remove([file.storage_path]);
-
-      if (storageError) {
-        this.errorSignal.set(`Failed to delete from storage: ${storageError.message}`);
-        return false;
-      }
-
-      // Delete from DB
-      const { error: dbError } = await this.supabase.client
-        .from('serialized_files')
-        .delete()
-        .eq('id', file.id);
-
-      if (dbError) {
-        this.errorSignal.set(`Failed to delete file record: ${dbError.message}`);
-        return false;
-      }
-
+      await firstValueFrom(
+        this.http.delete(
+          `${this.baseUrl}/projects/${file.project_id}/files/${file.id}`
+        )
+      );
       return true;
     } catch (err) {
-      this.errorSignal.set('Failed to delete file');
+      this.errorSignal.set(this.errorMessage(err, 'Failed to delete file'));
       return false;
     } finally {
       this.loadingSignal.set(false);
@@ -265,50 +214,27 @@ export class FileService {
   }
 
   /**
-   * Get a download URL for a file
+   * Stable download URL for a file. The data-server streams the bytes with an
+   * attachment disposition, so unlike the old Supabase signed URL this needs
+   * no async pre-fetch — callers can point a link straight at it.
    */
-  async getDownloadUrl(file: SerializedFile): Promise<string | null> {
-    const { data, error } = await this.supabase.client.storage
-      .from(BUCKET_NAME)
-      .createSignedUrl(file.storage_path, 3600); // 1 hour expiry
-
-    if (error) {
-      this.errorSignal.set(`Failed to generate download URL: ${error.message}`);
-      return null;
-    }
-
-    return data.signedUrl;
+  getDownloadUrl(file: SerializedFile): string {
+    return `${this.baseUrl}/projects/${file.project_id}/files/${file.id}/download`;
   }
 
   /**
-   * Download a file
+   * Download a file by clicking a temporary link pointed at the stable
+   * download endpoint.
    */
   async downloadFile(file: SerializedFile): Promise<void> {
-    const url = await this.getDownloadUrl(file);
-    if (!url) return;
+    const url = this.getDownloadUrl(file);
 
-    // Create a temporary link and click it to download
     const link = document.createElement('a');
     link.href = url;
     link.download = file.name;
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
-  }
-
-  /**
-   * Generate a hash for unique storage path
-   */
-  private generateHash(userId: string, fileType: string, timestamp: number): string {
-    const input = `${userId}-${fileType}-${timestamp}`;
-    // Simple hash - in production you might want a proper hash function
-    let hash = 0;
-    for (let i = 0; i < input.length; i++) {
-      const char = input.charCodeAt(i);
-      hash = (hash << 5) - hash + char;
-      hash = hash & hash; // Convert to 32-bit integer
-    }
-    return Math.abs(hash).toString(36);
   }
 
   /**
@@ -327,5 +253,12 @@ export class FileService {
    */
   getMaxFileSizeMB(): number {
     return MAX_FILE_SIZE_MB;
+  }
+
+  private errorMessage(err: unknown, fallback: string): string {
+    if (err instanceof HttpErrorResponse) {
+      return err.error?.error || err.error?.message || err.message || fallback;
+    }
+    return fallback;
   }
 }

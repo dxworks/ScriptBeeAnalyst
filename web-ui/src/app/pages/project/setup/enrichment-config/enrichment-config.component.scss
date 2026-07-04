@@ -1,0 +1,824 @@
+.enrichment-config {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-lg);
+}
+
+.readonly-banner {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-sm);
+  padding: var(--spacing-sm) var(--spacing-md);
+  border: 1px solid var(--color-border);
+  border-left: 3px solid var(--color-accent);
+  border-radius: var(--radius-md, 8px);
+  background-color: var(--color-surface-alt, rgba(127, 127, 127, 0.08));
+  color: var(--color-text-secondary);
+  font-size: 0.875rem;
+
+  svg {
+    flex-shrink: 0;
+    color: var(--color-accent);
+  }
+}
+
+// Sticky toolbar. The window is the scroll container for the setup
+// shell, and `.app-header` is itself sticky at body-top. We anchor
+// below it via the shared ``--app-header-height`` token so the Save /
+// Discard / Rerun affordances stay reachable as the user scrolls through
+// long family lists. Margin/padding are negated and re-added so the
+// toolbar's background paints edge-to-edge across `.setup-content`'s
+// page padding and the rounded family cards scroll under it cleanly.
+.tab-header {
+  position: sticky;
+  // Anchors below ``.app-header`` via the shared token; the project-tab
+  // and setup-tab strips intentionally scroll out of view because
+  // they're navigational, not action affordances.
+  top: var(--app-header-height);
+  z-index: 10;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--spacing-lg);
+  flex-wrap: wrap;
+  padding: var(--spacing-md) var(--spacing-xl);
+  margin: calc(-1 * var(--spacing-xl)) calc(-1 * var(--spacing-xl)) 0;
+  background-color: var(--color-surface);
+  border-bottom: 1px solid var(--color-border);
+  box-shadow: 0 1px 2px 0 rgb(0 0 0 / 0.04);
+
+  :host-context(html[data-theme="dark"]) & {
+    box-shadow: 0 1px 2px 0 rgb(0 0 0 / 0.2);
+  }
+}
+
+@media (max-width: 768px) {
+  .tab-header {
+    padding: var(--spacing-sm) var(--spacing-md);
+    margin: calc(-1 * var(--spacing-md)) calc(-1 * var(--spacing-md)) 0;
+  }
+}
+
+.tab-header-titles {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-xs);
+  min-width: 0;
+
+  h2 {
+    margin: 0;
+    font-size: 1.25rem;
+  }
+}
+
+.tab-header-subtitle {
+  margin: 0;
+  font-size: 0.813rem;
+  color: var(--color-text-secondary);
+  font-variant-numeric: tabular-nums;
+}
+
+.tab-header-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-sm);
+  flex-wrap: wrap;
+
+  // Save button spinner adornment.
+  .btn {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--spacing-xs);
+  }
+}
+
+// Build-time "Compute annotated lines" toggle, sat beside the Rerun button.
+.annotated-lines-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--spacing-xs);
+  font-size: 0.813rem;
+  color: var(--color-text-secondary);
+  cursor: pointer;
+  user-select: none;
+
+  input:disabled {
+    cursor: not-allowed;
+  }
+
+  &:has(input:disabled) {
+    cursor: not-allowed;
+    opacity: 0.55;
+  }
+}
+
+.tab-header-meta-count {
+  font-size: 0.813rem;
+  color: var(--color-text-secondary);
+  font-weight: 500;
+  margin-right: var(--spacing-xs);
+}
+
+.dirty-indicator {
+  color: var(--color-warning);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+// Tailwind ships sr-only globally, but in case it isn't applied to this
+// component's encapsulated tree we keep a local definition so the
+// pending-summary text stays out of sight.
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+.tab-body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-lg);
+}
+
+// ── Loading / error / no-project empty states ───────────────────────────────
+.empty-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: var(--spacing-2xl);
+  background-color: var(--color-surface-card);
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--color-border);
+  text-align: center;
+  min-height: 280px;
+  gap: var(--spacing-sm);
+
+  svg {
+    color: var(--color-text-muted);
+    opacity: 0.5;
+    margin-bottom: var(--spacing-md);
+  }
+
+  h3 { margin: 0; color: var(--color-text-primary); }
+  p  { margin: 0; max-width: 480px; }
+  .btn { margin-top: var(--spacing-sm); }
+}
+
+.spinner-large {
+  width: 48px;
+  height: 48px;
+  border: 3px solid var(--color-border);
+  border-top-color: var(--color-accent);
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+  margin-bottom: var(--spacing-md);
+}
+
+// Tiny inline spinner for the Save button — mirrors the pattern used by
+// project-card.component.scss so the visual vocabulary stays consistent.
+.spinner-tiny {
+  width: 12px;
+  height: 12px;
+  border: 2px solid rgba(255, 255, 255, 0.3);
+  border-top-color: white;
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+  display: inline-block;
+
+  &.spinner-tiny-dark {
+    border-color: rgba(var(--color-accent-rgb), 0.2);
+    border-top-color: var(--color-accent);
+  }
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+// ── Family list (collapsible details panels) ────────────────────────────────
+.family-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-lg);
+}
+
+.family-card {
+  &::-webkit-details-marker { display: none; }
+  &[open] > .family-card-header .family-disclosure { transform: rotate(90deg); }
+}
+
+.family-card-header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--spacing-md);
+  flex-wrap: wrap;
+  padding: var(--spacing-lg);
+  cursor: pointer;
+  list-style: none;
+  user-select: none;
+
+  &::-webkit-details-marker { display: none; }
+  &::marker { content: ''; }
+
+  &:focus-visible {
+    outline: 2px solid var(--color-accent);
+    outline-offset: -2px;
+    border-radius: var(--radius-lg);
+  }
+}
+
+.family-card-header-titles {
+  display: inline-flex;
+  align-items: baseline;
+  gap: var(--spacing-sm);
+  min-width: 0;
+}
+
+.family-disclosure {
+  display: inline-block;
+  width: 0;
+  height: 0;
+  border-top: 5px solid transparent;
+  border-bottom: 5px solid transparent;
+  border-left: 6px solid var(--color-text-muted);
+  transition: transform var(--transition-fast);
+  flex: 0 0 auto;
+  align-self: center;
+}
+
+.family-name {
+  margin: 0;
+  font-size: 1rem;
+  color: var(--color-text-primary);
+  letter-spacing: 0.01em;
+}
+
+.family-meta {
+  font-size: 0.75rem;
+  color: var(--color-text-secondary);
+  font-variant-numeric: tabular-nums;
+}
+
+// ── Per-knob row list ───────────────────────────────────────────────────────
+// `<dl>` so each row carries proper semantic label↔description pairing for
+// screen readers. CSS Grid promotes the dt (label cluster) and dd (value
+// cluster) into a two-column row at wider breakpoints, with a hard collapse
+// to a single column under ~640px.
+.knob-list {
+  margin: 0;
+  padding: 0 var(--spacing-lg) var(--spacing-lg) var(--spacing-lg);
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  border-top: 1px solid var(--color-border-light);
+}
+
+.knob-row {
+  display: grid;
+  // The value column needs more room for the composite editors (label/int
+  // pairs, regex textarea) — 320px minimum keeps two-column form layouts
+  // readable while still allowing the label column to claim the rest.
+  grid-template-columns: minmax(0, 1fr) minmax(320px, auto);
+  gap: var(--spacing-md) var(--spacing-lg);
+  align-items: start;
+  padding: var(--spacing-md) 0;
+  border-bottom: 1px solid var(--color-border-light);
+
+  &:last-child { border-bottom: none; }
+
+  // 2px accent stripe whenever the row carries a pending edit OR a saved
+  // override — the user reads "this row differs from defaults" at a glance.
+  // Pending edits get a brighter accent than persisted overrides, but the
+  // stripe lives in both branches so the layout stays stable.
+  &.knob-row-overridden {
+    padding-left: var(--spacing-md);
+    margin-left: calc(-1 * var(--spacing-md));
+    border-left: 2px solid var(--color-accent);
+  }
+
+  &.knob-row-pending {
+    background-color: rgba(var(--color-accent-rgb), 0.03);
+  }
+
+  &.knob-row-error {
+    background-color: rgba(var(--color-error-rgb), 0.05);
+    border-left: 2px solid var(--color-error);
+    padding-left: var(--spacing-md);
+    margin-left: calc(-1 * var(--spacing-md));
+  }
+
+  &.knob-row-no-baseline {
+    background-color: rgba(var(--color-warning-rgb), 0.04);
+
+    :host-context(html[data-theme="dark"]) & {
+      background-color: rgba(var(--color-warning-rgb), 0.08);
+    }
+  }
+}
+
+@media (max-width: 640px) {
+  .knob-row {
+    grid-template-columns: minmax(0, 1fr);
+    gap: var(--spacing-xs);
+  }
+}
+
+.knob-label {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-xs);
+  min-width: 0;
+}
+
+.knob-label-line {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--spacing-sm);
+  flex-wrap: wrap;
+  min-width: 0;
+}
+
+.knob-human-label {
+  font-size: 0.875rem;
+  font-weight: 500;
+  color: var(--color-text-primary);
+}
+
+.knob-field-name {
+  display: inline-block;
+  padding: 1px 6px;
+  background-color: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.6875rem;
+  color: var(--color-text-secondary);
+  letter-spacing: 0;
+}
+
+.knob-type-pill {
+  display: inline-block;
+  padding: 1px 6px;
+  background-color: var(--color-border-light);
+  border-radius: var(--radius-sm);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.6875rem;
+  color: var(--color-text-muted);
+  text-transform: lowercase;
+  letter-spacing: 0.02em;
+}
+
+// Tag that lights up next to the row label when the user has an unsaved
+// edit on this knob — a stronger affordance than the row stripe alone.
+.knob-pending-tag {
+  font-size: 0.6875rem;
+  padding: 1px 6px;
+  background-color: rgba(var(--color-accent-rgb), 0.12);
+  color: var(--color-accent);
+  border-radius: var(--radius-sm);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  font-weight: 600;
+}
+
+.knob-meta-line {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--spacing-sm);
+  flex-wrap: wrap;
+  min-width: 0;
+}
+
+.knob-used-by {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--spacing-xs);
+  flex-wrap: wrap;
+  min-width: 0;
+}
+
+.knob-used-by-label {
+  font-size: 0.6875rem;
+  color: var(--color-text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.knob-used-by-badge {
+  font-size: 0.6875rem;
+  padding: 1px 8px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+.knob-used-by-overflow {
+  font-size: 0.6875rem;
+  padding: 1px 8px;
+  cursor: help;
+}
+
+.knob-no-baseline {
+  font-size: 0.6875rem;
+  padding: 1px 8px;
+}
+
+.knob-value {
+  margin: 0;
+  display: flex;
+  align-items: flex-start;
+  gap: var(--spacing-sm);
+  justify-content: flex-end;
+  flex-wrap: nowrap;
+  min-width: 0;
+  font-size: 0.875rem;
+  color: var(--color-text-primary);
+}
+
+@media (max-width: 640px) {
+  .knob-value { justify-content: flex-start; }
+}
+
+// Column wrapping the actual input. Right-aligned in light mode (matches
+// the read-only scaffold rhythm) but the input itself stretches as the
+// content demands — composites (regex list, label/int pairs) flex
+// out to the full column width.
+.knob-input-cell {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: var(--spacing-xs);
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+// Right column of the value cell — holds either the "default" tag (when
+// the field is unchanged) or the per-row "Reset" link (when pending).
+.knob-value-meta {
+  display: inline-flex;
+  align-items: center;
+  flex-shrink: 0;
+  min-width: 56px;
+  justify-content: flex-end;
+}
+
+// Compact input variant. The global .form-input is full-width with chunky
+// padding (modal forms) — for per-knob editing we want a denser variant
+// that still inherits focus / error styles.
+.knob-input {
+  padding: 4px 8px;
+  font-size: 0.8125rem;
+  min-width: 0;
+  width: 100%;
+  font-family: inherit;
+
+  &:focus {
+    outline: none;
+    border-color: var(--color-accent);
+    box-shadow: 0 0 0 3px rgba(var(--color-accent-rgb), 0.1);
+  }
+
+  &.error {
+    border-color: var(--color-error);
+
+    &:focus {
+      box-shadow: 0 0 0 3px rgba(var(--color-error-rgb), 0.1);
+    }
+  }
+}
+
+.knob-input-numeric {
+  font-variant-numeric: tabular-nums;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  text-align: right;
+  max-width: 160px;
+}
+
+.knob-input-inline {
+  max-width: 240px;
+}
+
+.knob-input-narrow {
+  max-width: 180px;
+}
+
+.knob-input-textarea {
+  width: 100%;
+  resize: vertical;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.75rem;
+  text-align: left;
+}
+
+.knob-input-regex {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+// Bool + checkbox row — checkbox sits next to a textual "true/false" so
+// the visual matches the read-only render from commit 6.
+.knob-bool-control {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--spacing-sm);
+  cursor: pointer;
+  user-select: none;
+
+  input[type="checkbox"] {
+    width: 16px;
+    height: 16px;
+    accent-color: var(--color-accent);
+    cursor: pointer;
+  }
+}
+
+.knob-bool-value {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.8125rem;
+  color: var(--color-text-primary);
+}
+
+// String-with-clear control.
+.knob-string-control {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--spacing-xs);
+  width: 100%;
+  max-width: 360px;
+}
+
+// Composite editor container — used by string-list, label/int-pairs,
+// label/range-map, regex-list, label/regex-pairs.
+.knob-composite {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-xs);
+  width: 100%;
+  align-items: stretch;
+}
+
+// Pair-grid for label+value (2 columns) and label+start+end (3 columns)
+// composite editors. The trailing column carries the remove icon button.
+.knob-pair-grid {
+  display: grid;
+  gap: var(--spacing-xs) var(--spacing-sm);
+  align-items: center;
+}
+
+.knob-pair-grid-2 {
+  grid-template-columns: minmax(0, 1fr) 90px 28px;
+}
+
+.knob-pair-grid-3 {
+  grid-template-columns: minmax(0, 1fr) 80px 80px 28px;
+}
+
+.knob-pair-head {
+  font-size: 0.6875rem;
+  color: var(--color-text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  font-weight: 500;
+}
+
+.knob-pair-head-value { text-align: right; }
+.knob-pair-head-actions { /* spacer */ }
+
+.knob-pair-add {
+  align-self: flex-start;
+  margin-top: var(--spacing-xs);
+}
+
+// Inline hint placed under a composite-editor row — "(label required)" /
+// "(duplicate label)". Two variants: ``knob-row-hint-span`` spans the
+// full grid width inside ``.knob-pair-grid`` (label/range-map), while
+// ``knob-row-hint-flex`` lays out as a flex item beside its peers
+// (label/regex-pairs uses flex rows, not a grid).
+.knob-row-hint {
+  font-size: 0.6875rem;
+  color: var(--color-warning);
+  font-weight: 500;
+  line-height: 1.2;
+}
+
+.knob-row-hint-span {
+  grid-column: 1 / -1;
+  padding-bottom: var(--spacing-xs);
+}
+
+.knob-row-hint-flex {
+  flex-basis: 100%;
+  padding-top: 2px;
+}
+
+// Label/regex-pairs is wider than a grid can carry cleanly (the regex
+// column expands and we want each row stacked vertically on narrow
+// viewports), so we use flex rows instead of a grid.
+.knob-regex-pair-row {
+  display: flex;
+  gap: var(--spacing-xs);
+  align-items: flex-start;
+  width: 100%;
+}
+
+// Chip list (string-list editor).
+.knob-chip-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--spacing-xs);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.knob-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--spacing-xs);
+  padding: 2px 8px;
+  background-color: rgba(var(--color-accent-rgb), 0.08);
+  color: var(--color-accent);
+  border-radius: var(--radius-full);
+  font-size: 0.75rem;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+// One-shot pulse on the existing chip when a duplicate "Add" is rejected —
+// the TS in ``flashRejectedChip`` toggles this class for ~1s then clears.
+// Uses warning tones so it reads as feedback, not an error. The animation
+// is gated behind ``prefers-reduced-motion: no-preference`` — users with
+// reduced motion get only the aria-live announcement (the visual pulse is
+// dropped).
+.knob-chip-just-rejected {
+  // ``transform-origin: center`` is defensive — keeps the pulse centred
+  // even if a future SCSS change moves the origin via inherited styles.
+  transform-origin: center;
+  @media (prefers-reduced-motion: no-preference) {
+    animation: knob-chip-reject-pulse 1s ease-out;
+  }
+}
+
+@keyframes knob-chip-reject-pulse {
+  0% {
+    background-color: rgba(var(--color-warning-rgb), 0.35);
+    transform: scale(1.04);
+  }
+  100% {
+    background-color: rgba(var(--color-accent-rgb), 0.08);
+    transform: scale(1);
+  }
+}
+
+.knob-chip-text { min-width: 0; }
+
+.knob-chip-add {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--spacing-xs);
+  margin-top: var(--spacing-xs);
+}
+
+// Lightweight icon button used by chip-remove, optional-string-clear, and
+// composite-editor row-remove. Single style covers all three contexts via
+// a size modifier.
+.btn-icon {
+  appearance: none;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--color-text-muted);
+  width: 24px;
+  height: 24px;
+  border-radius: var(--radius-sm);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  font-size: 1rem;
+  line-height: 1;
+  padding: 0;
+  transition: background-color var(--transition-fast), color var(--transition-fast);
+
+  &:hover {
+    background-color: var(--color-surface-hover);
+    color: var(--color-text-primary);
+  }
+
+  &:focus-visible {
+    outline: 2px solid var(--color-accent);
+    outline-offset: 1px;
+  }
+
+  &:disabled {
+    color: var(--color-border);
+    cursor: not-allowed;
+  }
+}
+
+.btn-icon-small {
+  width: 18px;
+  height: 18px;
+  font-size: 0.875rem;
+}
+
+// "Reset" text-link mid-row. Matches the inline-link affordance used by
+// the dashboard for "Edit" / "Delete" prompts.
+.btn-link {
+  appearance: none;
+  background: transparent;
+  border: none;
+  padding: 0;
+  font-size: 0.75rem;
+  color: var(--color-accent);
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+
+  &:hover:not(:disabled) {
+    color: var(--color-accent-dark);
+  }
+
+  &:focus-visible {
+    outline: 2px solid var(--color-accent);
+    outline-offset: 2px;
+    border-radius: var(--radius-sm);
+  }
+
+  &:disabled {
+    color: var(--color-text-muted);
+    cursor: not-allowed;
+    text-decoration: none;
+  }
+}
+
+.knob-default-tag {
+  font-size: 0.6875rem;
+  padding: 1px 6px;
+  background-color: var(--color-border-light);
+  color: var(--color-text-muted);
+  border-radius: var(--radius-sm);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.knob-unsupported {
+  font-size: 0.75rem;
+  color: var(--color-text-muted);
+  font-style: italic;
+}
+
+// Inline error region under a row. Spans both columns of the grid so the
+// error reads as belonging to the whole row.
+.knob-error {
+  grid-column: 1 / -1;
+  margin-top: var(--spacing-xs);
+  font-size: 0.8125rem;
+  color: var(--color-error);
+  font-weight: 500;
+}
+
+// Subtle informational hint shown above the family list when the project
+// has no persisted overrides yet — softer than ``.empty-state`` (we still
+// render the catalogue beneath it) but visually anchored at the top of
+// the body so the user knows the values below are defaults.
+.empty-overrides-hint {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-sm);
+  padding: var(--spacing-sm) var(--spacing-md);
+  background-color: var(--color-surface-card);
+  border: 1px solid var(--color-border-light);
+  border-radius: var(--radius-md);
+  font-size: 0.8125rem;
+  color: var(--color-text-muted);
+}
+
+.empty-overrides-hint-icon {
+  flex: 0 0 auto;
+  color: var(--color-text-muted);
+  opacity: 0.7;
+}
+
+// Brief scale-in on a row that just transitioned dirty→clean (saved).
+// Pure CSS via class binding; the TS toggles ``knob-row-just-saved`` for
+// a one-tick window. Same reduced-motion gate as the chip pulse.
+.knob-row-just-saved {
+  transform-origin: center;
+  @media (prefers-reduced-motion: no-preference) {
+    animation: knob-row-save-flash 200ms ease-out;
+  }
+}
+
+@keyframes knob-row-save-flash {
+  0%   { transform: scale(1); }
+  50%  { transform: scale(1.02); }
+  100% { transform: scale(1); }
+}
+
+.text-muted    { color: var(--color-text-muted); }
+.text-secondary { color: var(--color-text-secondary); }

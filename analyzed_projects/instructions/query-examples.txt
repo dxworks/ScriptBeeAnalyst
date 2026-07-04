@@ -1,25 +1,56 @@
 # Query Examples for ScriptBee Data Model
 
 These examples demonstrate how to query the in-memory graph via the `execute_code` MCP tool.
-The `graph_data` dict is pre-initialized - just use it directly in your code.
+`graph_data` is a pre-initialized `MCPSandboxView` over the typed v2 Graph — use it directly.
 
 NOTE on metric names: trait names like `anomaly.testing.BugMagnet`, overview names
-like `authorship`, and relation kinds like `cochange.component-component` are shown
-as concrete strings here for clarity, but the canonical list lives in code. Call
-`list_metrics()` once per session to see the current catalog — new metrics show up
-there automatically. If a name in this file no longer appears in `list_metrics()`,
-the metric was renamed; treat the example as a pattern template.
+like `authorship`, and relation kinds like `cochange` are shown as concrete strings
+here for clarity, but the canonical list lives in code. Call `list_metrics()` once
+per session to see the current catalog — new metrics show up there automatically.
+If a name in this file no longer appears in `list_metrics()`, the metric was renamed;
+treat the example as a pattern template.
+
+## Resolving `*_ref` fields — prefer the short form
+
+Every entity field named `*_ref` / `*_refs` has an auto-generated method that
+takes the graph and returns the resolved entity (or list). Use that instead of
+manually looking up the registry by id.
+
+```python
+# BEFORE (verbose, error-prone):
+account = graph_data.git_accounts.get(commit.author_ref.id)
+if account is not None:
+    print(account.email)
+
+# AFTER (short, equivalent):
+author = commit.author(graph_data)
+if author is not None:
+    print(author.email)
+
+# Multi-hop walks chain naturally:
+# BEFORE
+pr = graph_data.pull_requests.get(...)
+commit = graph_data.github_commits.get(pr.commit_refs[0].id)
+author = graph_data.github_users.get(commit.author_ref.id)
+# AFTER
+author = pr.commits(graph_data)[0].author(graph_data)
+```
+
+Naming rule: strip the trailing `_ref` (singular) or `_refs` (list, then append
+`s`). `author_ref` → `author(graph)`, `parent_refs` → `parents(graph)`,
+`commit_refs` → `commits(graph)`, `review_comment_refs` → `review_comments(graph)`.
+Each entity class in `domains/*/models.py` lists its generated methods in the
+docstring. The verbose `graph_data.<registry>.get(ref.id)` form still works and is
+the right escape hatch when you need to dispatch on `EntityKind` directly.
 
 ---
 
 ## 1. Project overview: name and commit count
 
 ```python
-git_project = graph_data["git"]
-num_commits = len(git_project.git_commit_registry.all)
-project_name = git_project.name
-
-print(f"Project '{project_name}' has {num_commits} commits.")
+num_commits = len(graph_data.commits.all())
+# `project_id` is on the typed Graph (and on the view via __getattr__).
+print(f"Project '{graph_data.project_id}' has {num_commits} commits.")
 ```
 
 ## 2. Top 5 most modified files
@@ -27,12 +58,12 @@ print(f"Project '{project_name}' has {num_commits} commits.")
 ```python
 from collections import Counter
 
-git_project = graph_data["git"]
+# `graph.changes` is the typed ChangeRegistry — it has a `by_file` index
+# keyed on `change.file_ref` (an EntityRef). The view proxies through.
 file_counter = Counter()
 
-for file in git_project.file_registry.all:
-    fname = file.last_existing_name()
-    file_counter[fname] = len(file.changes)
+for change in graph_data.changes:
+    file_counter[change.file_ref.id] += 1
 
 top_5_files = file_counter.most_common(5)
 print("The 5 most modified files (with number of modifications):")
@@ -45,19 +76,22 @@ for fname, count in top_5_files:
 ```python
 from collections import defaultdict
 
-git_project = graph_data["git"]
+# Walk commits, look up issue keys mentioned in each message, and tally
+# distinct issues per author.
 user_issue_count = defaultdict(set)
 
-for account in git_project.account_registry.all:
-    for commit in account.commits:
-        for issue in commit.issues:
-            user_issue_count[account].add(issue)
+for commit in graph_data.commits.all():
+    author = commit.author(graph_data)
+    if author is None:
+        continue
+    for issue in commit_issues(commit, graph_data):
+        user_issue_count[author.name].add(issue.key)
 
-most_contributing_user = max(user_issue_count.items(), key=lambda x: len(x[1]), default=None)
-
-if most_contributing_user:
-    user, issues = most_contributing_user
-    print(f"User {user.git_id} contributed to {len(issues)} Jira issues (the most).")
+if user_issue_count:
+    author_name, issues = max(
+        user_issue_count.items(), key=lambda kv: len(kv[1])
+    )
+    print(f"Author {author_name} contributed to {len(issues)} Jira issues (the most).")
 else:
     print("No user found with associated issues.")
 ```
@@ -67,55 +101,68 @@ else:
 ```python
 from collections import Counter
 
-jira_project = graph_data["jira"]
+# Walk every bug-typed issue, follow its linked commits via the inverse
+# of commit_issues (issue_commits), and count file touches per commit.
 bug_file_counter = Counter()
 
-for issue in jira_project.issue_registry.all:
-    for issue_type in issue.issue_types:
-        if issue_type.name.lower() == "bug":
-            for commit in issue.git_commits:
-                for change in commit.changes:
-                    bug_file_counter[change.file.relative_path()] += 1
-
-top_5_bug_magnets = bug_file_counter.most_common(5)
+for issue in graph_data.issues.all():
+    issue_type = issue.type(graph_data)
+    if issue_type is None or issue_type.name.lower() != "bug":
+        continue
+    for commit in issue_commits(issue, graph_data):
+        # graph.changes.by_commit is the ChangeRegistry's per-commit index.
+        for change in graph_data.changes.by_commit[commit.ref()]:
+            f = change.file(graph_data)
+            if f is not None:
+                bug_file_counter[f.path] += 1
 
 print("Top 5 bug magnet files:")
-for fname, count in top_5_bug_magnets:
+for fname, count in bug_file_counter.most_common(5):
     print(f"  {fname}: {count} occurrences in bug-related commits")
 ```
 
 ## 5. Pull requests with linked JIRA issues
 
 ```python
-github_project = graph_data["github"]
-
-for pr in github_project.pull_request_registry.all:
-    if pr.issues:
-        issue_keys = ", ".join(i.key for i in pr.issues)
-        print(f"PR #{pr.number} '{pr.title[:50]}' -> Issues: {issue_keys}")
+# The `pr_issue` relation links PRs to issues; iterate over the index.
+for pr in graph_data.pull_requests.all():
+    rels = graph_data.relations.for_source(pr.ref())
+    issue_keys = [r.target.id for r in rels if r.relation_kind == "pr_issue"]
+    if issue_keys:
+        print(f"PR #{pr.number} '{pr.title[:50]}' -> Issues: {', '.join(issue_keys)}")
 ```
 
 ## 6. BugMagnet files (using the enrichment layer)
 
 ```python
-# `find_files_with_trait` is pre-injected into /execute scope.
+# `find_files_with_trait` returns File entities — use .id for the path/key.
 files = find_files_with_trait("anomaly.testing.BugMagnet")
 print(f"{len(files)} BugMagnet files")
-for fid in files[:10]:
-    print(f"  {fid}")
+for f in files[:10]:
+    print(f"  {f.id}")
 ```
 
 ## 7. Co-change neighbours of a file
 
 ```python
-neighbours = cochange_neighbors("src/server.py", window="lifetime", limit=10)
-for fid, strength in neighbours:
-    print(f"{strength:>5.0f}  {fid}")
+# `cochange_neighbors` returns File entities. To get strengths too,
+# read graph.relations directly:
+from src.common.kernel import EntityKind, EntityRef
+src_ref = EntityRef(kind=EntityKind.FILE, id="src/server.py")
+edges = [
+    r for r in graph_data.relations.of_kind_in_window("cochange", "lifetime")
+    if r.source == src_ref
+]
+edges.sort(key=lambda r: -r.strength)
+for r in edges[:10]:
+    print(f"{r.strength:>5.0f}  {r.target.id}")
 ```
 
 ## 8. Authorship table (project + per-folder rollup)
 
 ```python
+# overview_as_dict returns the populated dict for every registered
+# overview (all 11 live as of Chunk 18); None only if the name is unknown.
 authorship = overview_as_dict("authorship")
 for entity, cells in authorship["rows"].items():
     bf1 = cells.get("bus_factor_1_files", {}).get("lifetime_value")
@@ -126,21 +173,28 @@ for entity, cells in authorship["rows"].items():
 ## 9. Filter classifiers (e.g. weekend bugfixes)
 
 ```python
-e = graph_data["enrichments"]
-weekend_bugfixes = [
-    t for t in e.tags_by_entity.values()
-    if t.entity_kind == "commit"
-    and t.classifiers.get("message.nature") == "bugfix"
-    and t.classifiers.get("weekday") in ("sat", "sun")
-]
+from src.common.kernel import EntityKind
+
+# Classifiers live in graph_data.classifiers; iterate by-target and look
+# for commits whose (nature, weekday) pair matches the predicate.
+weekend_bugfixes = []
+for commit in graph_data.commits.all():
+    by_dim = graph_data.classifiers.for_target(commit.ref())
+    nature = by_dim.get("message.nature")
+    weekday = by_dim.get("weekday")
+    if (
+        nature is not None and nature.value == "bugfix"
+        and weekday is not None and weekday.value in ("sat", "sun")
+    ):
+        weekend_bugfixes.append(commit)
 print(f"{len(weekend_bugfixes)} weekend bugfix commits")
 ```
 
 ## 10a. Components and their file counts
 
 ```python
-e = graph_data["enrichments"]
-for comp in e.components:
+# graph_data.components is the typed ComponentRegistry.
+for comp in graph_data.components.all():
     print(f"{comp.name} ({comp.path_prefix}): {len(comp.file_paths)} files")
 ```
 
@@ -154,35 +208,44 @@ for entity, cells in table["rows"].items():
     print(f"{entity:20s} issues={issues} linked_churn={churn}")
 ```
 
-## 10c. PR -> reviewer (proxy fallback) edges
+## 10c. PR -> reviewer edges
 
 ```python
-e = graph_data["enrichments"]
-rf = e.relation_file("pr.reviewer", "lifetime")
-if rf:
-    for r in rf.relations[:10]:
-        proxy = "PROXY" if r.extras.get("proxy") else "explicit"
-        print(f"PR #{r.source_id} -> {r.target_id} ({r.strength}, {proxy})")
+# graph_data.relations.of_kind("pr_reviewer") gives every PR-reviewer
+# relation in any window. Filter by window for "lifetime" only.
+rels = [
+    r for r in graph_data.relations.of_kind("pr_reviewer")
+    if r.window == "lifetime"
+]
+for r in rels[:10]:
+    proxy = "PROXY" if r.extras.get("proxy") else "explicit"
+    print(f"PR #{r.source.id} -> {r.target.id} ({r.strength}, {proxy})")
 ```
 
 ## 10d. Component-to-component co-change (cross-area churn coupling)
 
 ```python
-e = graph_data["enrichments"]
-rf = e.relation_file("cochange.component-component", "lifetime")
-if rf:
-    for r in rf.relations[:10]:
-        print(f"{r.source_id} <-> {r.target_id}: {r.strength}")
+rels = graph_data.relations.of_kind_in_window("cochange_component", "lifetime")
+for r in sorted(rels, key=lambda r: -r.strength)[:10]:
+    print(f"{r.source.id} <-> {r.target.id}: {r.strength}")
 ```
 
 ## 9b. Files over 1000 LOC (Lizard B1)
 
 ```python
-# `list_file_metrics` is the new MCP tool; here's the equivalent inside execute_code.
-metrics = (graph_data.get("metrics") or {}).get("lizard") or []
-big = sorted([m for m in metrics if m.sum_nloc >= 1000], key=lambda m: -m.sum_nloc)
+# graph_data.file_metrics is the typed FileMetricRegistry. In v2 each
+# FileMetric is one (file_ref, metric_name, value) row — the legacy
+# per-metric scalar fields (sum_nloc / max_ccn / avg_ccn / function_count
+# / longest_function_nloc) collapsed into a single value column keyed
+# by metric_name. To see all metrics for one file, iterate and group
+# by m.file_ref.
+big = sorted(
+    (m for m in graph_data.file_metrics
+     if m.metric_name == "sum_nloc" and m.value >= 1000),
+    key=lambda m: -m.value,
+)
 for m in big[:10]:
-    print(f"{m.sum_nloc:>6} NLOC  ccn_max={m.max_ccn:<4} fns={m.function_count:<4}  {m.file_path}")
+    print(f"{int(m.value):>6} NLOC  {m.file_ref.id}")
 ```
 
 ## 9c. DynamicBlob anomaly files
@@ -190,20 +253,24 @@ for m in big[:10]:
 ```python
 files = find_files_with_trait("anomaly.cohesion.size.DynamicBlob")
 print(f"{len(files)} DynamicBlob files (high-LOC + high-churn)")
-for fid in files[:10]:
-    print(f"  {fid}")
+for f in files[:10]:
+    print(f"  {f.id}")
 ```
 
-## 9d. Files most coupled by method calls (JaFax / B2)
+## 9d. Files most coupled by method calls (CodeFrame / B2)
 
 ```python
-# Top 10 file pairs by inter-file method-call count.
-ef = graph_data["enrichments"].relation_file("calls.file-file", "lifetime")
-if ef is None or not ef.relations:
-    print("No JaFax data ingested.")
+# Top 10 file pairs by inter-file method-call count. graph_data.relations
+# stores them as a "calls" relation_kind (verify via list_metrics()).
+edges = sorted(
+    graph_data.relations.of_kind_in_window("calls", "lifetime"),
+    key=lambda r: -r.strength,
+)
+if not edges:
+    print("No CodeFrame data ingested.")
 else:
-    for r in ef.relations[:10]:
-        print(f"  {int(r.strength):>5} calls  {r.source_id} -> {r.target_id}")
+    for r in edges[:10]:
+        print(f"  {int(r.strength):>5} calls  {r.source.id} -> {r.target.id}")
 ```
 
 ## 9e. ZoneCrossroad (timezone-anomaly) files
@@ -211,48 +278,50 @@ else:
 ```python
 files = find_files_with_trait("anomaly.cohesion.ZoneCrossroad")
 print(f"{len(files)} files with commits across multiple time zones")
-for fid in files[:10]:
-    print(f"  {fid}")
+for f in files[:10]:
+    print(f"  {f.id}")
 ```
 
 ## 9g. Top file pairs by external duplication (DuDe / B3)
 
 ```python
-# `duplication.file-file.external` strength = total duplicated lines (sum of
-# block_length across all duplicated blocks between the two files). Pairs in
-# the same immediate parent directory go to `duplication.file-file.sibling`
-# instead.
-ef = graph_data["enrichments"].relation_file("duplication.file-file.external", "lifetime")
-if ef is None or not ef.relations:
+# `duplication_external` strength = total duplicated lines.
+edges = sorted(
+    graph_data.relations.of_kind_in_window("duplication_external", "lifetime"),
+    key=lambda r: -r.strength,
+)
+if not edges:
     print("No DuDe data ingested.")
 else:
-    for r in ef.relations[:10]:
+    for r in edges[:10]:
         blocks = r.extras.get("block_count", "?")
-        print(f"  {int(r.strength):>5} lines / {blocks} blocks  {r.source_id} <-> {r.target_id}")
+        print(f"  {int(r.strength):>5} lines / {blocks} blocks  {r.source.id} <-> {r.target.id}")
 ```
 
 ## 9h. Files with the most internal duplication (DuDe / B3)
 
 ```python
-# `duplication.file-file.internal-summary` is a per-file scalar emitted as a
-# self-loop edge (source_id == target_id == file_path). Strength = duplicated
-# lines inside the file.
-ef = graph_data["enrichments"].relation_file("duplication.file-file.internal-summary", "lifetime")
-if ef is None or not ef.relations:
+# `duplication_internal` is a per-file scalar emitted as a self-loop
+# edge (source == target).
+edges = sorted(
+    graph_data.relations.of_kind_in_window("duplication_internal", "lifetime"),
+    key=lambda r: -r.strength,
+)
+if not edges:
     print("No DuDe internal data ingested.")
 else:
-    for r in ef.relations[:10]:
-        print(f"  {int(r.strength):>4} duplicated lines  {r.source_id}")
+    for r in edges[:10]:
+        print(f"  {int(r.strength):>4} duplicated lines  {r.source.id}")
 ```
 
 ## 9f. FeatureEncapsulationOverview snapshot
 
 ```python
 table = overview_as_dict("feature_encapsulation")
-for row in table["rows"][:10]:
-    cells = row["cells"]
+# rows are entity_id -> cells (dict)
+for entity_id, cells in list(table["rows"].items())[:10]:
     print(
-        f'{row["entity_id"]:<24} '
+        f'{entity_id:<24} '
         f'files={cells["file_count"]["lifetime_value"]:<5} '
         f'kloc={cells["source_loc_kloc"]["lifetime_value"]} '
         f'wide%={cells["wide_commit_pct"]["lifetime_value"]} '
@@ -263,17 +332,17 @@ for row in table["rows"][:10]:
 ## 9i. Top files by Insider code-smell count (B4)
 
 ```python
-# Insider records are stashed at graph_data["quality_issues"]; each issue carries
-# `occurrence_count` (the raw `value` field) which is a count of rule firings,
-# NOT a 1-5 severity ordinal.
-qi = graph_data.get("quality_issues")
-if qi is None or not qi.issues:
+# graph_data.quality_issues is the typed QualityIssueRegistry. In v2
+# QualityIssue carries `file_ref: EntityRef` (was `file_path: str` on
+# the legacy model); `occurrence_count` is preserved.
+qi = graph_data.quality_issues
+if len(qi) == 0:
     print("No Insider data ingested.")
 else:
     from collections import defaultdict
     per_file = defaultdict(int)
-    for issue in qi.issues:
-        per_file[issue.file_path] += issue.occurrence_count
+    for issue in qi:
+        per_file[issue.file_ref.id] += issue.occurrence_count
     for fid, total in sorted(per_file.items(), key=lambda kv: -kv[1])[:10]:
         print(f"  {total:>5} smells  {fid}")
 ```
@@ -281,23 +350,20 @@ else:
 ## 9j. Files carrying a specific Insider code-smell trait
 
 ```python
-# Trait names are data-driven: anomaly.codesmell.{Category}.{Rule} where
-# whitespace is stripped from both segments. Run get_quality_issues_summary()
-# (MCP) or check graph_data["quality_issues"].issues to discover what fired.
+# Trait names are data-driven: anomaly.codesmell.{Category}.{Rule}.
 files = find_files_with_trait("anomaly.codesmell.Traceability.CatchTopLevelException")
 print(f"{len(files)} files flagged with Catch Top-Level Exception")
-for fid in files[:10]:
-    print(f"  {fid}")
+for f in files[:10]:
+    print(f"  {f.id}")
 ```
 
 ## 9k. CodeQualityOverview snapshot (B4)
 
 ```python
 table = overview_as_dict("code_quality")
-for row in table["rows"][:10]:
-    cells = row["cells"]
+for entity_id, cells in list(table["rows"].items())[:10]:
     print(
-        f'{row["entity_id"]:<24} '
+        f'{entity_id:<24} '
         f'smells={cells["total_smells"]["lifetime_value"]:<5} '
         f'rules={cells["distinct_rules"]["lifetime_value"]:<3} '
         f'files={cells["distinct_files"]["lifetime_value"]:<4} '
@@ -306,30 +372,125 @@ for row in table["rows"][:10]:
     )
 ```
 
+## 9l. Files carrying a given App Inspector concern (B5)
+
+```python
+# graph_data.app_tags is the typed AppTagRegistry. One AppTag entity per
+# (file_path, tag) pair, ingested from a `<repo>-chronos-tags.json` upload.
+# Each entry carries `project_ref`, `file_ref`, `file_path`, `tag` (full
+# dotted taxonomy starting with `appinspector.`, e.g.
+# `appinspector.OS.Network.Connection.Socket`), and `strength: int`.
+#
+# AppTagRegistry indexes (all multi=True):
+#   by_file[file_ref]       -> tags on a given file
+#   by_project[project_ref] -> all tags in a project
+#   by_tag[tag]             -> entities with exactly this tag string
+#   by_tag_root[root]       -> entities whose tag starts with
+#                              `appinspector.<root>.` (e.g. "OS",
+#                              "Cryptography")
+ats = graph_data.app_tags
+if len(ats) == 0:
+    print("No App Inspector data ingested.")
+else:
+    # All files touching the OS / network surface, ranked by strength.
+    net = sorted(
+        ats.by_tag_root["OS"],
+        key=lambda t: -t.strength,
+    )
+    for t in net[:10]:
+        print(f"  {t.strength:>3}  {t.tag:<55}  {t.file_path}")
+```
+
 ## 10. Commits per author (top 10)
 
 ```python
 from collections import Counter
 
-git_project = graph_data["git"]
 author_counts = Counter()
-
-for commit in git_project.git_commit_registry.all:
-    if commit.author:
-        author_counts[commit.author.git_id.name] += 1
+for commit in graph_data.commits.all():
+    # `commit.author(graph_data)` is the auto-generated resolver for
+    # the `author_ref` field — returns the typed GitAccount or None.
+    author = commit.author(graph_data)
+    if author is not None:
+        author_counts[author.name] += 1
 
 print("Top 10 contributors by commit count:")
 for name, count in author_counts.most_common(10):
     print(f"  {name}: {count} commits")
 ```
 
+## 11. Filtered count (default — use `graph_data`)
+
+```python
+# `graph_data` honors every active filter rule on the project.
+# Almost every question should use this view, including simple counts.
+file_count = len(graph_data.files.all())
+print(f"{file_count} files visible after filters")
+```
+
+## 12. Unfiltered escape hatch (`graph_data_full`)
+
+```python
+# Trigger phrase: "across the entire history, including stuff we filtered
+# out, how many files have we ever had?"
+#
+# Only use graph_data_full when the user explicitly invokes the whole
+# dataset ("across the entire history", "complete dataset", "ever
+# existed", "ignore the filters"). Narrate the switch to the user.
+file_count_unfiltered = len(graph_data_full.files.all())
+file_count_filtered = len(graph_data.files.all())
+hidden = file_count_unfiltered - file_count_filtered
+print(f"{file_count_unfiltered} files ever existed; {hidden} currently hidden by filters")
+```
+
+## 13. Creating a filter rule and confirming the effect
+
+```text
+User: "Exclude all files with less than 20 lines of code."
+
+Agent reasoning:
+  entity_kind     = "file"            # lowercase EntityKind value
+  predicate.field = "loc"             # File.loc resolves via FileMetric sum_nloc
+  predicate.op    = "lt"
+  predicate.value = 20
+  name            = "Tiny files (<20 LOC)"
+  nl_description  = "Exclude all files with less than 20 lines of code."
+
+MCP call:
+  create_filter_rule(
+      name="Tiny files (<20 LOC)",
+      nl_description="Exclude all files with less than 20 lines of code.",
+      entity_kind="file",
+      predicate={"field": "loc", "op": "lt", "value": 20},
+  )
+
+# Composite form (depth-1 all_of) — same shape but predicate becomes:
+#   {"all_of": [
+#       {"field": "loc", "op": "lt", "value": 20},
+#       {"field": "extension", "op": "eq", "value": ".min.js"},
+#   ]}
+```
+
+Confirm the rule is live via `execute_code`:
+
+```python
+filtered = len(graph_data.files.all())
+total = len(graph_data_full.files.all())
+print(f"{total - filtered} files now hidden by filters ({filtered} of {total} remain)")
+```
+
 ---
 
 ## Usage Notes
 
-- `graph_data` is pre-initialized. Do not re-declare it.
-- Do NOT mutate the graph data - it is shared in-memory across executions.
-- Use print() for all output. The result is captured stdout.
+- `graph_data` is pre-initialized (an `MCPSandboxView` over the typed v2 Graph). Do not re-declare it.
+- `graph_data` exposes registries directly: `graph_data.commits`, `.issues`, `.pull_requests`, `.files`,
+  plus enrichment registries (`.traits`, `.classifiers`, `.relations`, `.components`) and the rest
+  of the typed Graph fields via read-through `__getattr__`.
+- Cross-entity navigation: use `commit_issues(commit, graph_data)`, `pr_commits(pr, graph_data)`,
+  `issue_commits(issue, graph_data)` (free helpers) — the old `commit.issues` property is gone.
+- Do NOT mutate the graph data — it is shared in-memory across executions.
+- Use `print()` for all output. The result is captured stdout.
 - Keep output concise: summarize, aggregate, or limit to top N.
 - Standard library modules (collections, datetime, etc.) are available.
-- Access registries via `.all` for iteration, `.get_by_id()` for lookup.
+- Access registries via `.all()` for a snapshot tuple, `.get(id)` for lookup, or iterate directly.

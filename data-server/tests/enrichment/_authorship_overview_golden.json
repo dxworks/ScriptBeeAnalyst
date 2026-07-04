@@ -1,0 +1,137 @@
+{
+  "columns": [
+    "total_authors",
+    "active_authors",
+    "newcomer_ratio",
+    "senior_ratio",
+    "bus_factor_1_files",
+    "dominant_author_share"
+  ],
+  "entity_kind": "component",
+  "name": "authorship",
+  "rows": [
+    {
+      "cells": {
+        "active_authors": {
+          "highlight": null,
+          "lifetime_value": 2,
+          "recent_value": 2,
+          "trend_percent": null
+        },
+        "bus_factor_1_files": {
+          "highlight": null,
+          "lifetime_value": 1,
+          "recent_value": 1,
+          "trend_percent": null
+        },
+        "dominant_author_share": {
+          "highlight": null,
+          "lifetime_value": 0.9135,
+          "recent_value": 0.9135,
+          "trend_percent": null
+        },
+        "newcomer_ratio": {
+          "highlight": null,
+          "lifetime_value": 1.0,
+          "recent_value": 1.0,
+          "trend_percent": null
+        },
+        "senior_ratio": {
+          "highlight": null,
+          "lifetime_value": 0.0,
+          "recent_value": 0.0,
+          "trend_percent": null
+        },
+        "total_authors": {
+          "highlight": null,
+          "lifetime_value": 2,
+          "recent_value": 2,
+          "trend_percent": 0.0
+        }
+      },
+      "entity_id": "(project)"
+    },
+    {
+      "cells": {
+        "active_authors": {
+          "highlight": null,
+          "lifetime_value": 2,
+          "recent_value": 2,
+          "trend_percent": null
+        },
+        "bus_factor_1_files": {
+          "highlight": null,
+          "lifetime_value": 1,
+          "recent_value": 1,
+          "trend_percent": null
+        },
+        "dominant_author_share": {
+          "highlight": null,
+          "lifetime_value": 0.9406,
+          "recent_value": 0.9406,
+          "trend_percent": null
+        },
+        "newcomer_ratio": {
+          "highlight": null,
+          "lifetime_value": 1.0,
+          "recent_value": 1.0,
+          "trend_percent": null
+        },
+        "senior_ratio": {
+          "highlight": null,
+          "lifetime_value": 0.0,
+          "recent_value": 0.0,
+          "trend_percent": null
+        },
+        "total_authors": {
+          "highlight": null,
+          "lifetime_value": 2,
+          "recent_value": 2,
+          "trend_percent": 0.0
+        }
+      },
+      "entity_id": "src"
+    },
+    {
+      "cells": {
+        "active_authors": {
+          "highlight": null,
+          "lifetime_value": 1,
+          "recent_value": 1,
+          "trend_percent": null
+        },
+        "bus_factor_1_files": {
+          "highlight": null,
+          "lifetime_value": 0,
+          "recent_value": 0,
+          "trend_percent": null
+        },
+        "dominant_author_share": {
+          "highlight": null,
+          "lifetime_value": 1.0,
+          "recent_value": 1.0,
+          "trend_percent": null
+        },
+        "newcomer_ratio": {
+          "highlight": null,
+          "lifetime_value": 1.0,
+          "recent_value": 1.0,
+          "trend_percent": null
+        },
+        "senior_ratio": {
+          "highlight": null,
+          "lifetime_value": 0.0,
+          "recent_value": 0.0,
+          "trend_percent": null
+        },
+        "total_authors": {
+          "highlight": null,
+          "lifetime_value": 1,
+          "recent_value": 1,
+          "trend_percent": 0.0
+        }
+      },
+      "entity_id": "tests"
+    }
+  ]
+}

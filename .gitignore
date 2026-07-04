@@ -51,7 +51,6 @@ data-server/src/notebook_flat_graph/pickle_data/*
 data-server/test-input/*
 data-server/src/inspector_git/examples/gitlog_full.json
 data-server/src/inspector_git/guidelines.txt
-data-server/test_client.py
 
 # Chat UI specific
 chat-ui/.env
@@ -63,10 +62,12 @@ chat-ui/oracle_response.pkl
 
 .claude
 
-# Ignore all markdown files except README.md
+# Ignore all markdown files except README.md and the deployment guide
 *.md
 !README.md
 !**/README.md
+!README-EVALUARE.md
+!local_supabase_deployment_guide.md
 
 TODO
 DONE
@@ -78,7 +79,6 @@ supabase/**
 
 
 # Web ui
-web-ui/src/environments/environment.ts
 web-ui/src/environments/environment.development.ts
 
 
@@ -93,3 +93,5 @@ web-ui/src/environments/environment.development.ts
 
 # Analyzed projects - track framework, ignore project data
 !analyzed_projects/CLAUDE.md
+!analyzed_projects/instructions/compass.md
+!analyzed_projects/instructions/setup.md

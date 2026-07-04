@@ -11,6 +11,11 @@
   position: sticky;
   top: 0;
   z-index: 100;
+  // Reserve an explicit height that page-level sticky toolbars can anchor
+  // against (e.g. enrichment-config). The actual rendered height matches
+  // because ``.header-content`` padding + content stays ≤ this value;
+  // ``min-height`` keeps the floor stable across themes / font sizes.
+  min-height: var(--app-header-height);
 }
 
 .header-content {
@@ -25,6 +30,61 @@
 .header-left {
   display: flex;
   align-items: center;
+  gap: var(--spacing-lg);
+}
+
+.project-indicator {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--spacing-xs);
+  padding: 6px 12px;
+  border-radius: var(--radius-md);
+  text-decoration: none;
+  background-color: rgba(255, 255, 255, 0.06);
+  color: var(--color-text-inverse);
+  font-size: 0.8125rem;
+  font-weight: 500;
+  opacity: 0.85;
+  transition: background-color var(--transition-fast), opacity var(--transition-fast);
+  max-width: 280px;
+
+  &:hover {
+    background-color: rgba(255, 255, 255, 0.12);
+    opacity: 1;
+  }
+
+  &.indicator-loaded {
+    background-color: rgba(16, 185, 129, 0.15);
+    opacity: 1;
+
+    .indicator-icon-svg {
+      color: var(--color-success);
+    }
+  }
+
+  .indicator-icon {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 18px;
+    height: 18px;
+    border-radius: 50%;
+    background-color: rgba(255, 255, 255, 0.15);
+    color: var(--color-text-inverse);
+    font-size: 0.75rem;
+    font-weight: 700;
+    flex-shrink: 0;
+  }
+
+  .indicator-icon-svg {
+    flex-shrink: 0;
+  }
+
+  .indicator-label {
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
 }
 
 .header-brand {
@@ -108,5 +168,11 @@
 
   .nav-link span {
     display: none;
+  }
+
+  .project-indicator {
+    max-width: 140px;
+    padding: 4px 8px;
+    font-size: 0.75rem;
   }
 }

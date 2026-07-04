@@ -1,0 +1,19 @@
+[ OK ] auth.login  — user_id=a0204c60…
+[ OK ] project.create  — id=44cc1946-9286-4a58-bdfc-c1a4f34e011e
+[ OK ] upload.zeppelin.iglog  — git, 12,441,775 bytes
+[ OK ] upload.github.json  — github, 45,191,068 bytes
+[ OK ] upload.jira.json  — jira, 70,805,141 bytes
+[ OK ] upload.zeppelin-lizard.csv  — lizard, 8,606,088 bytes
+[ OK ] upload.zeppelin-layout.json  — jafax, 13,800,990 bytes
+[ OK ] upload.zeppelin-external_duplication.csv  — dude_external, 33,412 bytes
+[ OK ] upload.zeppelin-internal_duplication.json  — dude_internal, 1,384 bytes
+[ OK ] upload.zeppelin-code_smells.json  — quality_issues, 80,838 bytes
+[ OK ] data_server.health  — ok
+[ OK ] data_server.projects/current  — loaded=False
+[ OK ] data_server.build  — {'project_id': '44cc1946-9286-4a58-bdfc-c1a4f34e011e', 'schema_version': 2, 'built_at': '2026-05-17T19:13:49.043017+00:00', 'pipeline': {'bu
+[SKIP] data_server.execute  — HTTP 404 (expected — graph not loaded)
+
+Leaving project 44cc1946-9286-4a58-bdfc-c1a4f34e011e in place (--keep)
+
+============================================================
+PASSED 13   FAILED 0   SKIPPED 1

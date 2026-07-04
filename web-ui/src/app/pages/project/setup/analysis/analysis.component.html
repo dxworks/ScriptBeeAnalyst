@@ -1,0 +1,81 @@
+@if (finalizeInProgress()) {
+  <div class="finalize-progress">
+    <div
+      class="finalize-bar"
+      [class.indeterminate]="indeterminate()"
+      role="progressbar"
+      [attr.aria-valuenow]="indeterminate() ? null : percent()"
+      aria-valuemin="0"
+      aria-valuemax="100"
+      [attr.aria-label]="progressStage() || 'Finalizing'"
+    >
+      <div class="finalize-bar__fill" [style.width.%]="indeterminate() ? 100 : percent()"></div>
+    </div>
+
+    <h2>Finalizing project…</h2>
+    <p class="finalize-stage">
+      {{ progressStage() || 'Starting…' }}
+      @if (!indeterminate()) {
+        <span class="finalize-percent">{{ percent() }}%</span>
+      }
+    </p>
+    <p class="placeholder-sub">
+      Rewriting author references to unified users and rebuilding the people-side
+      analytics. This can take a couple of minutes — keep this tab open.
+    </p>
+  </div>
+} @else {
+  <div class="code-workspace">
+    <div class="workspace-toolbar">
+      <div class="toolbar-info">
+        <h2>Analysis</h2>
+        <span class="toolbar-hint">Run Python against the loaded project graph (<code>graph_data</code>).</span>
+      </div>
+      <button
+        type="button"
+        class="btn-primary btn-sm"
+        (click)="run()"
+        [disabled]="running()"
+      >
+        @if (running()) {
+          <span class="run-spinner" aria-hidden="true"></span>
+          Running…
+        } @else {
+          ▶ Run
+        }
+      </button>
+    </div>
+
+    <div class="editor-pane">
+      <app-code-editor
+        [value]="code()"
+        [disabled]="running()"
+        (valueChange)="code.set($event)"
+        (run)="run()"
+      />
+    </div>
+
+    <div class="console-pane">
+      <div class="console-header">
+        <span class="console-title">Console</span>
+        <button
+          type="button"
+          class="btn-ghost btn-sm"
+          (click)="clearConsole()"
+          [disabled]="console().length === 0"
+        >
+          Clear
+        </button>
+      </div>
+      <div class="console-body">
+        @if (console().length === 0) {
+          <p class="console-empty">Output will appear here.</p>
+        } @else {
+          @for (entry of console(); track $index) {
+            <pre class="console-entry" [class.is-error]="entry.kind === 'err'">{{ entry.text }}</pre>
+          }
+        }
+      </div>
+    </div>
+  </div>
+}
