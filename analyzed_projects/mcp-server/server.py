@@ -257,41 +257,62 @@ async def list_anomalies(
     trait_name: str | None = None,
     entity_kind: str | None = None,
 ) -> list[dict]:
-    """List enrichment tags carrying anomaly traits.
+    """List enrichment traits (anomalies) carrying their target + evidence.
 
-    Calls `GET /enrichments/tags` and returns the parsed list. Filter by
-    `trait_name` (e.g. "anomaly.testing.BugMagnet") and/or `entity_kind`
-    (file | commit | author | issue | pr | component).
+    Routes through `/execute` against `graph_data.traits` (the legacy
+    `GET /enrichments/tags` REST route was deleted in the v2 refactor).
+    Filter by `trait_name` and/or `entity_kind`.
 
     Args:
-        trait_name: Optional fully-qualified trait name to filter by.
-        entity_kind: Optional entity kind to filter by.
+        trait_name: Optional trait name to filter by. Exact match (e.g.
+            "anomaly.testing.BugMagnet"), or a `*`-suffixed prefix
+            (e.g. "anomaly.codesmell.*") to match a whole family.
+        entity_kind: Optional target kind to filter by — an EntityKind
+            value (file | commit | issue | pull_request | component | ...).
+            The aliases `pr` and `author` are accepted too.
 
     Returns:
-        A list of tag dicts as returned by the data-server, or a single-item
-        list with an `error` key on failure. Each tag has `entity_kind`,
-        `entity_id`, `classifiers`, and `traits`.
+        A list of trait dicts, each with `name`, `family`, `severity`,
+        `is_proxy`, `entity_kind`, `entity_id`, and `evidence`. On failure,
+        a single-item list with an `error` key.
     """
     await _require_state(_Stage.FINALIZED)
-    params: dict = {}
-    if trait_name is not None:
-        params["trait"] = trait_name
-    if entity_kind is not None:
-        params["entity_kind"] = entity_kind
-
-    async with httpx.AsyncClient(timeout=TIMEOUT) as client:
-        try:
-            resp = await client.get(
-                f"{DATA_SERVER_URL}/enrichments/tags",
-                params=params,
-            )
-        except httpx.ConnectError:
-            return [{"error": f"Cannot connect to data-server at {DATA_SERVER_URL}"}]
-
-    if resp.status_code != 200:
-        return [{"error": f"HTTP {resp.status_code}: {resp.text}"}]
-    body = resp.json()
-    return body.get("tags", [])
+    snippet = f"""
+import json
+_tn = {trait_name!r}
+_ek = {entity_kind!r}
+if _ek is not None:
+    _ek = {{"pr": "pull_request", "author": "unified_user"}}.get(_ek, _ek)
+if _tn is None:
+    _traits = list(graph_data.traits)
+elif _tn.endswith("*"):
+    _pref = _tn[:-1]
+    _traits = [t for t in graph_data.traits if t.name.startswith(_pref)]
+else:
+    _traits = list(graph_data.traits.of_name(_tn))
+_out = []
+for _t in _traits:
+    _k = _t.target.kind.value
+    if _ek is not None and _k != _ek:
+        continue
+    _out.append({{
+        "name": _t.name,
+        "family": getattr(_t.family, "value", _t.family),
+        "severity": _t.severity,
+        "is_proxy": _t.is_proxy,
+        "entity_kind": _k,
+        "entity_id": _t.target.id,
+        "evidence": _t.evidence,
+    }})
+print(json.dumps(_out, default=str))
+"""
+    output = await _execute_helper(snippet)
+    if output.startswith("__ERROR__:"):
+        return [{"error": output[len("__ERROR__:") :]}]
+    try:
+        return json.loads(output)
+    except json.JSONDecodeError as e:
+        return [{"error": f"Sandbox response was not JSON: {e}; output={output[:200]!r}"}]
 
 
 @mcp.tool()

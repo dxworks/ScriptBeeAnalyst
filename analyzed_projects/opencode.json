@@ -3,7 +3,7 @@
   "mcp": {
     "scriptbee-data": {
       "type": "local",
-      "command": ["python", "mcp-server/server.py"],
+      "command": ["/Users/alex/Work/BachelorsThesis/ScriptBeeAssistant/analyzed_projects/mcp-server/.venv/bin/python", "/Users/alex/Work/BachelorsThesis/ScriptBeeAssistant/analyzed_projects/mcp-server/server.py"],
       "environment": {
         "DATA_SERVER_URL": "http://localhost:8001"
       }
