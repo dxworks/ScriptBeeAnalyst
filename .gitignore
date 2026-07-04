@@ -66,6 +66,7 @@ chat-ui/oracle_response.pkl
 *.md
 !README.md
 !**/README.md
+!README-EVALUARE.md
 !local_supabase_deployment_guide.md
 
 TODO
