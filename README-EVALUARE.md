@@ -1,5 +1,7 @@
 # ScriptBeeAssistant — Ghid de rulare
 
+Repository-ul proiectului se află la: <https://github.com/dxworks/ScriptBeeAnalyst>
+
 Asistent de analiză a proiectelor software: încarcă date extrase dintr-un sistem
 software (cod, istoric Git, issue-uri) într-un model de tip graf și pune la
 dispoziție un agent AI local care răspunde la întrebări despre proiectul analizat.
